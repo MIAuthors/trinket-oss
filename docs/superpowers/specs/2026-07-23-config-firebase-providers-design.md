@@ -100,15 +100,36 @@ ui.start('#firebaseui-auth-container', {
   ...
 ```
 
-### 4. Per-deploy overlay (private deploy repos, not this tree)
+### 4. Per-deploy overlay value (gitignored, not part of this PR)
 
-- **uindy** `deploys/uindy/config/…`: `auth: { firebase: { providers: ['google'] } }`
-- **mandi**: no change needed (inherits `['google','password']`); may set it
-  explicitly for clarity.
-- **picup**: unaffected — `auth.provider: local` renders `login.html`; this key
+mandi and uindy do **not** use the `deploys/<name>/` directory mechanism (that
+exists in `deploy-cloudrun.sh` + `config/deploy-dir.js` and is used by
+**trial-gcr**). They configure through **`config/local-production.yaml`** — a
+gitignored node-config overlay that ships in the image and already carries their
+`auth.provider: firebase` / `auth.firebase.projectId` / approval knobs. So the
+provider list goes there:
+
+- **uindy** — add one line under the existing `auth.firebase:` block in
+  `gcr-uindy/config/local-production.yaml`:
+  ```yaml
+  auth:
+    firebase:
+      projectId: trinket-uindy
+      providers: ['google']      # ← add
+  ```
+- **mandi** — no change needed (inherits `['google','password']` from
+  `default.yaml`); may add `providers: ['google','password']` to its
+  `local-production.yaml` explicitly for clarity/self-documentation.
+- **deploys that DO use the folder mechanism** (e.g. trial-gcr) — the value would
+  instead live in `deploys/<name>/config/…`; same key, same semantics.
+- **picup** — unaffected: `auth.provider: local` renders `login.html`; this key
   is inert for local-auth deploys. This is what makes the design work uniformly
-  across GCP and non-GCP deployments: the config key is simply ignored where
-  FirebaseUI isn't used.
+  across GCP and non-GCP deployments — the key is simply ignored where FirebaseUI
+  isn't used.
+
+These overlays are gitignored (live in the worktrees + the private deploy-backup
+repos), so they are a deploy-time edit at rollout, **not** part of the committed
+change in this branch.
 
 ## Testing
 
