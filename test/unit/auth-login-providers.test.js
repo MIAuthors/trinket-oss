@@ -40,4 +40,14 @@ describe('auth.loginPage — authProviders', () => {
       config.auth.firebase = orig;
     }
   });
+
+  it('falls back to google-only when providers is a non-array (scalar) misconfig', () => {
+    const orig = config.auth.firebase.providers;
+    config.auth.firebase.providers = 'google';   // scalar, not a list
+    try {
+      expect(invoke().authProviders).toEqual(['google']);
+    } finally {
+      config.auth.firebase.providers = orig;
+    }
+  });
 });
