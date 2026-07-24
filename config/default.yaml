@@ -61,6 +61,11 @@ auth:
   # create courses — stock behavior.
   restrictCourseCreation: false
   firebase:
+    # Sign-in methods FirebaseUI shows, in order. Keep in sync with the
+    # providers actually enabled in the Firebase console — the app cannot
+    # auto-discover them. Supported: 'google', 'password'. Override per deploy
+    # (e.g. ['google'] for a Google-only deployment).
+    providers: ['google', 'password']
     projectId: ''   # Your GCP/Firebase project ID — override in local.yaml
     clientConfig:   # Firebase web SDK config from Project Settings > Your apps
       apiKey: ''

@@ -49,6 +49,7 @@
 (function() {
   var firebaseConfig  = {% if firebaseConfig %}{{ firebaseConfig | json | safe }}{% else %}{}{% endif %};
   var authEmulatorUrl = {% if authEmulatorUrl %}{{ authEmulatorUrl | json | safe }}{% else %}null{% endif %};
+  var authProviders   = {% if authProviders %}{{ authProviders | json | safe }}{% else %}['google']{% endif %};
 
   firebase.initializeApp(firebaseConfig);
 
@@ -110,11 +111,19 @@
     };
   }
 
+  // Map configured provider names -> FirebaseUI PROVIDER_IDs. Unknown names are
+  // dropped; an empty result falls back to Google so the widget is never blank.
+  var _providerIds = {
+    google:   firebase.auth.GoogleAuthProvider.PROVIDER_ID,
+    password: firebase.auth.EmailAuthProvider.PROVIDER_ID
+  };
+  var signInOptions = (authProviders || [])
+    .map(function(name) { return _providerIds[name]; })
+    .filter(Boolean);
+  if (!signInOptions.length) { signInOptions = [_providerIds.google]; }
+
   ui.start('#firebaseui-auth-container', {
-    signInOptions: [
-      firebase.auth.EmailAuthProvider.PROVIDER_ID,
-      firebase.auth.GoogleAuthProvider.PROVIDER_ID
-    ],
+    signInOptions: signInOptions,
     signInFlow: 'popup',
     callbacks: {
       signInSuccessWithAuthResult: function(authResult) {
