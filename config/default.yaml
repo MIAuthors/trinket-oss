@@ -325,6 +325,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - java
     - glowscript-blocks
     - R
@@ -334,6 +335,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - pygame
     - java
     - glowscript-blocks
@@ -344,6 +346,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - pygame
     - java
     - glowscript-blocks
@@ -354,6 +357,7 @@ app:
     - python
     - html
     - python3
+    - pyodide
     - pygame
     - java
     - blocks
@@ -367,6 +371,7 @@ app:
     - python
     - pygame
     - python3
+    - pyodide
     - R
     - glowscript
     - html
@@ -383,6 +388,9 @@ app:
       - run
       - console
     python3:
+      - run
+      - console
+    pyodide:
       - run
       - console
     R:
