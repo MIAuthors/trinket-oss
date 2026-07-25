@@ -106,6 +106,20 @@ describe('Trinket Creation', () => {
       });
     });
 
+    // Regression: the blank-editor embed route GET /embed/{lang} (what "New
+    // Trinket" opens) has getDefaultTrinket as its `trinket` pre-handler, which
+    // does bare `return reply()` when there is no ?category — so request.pre.trinket
+    // MUST be null. A pre-handler-shim change (slug-alias redirect fix) made bare
+    // reply() resolve to the reply() shim object instead — truthy — so the handler
+    // ran the "existing trinket" branch: User.findById(undefined) 500'd on Firestore
+    // (Cloud Run prod), and on Mongo Draft.findOneMoreRecent with an undefined
+    // trinket id served the LAST trinket's draft (blank editor prefilled with stale
+    // code). Both faces of the same bug; a null pre.trinket fixes both.
+    it('should serve a blank editor (200, no stale trinket) for New Trinket', async () => {
+      await flow.get('/embed/python');
+      expect(flow.lastResponse.statusCode).toEqual(200);
+    });
+
     // The next 3 tests exercise non-API (HTML) routes, served once the python
     // feature flag is enabled (see beforeEach above). They render the
     // trinket/python and embed/python nunjucks views (200 + text/html).
