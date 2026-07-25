@@ -21,9 +21,8 @@ deploy/config-specific things a local stack can't mirror (real GCS buckets, the
 ## Running
 
 ```bash
-# 1. Bring up the GCP-shape stack (from repo root). On an Intel host add the
-#    amd64 override or it runs under QEMU and times out:
-docker compose -f docker-compose.gcr.yml -f docker-compose.amd64.yml up --build -d
+# 1. Bring up the GCP-shape stack (from repo root). Builds host-native.
+docker compose -f docker-compose.gcr.yml up --build -d
 
 # 2. Install + run the browser tests
 cd test/browser
@@ -37,9 +36,11 @@ Env knobs: `TRINKET_BASE_URL` (default `http://localhost:3001`),
 
 ## Notes / findings from the spike
 
-- **Platform:** `docker-compose.gcr.yml` pins `linux/arm64`; on the Intel intelmini
-  box that forces QEMU and the app times out reaching Firestore on boot. Use
-  `docker-compose.amd64.yml` to run native. A CI runner (amd64) needs no override.
+- **Platform:** the `app` service used to hard-code `platform: linux/arm64`, which
+  forced QEMU on amd64 hosts (Intel intelmini, CI) and made the app time out
+  reaching Firestore on boot. That pin is now removed — the stack builds
+  host-native. Set `DOCKER_DEFAULT_PLATFORM=linux/amd64` only if you want
+  deliberate Cloud-Run parity on an Apple-Silicon Mac.
 - **WebGL:** headless Chrome renders glowscript/WebVPython via SwiftShader
   (`--use-angle=swiftshader`), so the snapshot path actually executes.
 - **Auth:** open-signup on the stack (`requireApprovedAccount` off) means any email
