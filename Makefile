@@ -10,7 +10,7 @@
 # services.app.platform: linux/amd64 (see the "two locals" note in the docs).
 
 .DEFAULT_GOAL := help
-.PHONY: help gcp mongo down-gcp down-mongo
+.PHONY: help gcp mongo down-gcp down-mongo browser-smoke
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-11s %s\n", $$1, $$2}'
@@ -26,3 +26,6 @@ down-gcp: ## Stop and remove the GCP stack
 
 down-mongo: ## Stop and remove the self-host stack
 	docker compose down
+
+browser-smoke: ## Browser smoke tests (New Trinket + WebVPython journeys) vs a local gcp stack; on-demand pre-deploy gate
+	bash test/browser/run-smoke.sh
