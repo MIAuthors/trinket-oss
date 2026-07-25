@@ -7,16 +7,64 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Run the SAME suite on both database backends. Mongo is lenient about
+    # undefined query values (`.where(f, '==', undefined)` is ignored); Firestore
+    # — the backend Cloud Run actually deploys — throws. Mongo-only CI let a
+    # slug-alias-redirect regression ship green while it 500'd every New Trinket
+    # on Firestore. The Firestore profile makes that whole class loud in CI.
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [mongo, firestore]
+    name: test (${{ matrix.backend }})
     steps:
       - uses: actions/checkout@v4
+
       - name: vpython async-transform tests (python, no deps)
+        if: matrix.backend == 'mongo'
         run: python3 test/lib/wvpython/test_async_transform.py
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
       - run: node --version
+
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
-      - name: Run tests
+
+      # --- Firestore profile only: run the standalone Firestore emulator jar ---
+      # (same jar and invocation as test/firestore-emulator.Dockerfile).
+      - name: Set up JDK (Firestore emulator)
+        if: matrix.backend == 'firestore'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Start Firestore emulator
+        if: matrix.backend == 'firestore'
+        run: |
+          curl -sSL -o /tmp/firestore.jar \
+            https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+          java -jar /tmp/firestore.jar --host 127.0.0.1 --port 8089 &
+          for i in $(seq 1 60); do
+            curl -s 127.0.0.1:8089 >/dev/null && break
+            sleep 1
+          done
+          curl -s 127.0.0.1:8089 >/dev/null || { echo "Firestore emulator did not start"; exit 1; }
+
+      - name: Run tests (mongo)
+        if: matrix.backend == 'mongo'
         run: npm test
+
+      # The Firestore profile flips the backend at module load (see
+      # test/helpers/vitest-setup.cjs) and can't share Firestore across parallel
+      # files, so it runs serially.
+      - name: Run tests (firestore)
+        if: matrix.backend == 'firestore'
+        env:
+          TEST_DB_BACKEND: firestore
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8089
+          GOOGLE_CLOUD_PROJECT: demo-trinket
+        run: npx vitest run --fileParallelism=false
