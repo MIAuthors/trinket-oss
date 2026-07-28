@@ -21,18 +21,29 @@ changes. Mongo's TTL monitor and Firestore's TTL policy do the deleting.
 - A real mongoose `Schema` is built at `lib/models/model.js:11` **regardless of
   backend**, so schema-level index declarations are safe on both paths —
   `firestore-backend.js` reads only field paths and `ref`, ignoring index metadata.
-- **Run on intelmini**, where this repo's toolchain lives.
-- **`nvm use` first.** `.nvmrc` pins node 20 and `local.sh` sources nvm before doing
-  anything; some machines default to a newer node. Every test command below assumes
-  `nvm use` has run in that shell.
-- Test command: `npm test` (`vitest run`). Alternate backend:
+- Alternate backend profile:
   `TEST_DB_BACKEND=firestore FIRESTORE_EMULATOR_HOST=localhost:8080 npx vitest run --fileParallelism=false`.
-- **The unit tests need no Docker.** `test/helpers/mongo-global.mjs` boots an
-  in-process `mongod` 6.0.14 via `mongodb-memory-server`. The Docker shapes
-  (`make mongo` = mongo + redis + garage; `make gcp` = Firestore/Auth emulators)
-  run the *application*, and are only needed for the end-to-end LTI launch check in
-  Task 5. Note `docker-compose.yml` pins `mongo:5` while the test harness uses
-  6.0.14 — TTL semantics are identical, but the versions differ.
+- **The unit tests run in the container**, which is how this repo is normally
+  worked on: `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose run --rm --no-deps app npm test`.
+  They need no services — `test/helpers/mongo-global.mjs` boots an in-process
+  `mongod` 6.0.14 via `mongodb-memory-server`, and redis is mocked. The Docker
+  *stacks* (`make mongo`, `make gcp`) run the application and are only needed for
+  the end-to-end check in Task 5. Note `docker-compose.yml` pins `mongo:5` while
+  the harness uses 6.0.14 — TTL semantics are identical.
+- **Build the image `linux/amd64`.** picup and webapps are both `x86_64`, so amd64
+  matches production; it is slower on Apple Silicon under emulation, which does
+  not matter here. It also sidesteps a real trap: on arm64,
+  `mongodb-memory-server` asks for `mongodb-linux-aarch64-debian11-6.0.14`, which
+  MongoDB never published (403). `MONGOMS_DISTRO=ubuntu-22.04` gets past that but
+  then fails on a missing `libcrypto.so.3`; `ubuntu-20.04` works. None of that is
+  needed on amd64.
+- **After any platform switch, drop the `node_modules` volume**
+  (`docker volume rm <project>_node_modules`). Docker seeds a named volume only
+  once, so a rebuilt image does not refresh it, and the stale copy fails with
+  `Cannot find module @rollup/rollup-linux-x64-gnu` — an error that points at
+  npm's optional-dependency bug rather than at the architecture mismatch.
+- Host runs also work (`nvm use` for node 20) and are faster for a tight loop, but
+  the container is the reference environment.
 - `NODE_ENV=test` is set by `test/helpers/vitest-setup.cjs`, which makes
   `SomeModel.model` the raw mongoose model (`lib/models/model.js:215-217`). That is
   the seam tests use.
@@ -102,10 +113,19 @@ Read these before writing any test. They are not obvious and will cost an hour e
    so in its own comment. Any test asserting an index exists **must call
    `Model.syncIndexes()` itself first** — otherwise it passes on the first test in a
    file and fails on every one after it.
-2. **Do not test that TTL actually deletes anything.** `mongod`'s TTL monitor runs
-   on a ~60 second cycle. A test that writes an expired document and waits will
-   either take a minute or flake. Assert the *index specification* instead —
-   that is the thing the code controls.
+2. **TTL deletion IS testable, but only via a startup parameter.** An earlier
+   draft of this plan said not to test it, on the grounds that `mongod`'s TTL
+   monitor runs on a ~60 second cycle. That was wrong in a useful way:
+   `test/helpers/mongo-global.mjs` now starts mongod with
+   `--setParameter ttlMonitorSleepSecs=1`, and the deletion assertions complete in
+   300-800ms. Setting the parameter from *inside* a test does not work — it only
+   takes effect after the monitor's current sleep, leaving the first sweep ~60s
+   out (measured: 59.4s).
+
+   This matters more than it looks. Every bug in this plan is of the form "the
+   index existed and did nothing," and an index-specification assertion would
+   have passed against all of them. Assert the field's *type* and, at least once
+   per collection, that a document actually disappears.
 3. **Skip the index tests under the Firestore profile.** With
    `TEST_DB_BACKEND=firestore`, `createModel` returns a Firestore model that has no
    `syncIndexes` or `collection.indexes()`. Guard with
