@@ -83,6 +83,41 @@ All 797 documents have a `ttl` field, so every one matches that partial filter.
 zero. That is direct proof the index does nothing, because `stored` is a Number
 and the TTL monitor only expires `Date` fields.
 
+### The leak is active, not historical
+
+`app.js:152` hardcodes `maxCookieSize: 3500` (overriding the config value of `0`),
+so a session lives entirely in the cookie unless it exceeds that, and only
+oversized ones fall back to the mongo-backed cache. Commit `2c42136` (2026-05-23,
+"Use cookie-backed sessions with server-side cache fallback") introduced this, and
+picup runs that exact code.
+
+It would be reasonable to assume the 797 are therefore a pre-change backlog. They
+are not:
+
+```
+sessions created before 2026-05-23:  61
+sessions created on/after:          736
+```
+
+**736 of 797 postdate the cookie change** — roughly a dozen new permanent documents
+per day. Real sessions routinely exceed 3500 bytes, because each role in a user's
+`roles` array carries a full `permissions` list. A fresh account with `roles: []`
+fits in the cookie and never reaches mongo, which is why a newly created test user
+cannot reproduce the production path.
+
+### Verified on a live stack (2026-07-28)
+
+Against the deployed container and a stock `mongo:5` (default 60s TTL monitor), via
+the real `catbox-mongoose` engine:
+
+```
+stored     : 1785206428555 (number)          ← unchanged, as designed
+ttl        : 60000
+expiresAt  : 2026-07-28T02:41:28.555Z (Date) ← stored + ttl
+get()      : round-trips correctly
+→ REAPED after ~105s
+```
+
 ### What this changed
 
 - **Sessions ships first.** It is the only leak with observed accumulation on a
@@ -740,6 +775,28 @@ does not apply here: at baseline picup production holds 797 sessions, no
 `ltinonces` collection, and zero `errorevents`, in a 10.6 MB database. Nothing to
 pre-trim. Re-check with `estimatedDocumentCount()` before deploying if significant
 time has passed since 2026-07-27.
+
+**Drop the old `stored_1` index by hand — the deploy will not.** Verified on a real
+stack: mongoose's `autoIndex` only *creates* indexes missing from the schema, never
+drops ones the schema no longer declares. After deploying Part 1 the collection
+carries both:
+
+```
+{"stored":1}     stored_1      expireAfterSeconds=0  partial={"ttl":{"$exists":true}}
+{"expiresAt":1}  expiresAt_1   expireAfterSeconds=0
+```
+
+The stale one is harmless — a TTL on a Number does nothing, which was the bug — but
+it costs write overhead and makes `getIndexes()` read as though TTL were configured
+when the working index is the other one. After the deploy:
+
+```
+db.sessions.dropIndex('stored_1')
+```
+
+The test suite structurally cannot catch this: tests call `syncIndexes()`, which
+*does* drop removed indexes, so they see a clean index set that production never
+gets.
 
 **Sessions need a one-off purge.** Pre-existing session documents have no
 `expiresAt` and will never be TTL-collected — 494 of picup's 797 are already
