@@ -38,6 +38,61 @@ changes. Mongo's TTL monitor and Firestore's TTL policy do the deleting.
   the seam tests use.
 - Commit style: conventional commits, one commit per task.
 
+## Measured baseline — 2026-07-27
+
+Counts taken from all five deployed servers before planning. They set the
+execution order, and two of them contradicted the original hypothesis.
+
+**Mongo — picup production** (whole database: 10.6 MB)
+
+| Collection | count | note |
+|---|---|---|
+| `sessions` | **797** | the only collection with demonstrated accumulation |
+| `snippets` | 4,218 | 12 MB of legitimate content |
+| `ltinonces` | **collection absent** | picup has no LTI usage at all |
+| `errorevents` / `clientmetrics` / `exports` | **0** | endpoints exist, nothing calls them |
+
+**Mongo — trial-merge on webapps:** effectively empty (386 snippets, 6 users,
+0 sessions, no `ltinonces`). Runs Canvas alongside, so it is the right host for an
+end-to-end LTI launch test.
+
+**Firestore:** `ltinonces` 28 (mandi) / 65 (uindy) / 0 (trial); `sessions` 30 / 0 / 0;
+`errorevents`, `clientmetrics`, `exports` all 0 everywhere.
+
+### The sessions leak is confirmed, not inferred
+
+picup production carries the index exactly as the code declares it:
+
+```
+{"stored":1}  expireAfterSeconds=0  partial={"ttl":{"$exists":true}}
+```
+
+All 797 documents have a `ttl` field, so every one matches that partial filter.
+**494 are older than 30 days. The oldest is 2026-05-18.** `mongod` has deleted
+zero. That is direct proof the index does nothing, because `stored` is a Number
+and the TTL monitor only expires `Date` fields.
+
+### What this changed
+
+- **Sessions ships first.** It is the only leak with observed accumulation on a
+  production host.
+- **The nonce leak does not affect picup** — no LTI, no collection. It lands on
+  **uindy**, which is Firestore and LTI-first, as classes resume. Still worth
+  fixing; it is a Fall problem, not a today problem.
+- **`errorevents` is not the volume leader.** An earlier draft called it
+  "plausibly the largest of the four leaks." It is zero on all five servers.
+  Part 3 is defensive, not urgent.
+- **Nothing here is urgent.** The entire leak across the fleet is under a
+  megabyte. This is pre-Fall hygiene.
+
+### Backend naming divergence
+
+Mongo and Firestore disagree on collection names for some models: mongoose
+pluralizes properly (`ltiuseridentities`, `featuredcourses`) while
+`firestore-backend.js:1134` appends a bare `s` (`ltiuseridentitys`,
+`featuredcoursess`). `ltinonces`, `sessions`, and `errorevents` happen to match on
+both. Anything querying across backends needs both spellings.
+
 ## Critical test-design notes
 
 Read these before writing any test. They are not obvious and will cost an hour each.
@@ -71,208 +126,31 @@ Read these before writing any test. They are not obvious and will cost an hour e
 | `test/lib/models/telemetry-retention.test.js` | create | errorEvent TTL + existing-index regression guard |
 | `test/lib/util/catbox-mongoose.test.js` | create | session TTL + expiry-path assertions |
 
-Ship as **three PRs** in the order below. They are independent; each is
-separately revertable, and the risk profile rises with each one.
+## PR strategy: one PR, four commits
+
+Ship this as a **single PR**, not three. picup already has four open PRs (#65,
+#67, #68, #69, all from July 23-25) and maintainer review bandwidth is the
+constraint — three more would make seven. The whole change is four small files
+plus three test files, which reads as one coherent review.
+
+Keep **one commit per task** in the order below. That preserves the revertability
+that separate PRs would have given: any single part can be reverted by its commit
+without touching the others. Order is sessions first (the only leak with observed
+accumulation on a production host), telemetry last (zero everywhere, purely
+defensive).
+
+Suggested PR title: *fix: bound three collections that never expire*
+
+**Note on mechanics:** `git push picup` returns 403 — the working account has read
+access to `picup-physics/trinket-oss`, not write. The branch lives on
+`origin` (`MIAuthors/trinket-oss`), so this must be opened as a cross-repository
+PR from `MIAuthors:fix/db-leaks` into `picup-physics:main`. Also note `origin/main`
+is 33 commits behind `picup/main`; branch from `picup/main`, which is what local
+`main` tracks.
 
 ---
 
-## PR 1 — LTI nonces (ship first)
-
-Two bugs in one collection: it grows forever, and `findByNonce` scans it on every
-launch because `nonce` has no index. Fixing both together is smaller than fixing
-either alone.
-
-### Task 1: Index and expire LTI nonces
-
-**Files:**
-- Modify: `lib/models/ltiNonce.js:1-20`
-- Test: `test/lib/models/ltiNonce.test.js` (create)
-
-**Interfaces:**
-- Consumes: `model.create(name, config)` from `lib/models/model.js`, which accepts a
-  `config.index` array of `[keySpec, optionsSpec]` pairs and applies each via
-  `schema.index(...)`.
-- Produces: no new exported symbols. `LtiNonce.findByNonce(nonce, cb)` keeps its
-  existing signature and behaviour.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `test/lib/models/ltiNonce.test.js`:
-
-```js
-// Index declarations on the LTI nonce collection. Mongo-only: the Firestore
-// backend has no syncIndexes/collection APIs, and Firestore single-field
-// indexes everything automatically, so neither assertion applies there.
-const LtiNonce = require('../../../lib/models/ltiNonce');
-
-describe.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('LtiNonce indexes', () => {
-  beforeEach(async () => {
-    // The global afterEach drops the database, and that drops indexes with it.
-    // Rebuild from the schema so these assertions see a real index set.
-    await LtiNonce.model.syncIndexes();
-  });
-
-  it('declares a TTL index on expiresAt', async () => {
-    const indexes = await LtiNonce.model.collection.indexes();
-    const ttl = indexes.find((i) => i.key && i.key.expiresAt === 1);
-    expect(ttl, 'no index on expiresAt').toBeTruthy();
-    expect(ttl.expireAfterSeconds).toBe(0);
-  });
-
-  it('indexes nonce so findByNonce is not a collection scan', async () => {
-    const indexes = await LtiNonce.model.collection.indexes();
-    expect(indexes.some((i) => i.key && i.key.nonce === 1)).toBe(true);
-  });
-
-  it('still finds a recorded nonce by value', async () => {
-    await new LtiNonce({ nonce: 'abc123', expiresAt: new Date(Date.now() + 600000) }).save();
-    const found = await LtiNonce.findByNonce('abc123');
-    expect(found).toBeTruthy();
-    expect(found.nonce).toBe('abc123');
-  });
-});
-```
-
-- [ ] **Step 2: Run the test and confirm it fails**
-
-Run: `npx vitest run test/lib/models/ltiNonce.test.js`
-
-Expected: the first two tests FAIL — `no index on expiresAt`, and the `nonce`
-assertion returns `false`. The third test PASSES already (it documents behaviour
-that must not regress).
-
-- [ ] **Step 3: Add the index declarations**
-
-In `lib/models/ltiNonce.js`, replace the schema and the `model.create` call:
-
-```js
-// LTI launch nonce — replay protection only (LTI-SPEC §10). Each consumed launch nonce is
-// recorded until it expires. Cleanup is declarative and per-backend: on Mongo the TTL index
-// below; on Firestore the `ltinonces` fieldOverride in firestore.indexes.json. Neither is
-// automatic — both had to be declared, and before they were, this collection grew forever.
-// Written/read through the ltiNonceStore seam (lib/util/ltiNonceStore.js).
-var model = require('./model');
-
-var schema = {
-  nonce     : { type: String, required: true, index: true },  // findByNonce runs per launch
-  expiresAt : { type: Date,   required: true }                // TTL field (see index below)
-};
-
-function findByNonce(nonce, cb) {
-  return this.model.findOne({ nonce: nonce }, cb);
-}
-
-var LtiNonce = model.create('LtiNonce', {
-  schema: schema,
-  // expireAfterSeconds: 0 means "delete when the date in this field has passed",
-  // not "delete immediately" — the field value IS the expiry time.
-  index: [[{ expiresAt: 1 }, { expireAfterSeconds: 0 }]],
-  classMethods: { findByNonce: findByNonce }
-}).publicModel;
-
-module.exports = LtiNonce;
-```
-
-- [ ] **Step 4: Run the test and confirm it passes**
-
-Run: `npx vitest run test/lib/models/ltiNonce.test.js`
-Expected: 3 passed.
-
-- [ ] **Step 5: Confirm the whole suite still passes on both backends**
-
-Run: `npm test`
-Expected: no new failures against the pre-change baseline.
-
-Run: `TEST_DB_BACKEND=firestore FIRESTORE_EMULATOR_HOST=localhost:8080 npx vitest run --fileParallelism=false`
-Expected: the new file reports as skipped; no new failures. This proves the schema
-change is inert on the Firestore path.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add lib/models/ltiNonce.js test/lib/models/ltiNonce.test.js
-git commit -m "fix: index and expire LTI nonces
-
-findByNonce ran on every LTI launch against an unindexed field, so each
-launch scanned a collection that nothing ever pruned. Adds the missing
-index on nonce and a TTL index on expiresAt.
-
-The model comment claimed a Firestore TTL policy auto-deleted old rows.
-No such policy was ever configured on any database, and nothing in the
-code deletes a nonce, so every launch since LTI shipped leaked one row."
-```
-
-### Task 2: Declare the Firestore TTL policy
-
-**Files:**
-- Modify: `firestore.indexes.json`
-
-**Interfaces:**
-- Consumes: nothing from Task 1 at runtime; same collection, other backend.
-- Produces: a `fieldOverrides` entry that `deploy-cloudrun.sh:234-239` applies on
-  every deploy via `firebase deploy --only firestore:indexes,firestore:rules`.
-
-- [ ] **Step 1: Add the field override**
-
-`firestore.indexes.json` already has a `fieldOverrides` key with an empty array.
-Replace it with:
-
-```json
-  "fieldOverrides": [
-    {
-      "collectionGroup": "ltinonces",
-      "fieldPath": "expiresAt",
-      "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING",  "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" }
-      ]
-    }
-  ]
-```
-
-The two `indexes` entries preserve Firestore's default single-field indexing.
-Omitting them (`"indexes": []`) would *disable* it — a separate change, not part of
-this fix.
-
-- [ ] **Step 2: Validate the file parses and keeps its existing indexes**
-
-Run: `node -e "const d=require('./firestore.indexes.json'); console.log('indexes',d.indexes.length,'overrides',d.fieldOverrides.length)"`
-Expected: `indexes 8 overrides 1`
-
-- [ ] **Step 3: Check the local firebase-tools version first**
-
-Run: `firebase --version`
-
-This matters. On firebase-tools 13.22.1, when field overrides exist in a project
-but not in the file, `lib/firestore/api.js:84-101` logs *"To delete them, run this
-command with the --force flag"* and then calls `confirm()` anyway — which **throws**
-under `--non-interactive` without `--force`. `deploy-cloudrun.sh:234-239` uses
-exactly that flag combination. Other CLI versions may warn and continue instead.
-Record the version observed; it decides how Step 4 is read.
-
-- [ ] **Step 4: Dry-run the deploy against one Firestore project**
-
-Run: `firebase deploy --only firestore:indexes --project=trinket-merge-test --account "$(gcloud config get-value account)" --dry-run`
-
-Expected: no error. If the CLI reports field overrides present in the project but
-absent from the file, **stop** — something enabled a TTL out of band, and per
-Step 3 that combination can fail the deploy rather than continue.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add firestore.indexes.json
-git commit -m "fix: declare the ltinonces TTL policy for Firestore deploys
-
-Keeps cleanup in the deploy recipe rather than as a hand-run command, so
-new deploys get it automatically and a one-off gcloud change cannot drift
-from the declared config."
-```
-
----
-
-## PR 2 — Session store
+## Part 1 — Session store (Task 1)
 
 `lib/util/catbox-mongoose.js:19` declares a TTL index and comments it as
 *"automatically delete expired sessions"*. It deletes nothing: `stored` is
@@ -289,7 +167,7 @@ Existing documents will lack `expiresAt` and so are never TTL-deleted. The lazy
 delete at line 86-89 still collects them on read. Purging the pre-existing backlog
 is an operational step, not a code change — see "Production rollout".
 
-### Task 3: Give sessions a TTL field that actually expires
+### Task 1: Give sessions a TTL field that actually expires
 
 **Files:**
 - Modify: `lib/util/catbox-mongoose.js:8-22` (schema + index), `:102-120` (`set`)
@@ -424,13 +302,213 @@ arithmetic on and returns to catbox unchanged."
 
 ---
 
-## PR 3 — Telemetry retention
+## Part 2 — LTI nonces (Tasks 2-3)
+
+Two bugs in one collection: it grows forever, and `findByNonce` scans it on every
+launch because `nonce` has no index. Fixing both together is smaller than fixing
+either alone.
+
+### Task 2: Index and expire LTI nonces
+
+**Files:**
+- Modify: `lib/models/ltiNonce.js:1-20`
+- Test: `test/lib/models/ltiNonce.test.js` (create)
+
+**Interfaces:**
+- Consumes: `model.create(name, config)` from `lib/models/model.js`, which accepts a
+  `config.index` array of `[keySpec, optionsSpec]` pairs and applies each via
+  `schema.index(...)`.
+- Produces: no new exported symbols. `LtiNonce.findByNonce(nonce, cb)` keeps its
+  existing signature and behaviour.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `test/lib/models/ltiNonce.test.js`:
+
+```js
+// Index declarations on the LTI nonce collection. Mongo-only: the Firestore
+// backend has no syncIndexes/collection APIs, and Firestore single-field
+// indexes everything automatically, so neither assertion applies there.
+const LtiNonce = require('../../../lib/models/ltiNonce');
+
+describe.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('LtiNonce indexes', () => {
+  beforeEach(async () => {
+    // The global afterEach drops the database, and that drops indexes with it.
+    // Rebuild from the schema so these assertions see a real index set.
+    await LtiNonce.model.syncIndexes();
+  });
+
+  it('declares a TTL index on expiresAt', async () => {
+    const indexes = await LtiNonce.model.collection.indexes();
+    const ttl = indexes.find((i) => i.key && i.key.expiresAt === 1);
+    expect(ttl, 'no index on expiresAt').toBeTruthy();
+    expect(ttl.expireAfterSeconds).toBe(0);
+  });
+
+  it('indexes nonce so findByNonce is not a collection scan', async () => {
+    const indexes = await LtiNonce.model.collection.indexes();
+    expect(indexes.some((i) => i.key && i.key.nonce === 1)).toBe(true);
+  });
+
+  it('still finds a recorded nonce by value', async () => {
+    await new LtiNonce({ nonce: 'abc123', expiresAt: new Date(Date.now() + 600000) }).save();
+    const found = await LtiNonce.findByNonce('abc123');
+    expect(found).toBeTruthy();
+    expect(found.nonce).toBe('abc123');
+  });
+});
+```
+
+- [ ] **Step 2: Run the test and confirm it fails**
+
+Run: `npx vitest run test/lib/models/ltiNonce.test.js`
+
+Expected: the first two tests FAIL — `no index on expiresAt`, and the `nonce`
+assertion returns `false`. The third test PASSES already (it documents behaviour
+that must not regress).
+
+- [ ] **Step 3: Add the index declarations**
+
+In `lib/models/ltiNonce.js`, replace the schema and the `model.create` call:
+
+```js
+// LTI launch nonce — replay protection only (LTI-SPEC §10). Each consumed launch nonce is
+// recorded until it expires. Cleanup is declarative and per-backend: on Mongo the TTL index
+// below; on Firestore the `ltinonces` fieldOverride in firestore.indexes.json. Neither is
+// automatic — both had to be declared, and before they were, this collection grew forever.
+// Written/read through the ltiNonceStore seam (lib/util/ltiNonceStore.js).
+var model = require('./model');
+
+var schema = {
+  nonce     : { type: String, required: true, index: true },  // findByNonce runs per launch
+  expiresAt : { type: Date,   required: true }                // TTL field (see index below)
+};
+
+function findByNonce(nonce, cb) {
+  return this.model.findOne({ nonce: nonce }, cb);
+}
+
+var LtiNonce = model.create('LtiNonce', {
+  schema: schema,
+  // expireAfterSeconds: 0 means "delete when the date in this field has passed",
+  // not "delete immediately" — the field value IS the expiry time.
+  index: [[{ expiresAt: 1 }, { expireAfterSeconds: 0 }]],
+  classMethods: { findByNonce: findByNonce }
+}).publicModel;
+
+module.exports = LtiNonce;
+```
+
+- [ ] **Step 4: Run the test and confirm it passes**
+
+Run: `npx vitest run test/lib/models/ltiNonce.test.js`
+Expected: 3 passed.
+
+- [ ] **Step 5: Confirm the whole suite still passes on both backends**
+
+Run: `npm test`
+Expected: no new failures against the pre-change baseline.
+
+Run: `TEST_DB_BACKEND=firestore FIRESTORE_EMULATOR_HOST=localhost:8080 npx vitest run --fileParallelism=false`
+Expected: the new file reports as skipped; no new failures. This proves the schema
+change is inert on the Firestore path.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add lib/models/ltiNonce.js test/lib/models/ltiNonce.test.js
+git commit -m "fix: index and expire LTI nonces
+
+findByNonce ran on every LTI launch against an unindexed field, so each
+launch scanned a collection that nothing ever pruned. Adds the missing
+index on nonce and a TTL index on expiresAt.
+
+The model comment claimed a Firestore TTL policy auto-deleted old rows.
+No such policy was ever configured on any database, and nothing in the
+code deletes a nonce, so every launch since LTI shipped leaked one row."
+```
+
+### Task 3: Declare the Firestore TTL policy
+
+**Files:**
+- Modify: `firestore.indexes.json`
+
+**Interfaces:**
+- Consumes: nothing from Task 2 at runtime; same collection, other backend.
+- Produces: a `fieldOverrides` entry that `deploy-cloudrun.sh:234-239` applies on
+  every deploy via `firebase deploy --only firestore:indexes,firestore:rules`.
+
+- [ ] **Step 1: Add the field override**
+
+`firestore.indexes.json` already has a `fieldOverrides` key with an empty array.
+Replace it with:
+
+```json
+  "fieldOverrides": [
+    {
+      "collectionGroup": "ltinonces",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": [
+        { "order": "ASCENDING",  "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" }
+      ]
+    }
+  ]
+```
+
+The two `indexes` entries preserve Firestore's default single-field indexing.
+Omitting them (`"indexes": []`) would *disable* it — a separate change, not part of
+this fix.
+
+- [ ] **Step 2: Validate the file parses and keeps its existing indexes**
+
+Run: `node -e "const d=require('./firestore.indexes.json'); console.log('indexes',d.indexes.length,'overrides',d.fieldOverrides.length)"`
+Expected: `indexes 8 overrides 1`
+
+- [ ] **Step 3: Check the local firebase-tools version first**
+
+Run: `firebase --version`
+
+This matters. On firebase-tools 13.22.1, when field overrides exist in a project
+but not in the file, `lib/firestore/api.js:84-101` logs *"To delete them, run this
+command with the --force flag"* and then calls `confirm()` anyway — which **throws**
+under `--non-interactive` without `--force`. `deploy-cloudrun.sh:234-239` uses
+exactly that flag combination. Other CLI versions may warn and continue instead.
+Record the version observed; it decides how Step 4 is read.
+
+- [ ] **Step 4: Dry-run the deploy against one Firestore project**
+
+Run: `firebase deploy --only firestore:indexes --project=trinket-merge-test --account "$(gcloud config get-value account)" --dry-run`
+
+Expected: no error. If the CLI reports field overrides present in the project but
+absent from the file, **stop** — something enabled a TTL out of band, and per
+Step 3 that combination can fail the deploy rather than continue.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add firestore.indexes.json
+git commit -m "fix: declare the ltinonces TTL policy for Firestore deploys
+
+Keeps cleanup in the deploy recipe rather than as a hand-run command, so
+new deploys get it automatically and a one-off gcloud change cannot drift
+from the declared config."
+```
+
+---
+
+## Part 3 — Telemetry retention (Task 4)
 
 `errorevents` is written on every client error (`lib/controllers/trinket.js:1027`)
-with no expiry field and no cleanup path anywhere. On a deployment with real
-student traffic this is plausibly the largest of the leaks — the model's own header
-describes recording every `encountered → repeated → resolved` error cycle per
-coding session.
+with no expiry field and no cleanup path anywhere. The model's own header describes
+recording every `encountered → repeated → resolved` error cycle per coding session,
+so it would grow fast under real student traffic.
+
+**It is currently zero on all five servers.** This PR is therefore defensive —
+a bound placed before the traffic arrives, not a response to observed growth. Ship
+it last, and treat a non-zero count here as the signal to revisit the 400-day
+number with real data.
 
 No new field is needed: `lib/models/plugins/timestamps.js` adds
 `created: { type: Date, default: Date.now }`, applied by `model.js:41-43` to every
@@ -543,70 +621,110 @@ backfill; the index applies to existing documents on the next boot."
 
 **Files:** none — this is verification, not code.
 
-Do this on https://trial-merge.spvi.net before any of these reach production.
-The interesting behaviour only appears against a pre-existing backlog, which the
-test suite cannot reproduce.
+Do this on trial-merge (webapps) before any of these reach production. The
+interesting behaviour only appears against a pre-existing backlog, which the test
+suite cannot reproduce.
 
-- [ ] **Step 1: Record the baseline**
+Reach the database with:
+`ssh webapps 'docker exec mongodb mongo trinket --quiet --eval "<js>"'`
+
+**Important:** as of the baseline, trial-merge is nearly empty — 0 sessions, no
+`ltinonces` collection, and Canvas sitting alongside but unused for launches. The
+verification below therefore requires **generating the traffic first**: log in to
+create sessions, and run LTI launches through the co-located Canvas to create
+nonces. Verifying against empty collections proves nothing.
+
+- [ ] **Step 1: Generate traffic, then record the baseline**
+
+Log in a few times, and run at least two LTI launches from the Canvas instance on
+the same host. Then:
 
 ```
-db.ltinonces.countDocuments()
-db.sessions.countDocuments()
-db.errorevents.countDocuments()
-db.clientmetrics.countDocuments()
+db.sessions.estimatedDocumentCount()
+db.ltinonces.estimatedDocumentCount()
+db.getCollectionNames()
 ```
 
-Confirm the collection names match — mongoose pluralizes model names, but verify
-rather than trust the convention.
+Use `estimatedDocumentCount()` — it reads collection metadata, where
+`countDocuments()` scans. Irrelevant at this size, but it is the habit that keeps
+the same commands safe to paste against picup production.
+
+Confirm the collection names — mongoose pluralizes properly
+(`ltiuseridentities`), the Firestore backend does not (`ltiuseridentitys`). The
+three collections here happen to match on both backends; do not assume that of
+others.
 
 - [ ] **Step 2: Deploy the branch and restart**
 
 `config/db.js:44` calls `mongoose.connect()` with no options, and mongoose ^6
-defaults `autoIndex` to `true`, so all four indexes build at boot with no
-migration step.
+defaults `autoIndex` to `true`, so the indexes build at boot with no migration
+step.
 
 - [ ] **Step 3: Confirm the indexes exist**
 
 ```
-db.ltinonces.getIndexes()      // expect nonce_1 and an expiresAt_1 with expireAfterSeconds: 0
 db.sessions.getIndexes()       // expect expiresAt_1, and NO index on stored
+db.ltinonces.getIndexes()      // expect nonce_1 and expiresAt_1 with expireAfterSeconds: 0
 db.errorevents.getIndexes()    // expect created_1 with expireAfterSeconds: 34560000
 ```
 
-- [ ] **Step 4: Confirm the backlog drains**
+For sessions, the pre-change shape to compare against — captured from picup
+production — is:
+
+```
+{"stored":1}  expireAfterSeconds=0  partial={"ttl":{"$exists":true}}
+```
+
+That index must be **gone**, replaced by one on `expiresAt`.
+
+- [ ] **Step 4: Confirm new writes stamp expiresAt**
+
+```
+db.sessions.findOne({}, {stored:1, ttl:1, expiresAt:1})
+```
+
+Expect `expiresAt` present and of type Date. This is the single assertion that
+distinguishes a working TTL from the broken one — `stored` being a Number is
+exactly why the old index never fired.
+
+- [ ] **Step 5: Confirm the backlog drains**
 
 Wait ~2 minutes (the TTL monitor runs on a ~60s cycle) and re-count. `ltinonces`
-should fall to roughly the number of launches in the last 10 minutes.
-`sessions` will **not** drop — pre-existing rows have no `expiresAt`. That is
+should fall to roughly the number of launches in the last 10 minutes. Sessions
+created *before* the deploy will **not** drop — they have no `expiresAt`. That is
 expected; see "Production rollout".
 
-- [ ] **Step 5: Confirm replay protection still works**
+- [ ] **Step 6: Confirm replay protection still works**
 
-Perform a real LTI launch, then replay the same `id_token`. It must still be
-rejected. This is the one behaviour the TTL change could plausibly affect, and it
-is cheaper to verify directly than to reason about.
+Perform a real LTI launch through Canvas, then replay the same `id_token`. It must
+still be rejected. This is the one behaviour the TTL change could plausibly affect,
+and it is cheaper to verify directly than to reason about.
 
-- [ ] **Step 6: Confirm launch latency improved**
+- [ ] **Step 7: Confirm launch latency improved**
 
 ```
 db.ltinonces.find({nonce: "<any recorded value>"}).explain("executionStats")
 ```
 
-Expect `IXSCAN`, not `COLLSCAN`. This is the fix that matters most on a large
-collection.
+Expect `IXSCAN`, not `COLLSCAN`. At trial-merge's size the timing difference is
+invisible; the plan stage that matters is the query plan, not the milliseconds.
 
 ---
 
 ## Production rollout notes
 
-**Check sizes before deploying.** Enabling a TTL index on a large backlog means
-`mongod` deletes it in 60-second batches, which on a replica set generates
-sustained delete load and oplog churn. If `db.errorevents.countDocuments()` on
-picup production is in the millions, pre-trim in bounded batches during a quiet
-window rather than letting the TTL monitor discover it all at once.
+**Backlog size is a non-issue — measured, not assumed.** The general risk is that
+enabling a TTL index on a large backlog makes `mongod` delete it in 60-second
+batches, generating sustained delete load and oplog churn on a replica set. That
+does not apply here: at baseline picup production holds 797 sessions, no
+`ltinonces` collection, and zero `errorevents`, in a 10.6 MB database. Nothing to
+pre-trim. Re-check with `estimatedDocumentCount()` before deploying if significant
+time has passed since 2026-07-27.
 
 **Sessions need a one-off purge.** Pre-existing session documents have no
-`expiresAt` and will never be TTL-collected. After PR 2 is deployed and verified:
+`expiresAt` and will never be TTL-collected — 494 of picup's 797 are already
+older than 30 days, the oldest from 2026-05-18. After Part 1 is deployed and
+verified:
 
 ```
 db.sessions.deleteMany({ expiresAt: { $exists: false },
