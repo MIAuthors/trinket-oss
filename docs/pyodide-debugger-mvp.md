@@ -178,6 +178,19 @@ dependencies. Same blast-radius discipline as the explorer.
     `clearBreakpoint` for the classic gutter dot), and the Phase 2 per-file
     sessions give per-file breakpoints in multi-file trinkets for free.
     Estimated ~0.5 d.
+
+    **Known limitation — breakpoints do not follow code edits.**
+    `debugBreakpoints` keys each breakpoint by a *static* 1-based line number
+    (`file -> { line: true }`), and nothing re-maps those keys when the
+    document changes. Insert or delete lines *above* a breakpoint and it stays
+    on the old line number: the next recording arms on — and next/prev-jump
+    targets — whatever code now occupies that line, not the line the student
+    marked. Impact is low in the common flow (set breakpoints, then step;
+    editing invalidates the recording anyway, and re-running re-records), so
+    this is documented rather than fixed. If it proves confusing, the options
+    are to clear all breakpoints on the first document change after a
+    recording, or to anchor them to Ace markers/`Anchor` objects that Ace
+    shifts automatically on edit.
   - **Deferred recording ("start at first breakpoint")** — the companion
     feature that makes breakpoints matter for long programs. Navigation-only
     breakpoints can't reach code the recording never reached: a big early
