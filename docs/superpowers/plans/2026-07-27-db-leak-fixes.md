@@ -144,7 +144,7 @@ Suggested PR title: *fix: bound three collections that never expire*
 **Note on mechanics:** `git push picup` returns 403 — the working account has read
 access to `picup-physics/trinket-oss`, not write. The branch lives on
 `origin` (`MIAuthors/trinket-oss`), so this must be opened as a cross-repository
-PR from `MIAuthors:fix/db-leaks` into `picup-physics:main`. Also note `origin/main`
+PR from `MIAuthors:fix/collection-expiry` into `picup-physics:main`. Also note `origin/main`
 is 33 commits behind `picup/main`; branch from `picup/main`, which is what local
 `main` tracks.
 
