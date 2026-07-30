@@ -92,18 +92,21 @@ describe('Course Creation', () => {
         expect(flow.lastResponse.body.course).toHaveProperty('slug', 'foo-bar');
       });
 
-      // TODO(app-bug): genuine app bug, NOT an inject artifact — verified 500 over a
-      // real HTTP listener (server.start() on port 0), not just server.inject().
-      // courseBySlug (lib/util/helpers.js) does reply().redirect(url).permanent().takeover()
-      // for an aliased (old) slug. The routeParser fakeReply wrapper
-      // (lib/util/routeParser.js convertPreHandlers) resolves the pre-handler Promise on
-      // the first reply() call — reply() is invoked with no args, so it resolves with null —
-      // and the later .takeover() resolve is a no-op (Promise already settled). So pre.course
-      // becomes null and classes.viewClass crashes with
-      // "TypeError: Cannot read properties of null (reading 'archived')" → 500 instead of 301.
-      // Cannot fix from test/ (the defect is in lib/routeParser.js's redirect-takeover
-      // handling). Asserting 301 requires a lib/ fix.
-      it.skip('should redirect me to the current course if I use the original course slug', async () => {
+      // Slug-alias redirect: renaming a course changes its slug; the old slug is
+      // aliased and its URL must 301 to the new slug. Regression guard for the
+      // routeParser fakeReply fix — the pre-handler shim used to resolve the Promise
+      // with null on the bare reply() before .redirect().takeover() ran (pre.course
+      // became null -> 500 instead of 301). Fixed in lib/util/routeParser.js: defer
+      // the bare reply() and resolve .takeover() with a real h.redirect(...) response.
+      //
+      // skipIf(firestore): the alias is recorded by preserveSlug, a post('init')
+      // hook, and the Firestore backend does not run post('init') hooks (only
+      // pre/post save — firestore-backend.js:1141-1142), so _original_slug is never
+      // captured and getIdBySlug(oldSlug) returns null -> 404. This is a real
+      // Firestore-backend gap (renamed slugs don't redirect on GCR prod), tracked
+      // separately from the New-Trinket shim fix. Un-skip once post('init') hooks
+      // run on the Firestore backend.
+      it.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('should redirect me to the current course if I use the original course slug', async () => {
         const originalSlug = course.slug;
         // Rename the course so the slug changes, then verify the old slug redirects.
         await flow.updateCourse(course.id, { name: 'foo bar' });
