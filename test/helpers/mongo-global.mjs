@@ -96,7 +96,15 @@ export default async function ({ provide }) {
   // config source and silently flips the backend. Remove it before workers load.
   rmSync(join(REPO_ROOT, 'config', 'runtime.json'), { force: true });
 
-  const mongod = await MongoMemoryServer.create({ binary: { version: '6.0.14' } });
+  // ttlMonitorSleepSecs has to be set at STARTUP, not from inside a test: a
+  // setParameter call only takes effect once the monitor's *current* sleep ends,
+  // so with the 60s default the first sweep is still ~60s out and any TTL
+  // assertion times out (measured: 59.4s). At 1s, TTL behaviour is directly
+  // testable — see test/lib/util/catbox-mongoose.test.js. Harmless otherwise.
+  const mongod = await MongoMemoryServer.create({
+    binary: { version: '6.0.14' },
+    instance: { args: ['--setParameter', 'ttlMonitorSleepSecs=1'] }
+  });
   provide('mongoUri', mongod.getUri());
 
   let garage = null;
