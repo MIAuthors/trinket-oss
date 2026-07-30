@@ -25,6 +25,22 @@ describe.skipIf(!FB_MODE)('Firebase Auth session establishment', () => {
     expect(flow.lastResponse.statusCode).toEqual(200);
   });
 
+  it('delivers a real string redirect in the response body (not the shim builder)', async () => {
+    // Regression (login "account created" every time): the handler did a bare
+    // `return reply({status, redirect})`. In the hapi-shim that returns a
+    // chainable builder, not a resolved response — so hapi serialized the
+    // builder (all function props) to `{}` and the browser never saw `redirect`.
+    // login-firebase.html then fell back to a hardcoded '/welcome' on EVERY
+    // login, which flashes "Your account has been created." A terminal .code(200)
+    // resolves the real {status, redirect} body. switchUser seeds the user first,
+    // so this is a returning account → must land on '/home', as a STRING.
+    delete flow.cookies['user'];
+    await flow.switchUser('user');
+    const body = flow.lastResponse.body;
+    expect(typeof body.redirect).toBe('string');   // pre-fix: [Function redirect]
+    expect(body.redirect).toBe('/home');            // returning user, not /welcome
+  });
+
   it('rejects a garbage ID token', async () => {
     await flow.switchUser('');          // anonymous jar
     const r = await flow.post('/api/auth/session', { idToken: 'not-a-real-token' });
