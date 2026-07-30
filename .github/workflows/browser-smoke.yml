@@ -1,0 +1,76 @@
+name: browser smoke
+
+# On-demand pre-deploy gate — deliberately NOT triggered on every push (that's
+# the `tests` workflow's job). Run this when you're about to deploy:
+#   * click "Run workflow" in the Actions tab, or
+#   * `gh workflow run browser-smoke.yml`, or
+#   * push a `deploy-*` tag (auto-runs it).
+# It stands up the GCP-shape stack (Firestore/Auth/Storage emulators) and drives
+# the real browser through the client-side journeys the unit/api suite can't.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['deploy-*']
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The dev app reads its session password from config/local.yaml; supply a
+      # throwaway CI one. Everything else (firestore/auth/storage emulator wiring,
+      # backend selection) comes from NODE_CONFIG in docker-compose.gcr.yml.
+      - name: Write minimal CI config
+        run: |
+          mkdir -p config
+          cat > config/local.yaml <<'YAML'
+          app:
+            plugins:
+              session:
+                cookieOptions:
+                  password: 'ci-smoke-session-password-at-least-32-characters'
+          YAML
+
+      - name: Bring up the GCP-shape stack
+        env:
+          SESSION_PASSWORD: ci-smoke-session-password-at-least-32-characters
+          FIREBASE_CLIENT_CONFIG: '{"projectId":"demo-trinket","apiKey":"fake","authDomain":"demo-trinket.firebaseapp.com","appId":"1:1:web:ci"}'
+          GOOGLE_CLIENT_ID: ci-dummy
+          GOOGLE_CLIENT_SECRET: ci-dummy
+          LTI_PRIVATE_KEY: ''
+          ADMIN_EMAILS: ''
+        run: docker compose -f docker-compose.gcr.yml up --build -d
+
+      - name: Wait for the app
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/ || true)
+            if [ "$code" = "200" ] || [ "$code" = "302" ]; then echo "app up ($code)"; exit 0; fi
+            sleep 3
+          done
+          echo "!! app did not come up"; docker logs trinket-gcr --tail 30 || true; exit 1
+
+      - name: Install browser test deps
+        working-directory: test/browser
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        working-directory: test/browser
+        run: npx playwright test
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.gcr.yml down || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: test/browser/playwright-report
+          if-no-files-found: ignore
