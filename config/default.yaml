@@ -12,7 +12,9 @@ features:
   trinkets:
     # Client-side languages - work out of the box
     python: false      # Skulpt-based Python 2/3 (disabled; superseded by pyodide, which is shown as "Python")
-    pyodide: true      # Pyodide (real CPython via WASM, client-side, CDN-loaded) — labeled "Python" in the UI
+    pyodide: false     # No separate "Pyodide" New-Trinket entry — python3 IS the Python type (both run on
+                       #   the same Pyodide engine; the python3<->pyodide serve alias keeps existing pyodide
+                       #   trinkets working). Enable in a deploy overlay if you want a distinct Pyodide button.
     html: false        # HTML/CSS/JS
     blocks: false      # Block-based coding
     glowscript: true  # 3D graphics with GlowScript/VPython
@@ -33,7 +35,7 @@ features:
   trinketLabels:
     python: 'Python'
     pyodide: 'Pyodide'
-    python3: 'Python3'
+    python3: 'Python'    # the single Python entry (pyodide entry disabled above)
     pygame: 'Pygame'
     java: 'Java'
     R: 'R'
