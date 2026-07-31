@@ -109,7 +109,14 @@
   {% if flash.requested %}
   <input id="requestedLogin" type="hidden" value="{{flash.requested}}">
   {% endif %}
-  {% block announcement_banner %}{% endblock %}
+  {% block announcement_banner %}
+  {% if config.app.announcement %}
+  <div data-alert class="alert-box warning announcement-banner" role="status">
+   {{ config.app.announcement | safe }}
+   <a href="#" class="close" aria-label="Dismiss">&times;</a>
+  </div>
+  {% endif %}
+  {% endblock %}
   {% block nav %}
     <div class="nav-wrapper">
       <nav class="top-bar" data-topbar data-options="is_hover: false" role="navigation" role="menubar" aria-label="Main Navigation">
