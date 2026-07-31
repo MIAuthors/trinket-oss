@@ -66,6 +66,20 @@ describe('Trinket import — legacy trinket.io "python" lang normalization', () 
     expect(t).toBeTruthy();
     expect(t.lang).toBe('python3');
   });
+
+  it('flags a converted "python" trinket whose code uses Python-2 print syntax', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'print "hello"'));
+    expect(r.statusCode).toBe(200);
+    expect(r.body.data.imported).toBe(1);
+    expect(r.body.data.python2Warnings).toContain('Legacy Py');   // user is told it needs updating
+  });
+
+  it('does NOT flag a converted "python" trinket that already uses print()', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'print("hello")'));
+    expect(r.body.data.python2Warnings || []).not.toContain('Legacy Py');
+  });
 });
 
 describe('Trinket import ownership (legacyShortCode scoping)', () => {

@@ -68,11 +68,18 @@ async function main() {
   console.log('Found ' + trinkets.length + ' trinket(s) with lang:"python"' +
     (DRY_RUN ? ' (dry run — no writes)' : ''));
 
-  var changed = 0;
+  // Same Py2 print-statement heuristic the importer uses — flag trinkets whose
+  // code won't run as-is on Python 3 so the conversion is never a silent surprise.
+  var PY2_PRINT_RE = /(^|\n)[ \t]*print[ \t]+[^(=\s]/;
+
+  var changed = 0, py2 = 0;
   for (var i = 0; i < trinkets.length; i++) {
     var t = trinkets[i];
+    var needsUpdate = typeof t.code === 'string' && PY2_PRINT_RE.test(t.code);
+    if (needsUpdate) py2++;
     console.log('  ' + (DRY_RUN ? '[would fix] ' : '[fixing]  ') +
-      (t.shortCode || t.id) + '  ' + (t.name || '(unnamed)'));
+      (t.shortCode || t.id) + '  ' + (t.name || '(unnamed)') +
+      (needsUpdate ? '   [Python-2 syntax — will need updating: print x -> print(x)]' : ''));
     if (!DRY_RUN) {
       t.lang = 'python3';
       await t.save();
@@ -80,7 +87,8 @@ async function main() {
     changed++;
   }
 
-  console.log((DRY_RUN ? 'Would migrate ' : 'Migrated ') + changed + ' trinket(s).');
+  console.log((DRY_RUN ? 'Would migrate ' : 'Migrated ') + changed + ' trinket(s)' +
+    (py2 ? '; ' + py2 + ' use Python-2 syntax that will need a small update after conversion.' : '.'));
 }
 
 main()
