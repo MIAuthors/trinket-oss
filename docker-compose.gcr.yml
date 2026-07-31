@@ -44,6 +44,10 @@ services:
       - /usr/local/node/trinket/public/components
     environment:
       NODE_ENV: development
+      # Optional per-deploy overlay folder (deploys/<name>; see config/deploy-dir.js).
+      # The emulator NODE_CONFIG below still governs the backend; the overlay
+      # supplies branding/features/announcement so `make gcp` can preview a deploy.
+      TRINKET_DEPLOY: "${TRINKET_DEPLOY:-}"
       GOOGLE_CLOUD_PROJECT: demo-trinket
       FIRESTORE_EMULATOR_HOST: firebase:8080
       STORAGE_EMULATOR_HOST: http://firebase:9199
