@@ -122,6 +122,32 @@ function ensurePyodide() {
     // text without its trailing newline, so we re-add it per write.
     py.setStdout({ batched: function(s) { writeOut(s + '\n'); } });
     py.setStderr({ batched: function(s) { writeOut(s + '\n'); } });
+    // Wire input() to a browser prompt. Pyodide configures no stdin by default,
+    // so CPython's input() raises `OSError: [Errno 29] I/O error` the instant a
+    // program reads input — which broke every intro-course trinket that uses
+    // input(). Override the builtin directly (robust across Pyodide's evolving
+    // setStdin/autoEOF contract): echo the prompt to the console (as a terminal
+    // would), collect one line via window.prompt (also shown in the dialog),
+    // echo the entry back, and treat a cancelled dialog as EOF. Runs once at
+    // init; self-deletes its temporaries so the variable explorer and
+    // __trinket_baseline__ stay clean.
+    try {
+      py.runPython([
+        'def _trinket_input(prompt=""):',
+        '    import js',
+        '    if prompt:',
+        '        print(prompt, end="")',
+        '    r = js.window.prompt(str(prompt) if prompt else "")',
+        '    if r is None:',
+        '        print()',
+        '        raise EOFError',
+        '    print(r)',
+        '    return str(r)',
+        'import builtins as _b',
+        '_b.input = _trinket_input',
+        'del _b, _trinket_input'
+      ].join('\n'));
+    } catch (e) {}
     // Record the pristine namespace so the variable explorer can show only the
     // names the user's program introduces, not Python built-ins / library imports.
     try { py.runPython('__trinket_baseline__ = set(globals().keys())'); } catch (e) {}

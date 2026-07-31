@@ -29,6 +29,59 @@ async function freshLogin(user) {
   await flow.switchUser(user);
 }
 
+// trinket.io exports its Python type as lang:"python", but in trinket-oss
+// "python" is the DISABLED Skulpt engine (features.trinkets.python=false) with
+// no python3/pyodide alias — so imported python trinkets 404 on open ("This
+// trinket type is not available"). trinket.io "python" is really Python-3 code
+// (files start `#!/bin/python3`), so the importer must store it as the canonical
+// python3 (Pyodide-backed, enabled), not the dead Skulpt "python".
+function buildLangZip(lang, code) {
+  const zip = new JSZip();
+  const sc  = 'a1b2c3d4e5';
+  zip.file('manifest.json', JSON.stringify({ trinkets: [{ shortCode: sc, lang: lang }] }));
+  const dir = lang + '/Legacy_Py_' + sc + '/';
+  zip.file(dir + 'metadata.json', JSON.stringify({ name: 'Legacy Py', description: 'legacy', lang: lang }));
+  zip.file(dir + 'main.py', code || 'name = input("your name? ")\nprint(name)');
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+describe('Trinket import — legacy trinket.io "python" lang normalization', () => {
+  it('stores an imported lang:"python" trinket as python3, not the disabled Skulpt type', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python'));
+    expect(r.statusCode).toBe(200);
+    expect(r.body.data.imported).toBe(1);
+
+    await flow.get('/api/trinkets');
+    const t = flow.lastResponse.body.data.find((x) => x.name === 'Legacy Py');
+    expect(t).toBeTruthy();
+    expect(t.lang).toBe('python3');          // pre-fix: 'python' -> 404 on open
+  });
+
+  it('leaves an already-canonical python3 import unchanged', async () => {
+    await freshLogin('user');
+    await flow.importTrinketsZip(await buildLangZip('python3', 'print("hi")'));
+    await flow.get('/api/trinkets');
+    const t = flow.lastResponse.body.data.find((x) => x.name === 'Legacy Py');
+    expect(t).toBeTruthy();
+    expect(t.lang).toBe('python3');
+  });
+
+  it('flags a converted "python" trinket whose code uses Python-2 print syntax', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'print "hello"'));
+    expect(r.statusCode).toBe(200);
+    expect(r.body.data.imported).toBe(1);
+    expect(r.body.data.python2Warnings).toContain('Legacy Py');   // user is told it needs updating
+  });
+
+  it('does NOT flag a converted "python" trinket that already uses print()', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'print("hello")'));
+    expect(r.body.data.python2Warnings || []).not.toContain('Legacy Py');
+  });
+});
+
 describe('Trinket import ownership (legacyShortCode scoping)', () => {
   it('imports a fresh copy for the first user', async () => {
     await freshLogin('user');

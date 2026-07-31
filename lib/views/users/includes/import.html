@@ -105,6 +105,9 @@
           </tr>
         </tbody>
       </table>
+      <div id="py2WarnBox" class="alert-box warning" style="display:none; margin-top:10px;">
+        <span id="py2Warn"></span>
+      </div>
     </div>
   </div>
 </div>
@@ -179,6 +182,17 @@
         $('#importSuccessMsg').text('Trinket import complete: ' + d.imported + ' new, ' + (d.updated || 0) + ' updated, ' + d.skipped + ' skipped.');
         $('#importSuccess').show();
         $('#importAlert').hide();
+        // trinket.io "Python" trinkets run on Python 3 here. A few may use
+        // Python-2 syntax that needs a small update — name them so it's not a
+        // surprise when they're opened.
+        if (d.python2Warnings && d.python2Warnings.length) {
+          $('#py2Warn').text(
+            d.python2Warnings.length + ' imported Python trinket(s) now run on Python 3 and use Python-2 syntax that needs a small update ' +
+            '(e.g. change `print x` to `print(x)`): ' + d.python2Warnings.join(', '));
+          $('#py2WarnBox').show();
+        } else {
+          $('#py2WarnBox').hide();
+        }
       } else {
         showAlert(resp.error || 'Import failed.');
       }
