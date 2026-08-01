@@ -70,3 +70,22 @@ the actual login routes (Firebase + Google-OAuth) through `server.inject` and as
 `false`. Needs mocking Firebase `verifyIdToken` (and the Google-OAuth profile) in the
 harness. Deferred as moderate effort; the wiring mirrors the proven
 `ensureSeedAdminRole` seam and is verified end-to-end by a prod re-login.
+
+---
+
+## Reorganize repo documentation
+
+`docs/` (and a few root-level `.md` files) have grown organically into a flat pile
+that mixes several genres: durable references (`authority-model.md`,
+`DEPLOY-OVERLAY-GUIDE.md`), MVP/design specs (`variable-explorer-mvp.md`,
+`pyodide-debugger-mvp.md`), migration-strategy notes (`GCR-PICUP-MERGE-ROADMAP.md`,
+`GCR-PICUP-TRIAL-MERGE-NOTES.md`, `gcp-toolchain-disposition.md`), the
+`docs/superpowers/{specs,plans}` tree, this `FUTURE.md` backlog, and `docs/compliance`.
+Nothing signals which are current vs. historical, upstream-bound vs. fork-local,
+reference vs. one-off decision record.
+
+Wanted: a deliberate structure — e.g. `reference/`, `decisions/` (dated ADRs),
+`deploy/`, `archive/` for superseded notes — plus a `docs/README.md` index, and a
+pass to mark or retire stale docs. Coordinate with the picup merge: docs that describe
+shared behavior should be upstream-shaped, while fork/deploy-specific notes stay
+clearly labeled. Low urgency, but compounding — the pile grows every session.
