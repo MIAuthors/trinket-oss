@@ -80,6 +80,34 @@ describe('Trinket import — legacy trinket.io "python" lang normalization', () 
     const r = await flow.importTrinketsZip(await buildLangZip('python', 'print("hello")'));
     expect(r.body.data.python2Warnings || []).not.toContain('Legacy Py');
   });
+
+  // Regression for the review finding: the Py2 heuristic used to match ONLY print
+  // statements, so raw_input()/xrange()/except-comma converted to python3 silently
+  // and broke at runtime with no warning. These pin the broadened detection —
+  // each FAILS against the old print-only heuristic.
+  it('flags Py2 raw_input() (renamed input() in py3)', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'name = raw_input("? ")\nprint(name)'));
+    expect(r.body.data.python2Warnings).toContain('Legacy Py');
+  });
+
+  it('flags Py2 xrange()', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'for i in xrange(10):\n    print(i)'));
+    expect(r.body.data.python2Warnings).toContain('Legacy Py');
+  });
+
+  it('flags Py2 `except Exc, e:` syntax', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'try:\n    pass\nexcept Exception, e:\n    print(e)'));
+    expect(r.body.data.python2Warnings).toContain('Legacy Py');
+  });
+
+  it('does NOT flag clean python3 (input(), range, except-as)', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(await buildLangZip('python', 'try:\n    x = input()\nexcept Exception as e:\n    print(range(3))'));
+    expect(r.body.data.python2Warnings || []).not.toContain('Legacy Py');
+  });
 });
 
 describe('Trinket import ownership (legacyShortCode scoping)', () => {
