@@ -81,6 +81,15 @@
         { "order": "ASCENDING",  "queryScope": "COLLECTION" },
         { "order": "DESCENDING", "queryScope": "COLLECTION" }
       ]
+    },
+    {
+      "collectionGroup": "errorevents",
+      "fieldPath": "created",
+      "ttl": true,
+      "indexes": [
+        { "order": "ASCENDING",  "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" }
+      ]
     }
   ]
 }
