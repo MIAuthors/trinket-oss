@@ -67,33 +67,39 @@ stock config (your values win) and shadows any view/asset by matching relative p
 | Location | What to put there | Notes |
 |---|---|---|
 | `deploys/<name>/.env` | Infra + secrets: bucket names/hosts, public URL/host, storage creds, session password, LTI/OAuth keys | Sourced **after** the root `.env` and overrides it. |
-| `deploys/<name>/config/local-production.yaml` | Config overrides: site name, branding, theme, **which trinket types are enabled**, LTI settings, buckets | Deep-merged over `default.yaml`; **wins over everything.** Loaded only when `NODE_ENV=production`. |
-| `deploys/<name>/config/local-development.yaml` | Dev-only overrides (e.g. pointing bare `node` at the compose backends) | Loaded only when `NODE_ENV=development`; never leaks into prod. |
+| `deploys/<name>/config/local.yaml` | **Env-independent identity: site name, branding, theme, announcement, which trinket types are enabled, LTI tool name.** | Deep-merged over `default.yaml`; **wins over everything.** Loaded in **every** env when the overlay is active — including `make gcp` preview and bare `node`. |
+| `deploys/<name>/config/local-production.yaml` | **Prod-only infra:** bucket names/hosts, GCP project, `url.knownHosts`, prod DB backend. | Loaded only when `NODE_ENV=production`. |
+| `deploys/<name>/config/local-development.yaml` | Dev-only overrides (e.g. pointing bare `node` at the compose backends) | Loaded only when `NODE_ENV=development`. |
 | `deploys/<name>/views/…` | Nunjucks templates that replace stock pages by relative path | e.g. `views/static/about.html` replaces `lib/views/static/about.html`. |
 | `deploys/<name>/public/…` | Static assets that replace stock ones | e.g. `public/img/brand/logo.png`. |
 
-> ⚠️ Put env-specific values in the **env-suffixed** files (`local-production.yaml` /
-> `local-development.yaml`), **not** `local.yaml` — `local.yaml` loads in *every*
-> environment (including tests), so a backend or feature value there can poison
-> unrelated runs.
+> **Which file? Split by *env-dependence*, not by convenience.** Anything that's the
+> same in dev, preview, and prod — branding, theme, announcement, enabled trinket
+> types — belongs in the overlay's **`local.yaml`** so it renders **everywhere**,
+> including `make gcp` preview (which runs `NODE_ENV=development` and therefore
+> loads `local.yaml`/`local-development.yaml` but **not** `local-production.yaml`).
+> Put only values that genuinely differ between prod and dev (buckets, project,
+> hosts) in `local-production.yaml`.
+>
+> ⚠️ The "`local.yaml` poisons tests" caveat applies to the **root** `config/local.yaml`,
+> *not* an overlay's `local.yaml`: tests never set `TRINKET_DEPLOY`, so the overlay
+> (and its `local.yaml`) is inert during test runs.
 
 ---
 
-## Example `config/local-production.yaml`
+## Example — identity in `config/local.yaml` (renders everywhere, incl. `make gcp`)
 
 ```yaml
 app:
   siteName: 'Example Trinket'
   logo: '/img/brand/logo.png'          # your file in deploys/<name>/public/img/brand/
+  announcement: '⚠️ Test server — data may be wiped.'   # shows in preview too
   branding:
     lead: 'A browser-based coding platform for computational physics.'
     subtitle: 'Write and run Python and Web VPython in interactive courses.'
   theme:
     heading: '#123456'                  # your brand colors
     primary: '#123456'
-  url:
-    knownHosts:
-      - trinket.example.org
 
 # Which trinket types appear in the New-Trinket menu AND are allowed to run.
 # Omit this block to inherit the stock set; override only what you want to change:
@@ -101,7 +107,15 @@ features:
   trinkets:
     html: true        # e.g. also enable HTML trinkets
     # pyodide: true   # …or re-enable a separate Pyodide button
+```
 
+## Example — prod-only infra in `config/local-production.yaml`
+
+```yaml
+app:
+  url:
+    knownHosts:
+      - trinket.example.org
 aws:
   buckets:
     materials:
