@@ -24,6 +24,30 @@ function makeModelSchema(defaults, subdocDefaults) {
 }
 
 // ---------------------------------------------------------------------------
+// toObject — transient post('init') markers must NOT be persisted
+// ---------------------------------------------------------------------------
+
+describe('firestore-backend toObject', function() {
+  // Regression: post('init') hooks (preserveSlug/preserveUsername) set
+  // this._original_slug / this._original_username as own enumerable props on
+  // hydration. toObject scans own enumerable props, so without a guard those
+  // internal markers get written back into the stored Firestore document (and
+  // into exports). This pins that they're excluded while real fields persist.
+  it('excludes _original_* markers from the persisted object', function() {
+    var schema = makeModelSchema({}, {});
+    var doc = new FirestoreDocument({ _id: 'c1', slug: 'new-slug', name: 'Course' }, fakeRef, schema);
+    doc._original_slug     = 'old-slug';       // as preserveSlug would set on init
+    doc._original_username = 'olduser';
+
+    var obj = doc.toObject();
+    obj.should.have.property('slug', 'new-slug');       // real fields still persist
+    obj.should.have.property('name', 'Course');
+    obj.should.not.have.property('_original_slug');     // used to leak into storage
+    obj.should.not.have.property('_original_username');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // extractDefaults
 // ---------------------------------------------------------------------------
 
