@@ -108,6 +108,14 @@ function writeOut(text) {
   }
 }
 
+// Direct, synchronous console write that bypasses Pyodide's *batched* stdout
+// (which buffers partial lines until a newline). Used to echo an input prompt
+// into the console before a blocking window.prompt, and by the console module's
+// inline input. Exposed on window so Pyodide's `from js import ...` can reach it.
+window.__trinket_console_write = function(text) {
+  writeOut(String(text));
+};
+
 function ensurePyodide() {
   if (pyodideLoading) return pyodideLoading;
 
@@ -136,7 +144,7 @@ function ensurePyodide() {
         'def _trinket_input(prompt=""):',
         '    import js',
         '    if prompt:',
-        '        print(prompt, end="")',
+        '        js.window.__trinket_console_write(str(prompt))',
         '    r = js.window.prompt(str(prompt) if prompt else "")',
         '    if r is None:',
         '        print()',
