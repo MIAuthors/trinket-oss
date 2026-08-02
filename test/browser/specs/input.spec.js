@@ -106,4 +106,42 @@ test.describe('Pyodide console.input()', () => {
       expect(text).not.toContain('I/O error');
     }).toPass({ timeout: 90_000 });
   });
+
+  test('console.input() works WITHOUT await (source is transformed)', async ({ page }) => {
+    await page.goto('/embed/python3');
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue(
+        'import console\nname = console.input("your name? ")\nprint("hi", name)', 1);
+    });
+    await page.locator('.run-it').first().click();
+    await answerInlineConsole(page, 'Ada');
+    await expect(async () => {
+      const text = await page.evaluate(() => {
+        const out = document.querySelector('#outputContainer');
+        return out ? (out.innerText || '') : '';
+      });
+      expect(text).toContain('hi Ada');
+      expect(text).not.toContain('SyntaxError'); // proves the await was inserted
+      expect(text).not.toContain('coroutine');   // not left un-awaited
+    }).toPass({ timeout: 90_000 });
+  });
+
+  test('a program that does not import console is unaffected', async ({ page }) => {
+    await page.goto('/embed/python3');
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue(
+        'print("no console here")\nprint(sum(range(5)))', 1);
+    });
+    await page.locator('.run-it').first().click();
+    await expect(async () => {
+      const text = await page.evaluate(() => {
+        const out = document.querySelector('#outputContainer');
+        return out ? (out.innerText || '') : '';
+      });
+      expect(text).toContain('no console here');
+      expect(text).toContain('10');
+    }).toPass({ timeout: 90_000 });
+  });
 });
