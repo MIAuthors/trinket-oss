@@ -309,6 +309,13 @@ function usesVPython(code) {
       || /(^|\n)\s*(import\s+vpython|from\s+vpython\b)/.test(code);
 }
 
+// True when the program opts into the inline console module. Gate for applying
+// the async transform on the python3 path — programs that don't import console
+// take the untouched runPythonAsync path.
+function usesConsole(code) {
+  return /(^|\n)\s*(import\s+console\b|from\s+console\b)/.test(code);
+}
+
 // Inject the GlowScript graphics library into the embed window (same realm as
 // Pyodide, so the bridge's `from js import sphere, …` resolves). Memoized.
 function ensureGlow() {
@@ -365,6 +372,22 @@ function ensureVpython() {
     .then(function() { return pyodide.runPythonAsync('from random import *'); })
     .then(function() { return pyodide.runPythonAsync('from vpython import *'); });
   return vpythonLoading;
+}
+
+var ASYNC_TRANSFORM_URL = '/js/embed/wvpython/vpython/_async_transform.py';
+var consoleTransformLoading = null;
+// Fetch the pure-ast transform source and expose transform_source in a private
+// module, WITHOUT importing the vpython package (heavy: glow/scene/etc.).
+function ensureConsoleTransform() {
+  if (consoleTransformLoading) return consoleTransformLoading;
+  consoleTransformLoading = fetch(ASYNC_TRANSFORM_URL)
+    .then(function(r) { return r.text(); })
+    .then(function(src) {
+      pyodide.FS.writeFile('_trinket_async_transform.py', src);
+      return pyodide.runPythonAsync(
+        'from _trinket_async_transform import transform_source');
+    });
+  return consoleTransformLoading;
 }
 
 // Run a VPython program: load glow + scene + bridge, comment out the version
@@ -1533,6 +1556,14 @@ function startRun() {
             "if _plt.get_fignums():\n" +
             "    _plt.show()\n"
           ).then(function() { return result; });
+        });
+      }
+      if (usesConsole(prog)) {
+        return ensureConsoleTransform().then(function() {
+          pyodide.globals.set('__user_source__', prog || '');
+          var asyncProg = pyodide.runPython(
+            'transform_source(__user_source__)');
+          return pyodide.runPythonAsync(asyncProg);
         });
       }
       return pyodide.runPythonAsync(prog || '');
