@@ -18,6 +18,13 @@ defaults.user = {
   password: 'bacon'
 };
 
+defaults.user2 = {
+  fullname: 'test user 2',
+  username: 'testing2',
+  email:    'test2@dummy.com',
+  password: 'bacon2'
+};
+
 defaults.admin = {
   fullname: 'admin user',
   // name:     'admin',

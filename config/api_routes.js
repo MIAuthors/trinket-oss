@@ -488,20 +488,21 @@ module.exports = [
     route : 'GET /api/courses/{courseId}/accessCode course.getAccessCode',
     config : {
       auth: 'session',
-      pre : ['course(params.courseId)']
+      pre : [helpers.accessCodeEnrollmentEnabled, 'course(params.courseId)']
     }
   },
   {
     route : 'POST /api/courses/{courseId}/accessCode course.generateAccessCode',
     config : {
       auth: 'session',
-      pre : ['course(params.courseId)']
+      pre : [helpers.accessCodeEnrollmentEnabled, 'course(params.courseId)']
     }
   },
   {
     route : 'POST /api/courses/join course.join',
     config : {
       auth: 'session',
+      pre : [helpers.accessCodeEnrollmentEnabled],
       validate : {
         payload : {
           accessCode: Joi.string().min(6).required()
