@@ -41,6 +41,10 @@ var MATPLOTLIB_SETUP_CODE = [
 // The `console` module surfaced to python3 user code: an async input() that
 // reads inline from the trinket console. `input()` (the builtin) is unchanged;
 // this is an opt-in, importable alternative. runPythonAsync permits the await.
+// The `r is None` / EOFError branch mirrors the `input()` builtin's cancel
+// handling, but jqconsole has no cancel affordance today, so __trinket_console_input
+// never actually resolves null — this is reserved for a future stop mechanism
+// (kept intentionally, not dead code to delete).
 var CONSOLE_MODULE_CODE = [
   'import js',
   '',
@@ -131,8 +135,11 @@ window.__trinket_console_write = function(text) {
 };
 
 // Inline console input for the `console` module: append the prompt, open a
-// jqconsole input field, resolve with the typed line (null on cancel). Same
-// widget/flow the Skulpt runner uses (python.js: skulpt_inputfun).
+// jqconsole input field, resolve with the typed line. Same widget/flow the
+// Skulpt runner uses (python.js: skulpt_inputfun). jqconsole.Input has no
+// cancel affordance, so `resolve` here only ever fires with the typed line;
+// the Promise<string|null> signature (and the module's EOFError-on-null
+// branch) is reserved for a future stop mechanism, not reachable today.
 window.__trinket_console_input = function(prompt) {
   initConsoleOutput();
   window.readyForSnapshot = true;
@@ -145,7 +152,9 @@ window.__trinket_console_input = function(prompt) {
       resolve(line);
       if (active) { try { $(active).focus(); } catch (e) {} }
     });
-    jqconsole.Focus();
+    if (!autoRun) {
+      jqconsole.Focus();
+    }
   });
 };
 
@@ -190,8 +199,9 @@ function ensurePyodide() {
       ].join('\n'));
     } catch (e) {}
     // Make `import console` resolve to the inline-input module (opt-in; the
-    // builtin input() above is unchanged). Written to the FS root, which is on
-    // sys.path, so a plain `import console` finds it.
+    // builtin input() above is unchanged). Written to the Pyodide working
+    // directory (/home/pyodide), which is on sys.path, so a plain
+    // `import console` finds it.
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
