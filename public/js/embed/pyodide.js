@@ -113,6 +113,12 @@ function resetOutput(consoleOnly) {
     jqconsole.Append(loadingHeader());
   }
 
+  // A fresh run may interrupt a pending console.input() (jqconsole is reset
+  // above, so its Input() callback — the only other place this class is
+  // removed — never fires). Clear it here too so stale "active input"
+  // styling can't survive into a run that isn't waiting on input.
+  $('#console-output').removeClass('console-active');
+
   if (!consoleOnly) {
     $('#graphic').empty();
     $('#graphic').removeData("graphicMode");
@@ -202,6 +208,17 @@ function ensurePyodide() {
     // builtin input() above is unchanged). Written to the Pyodide working
     // directory (/home/pyodide), which is on sys.path, so a plain
     // `import console` finds it.
+    //
+    // Known limitation: this write is unconditional, so a trinket that ships
+    // its OWN console.py (a secondary file synced via syncFilesToFS) collides
+    // with it — last write wins, and whichever module's console.input ends up
+    // on disk is the one `import console` sees. If the user's own module wins,
+    // usesConsole() still gates the async transform on (the still-matching)
+    // `import console`, so the transform's `await` gets inserted before a
+    // `console.input(...)` call that may not even be a coroutine in the
+    // user's module — a hard error, not silent misbehavior. Rare enough
+    // (console.py is not a common trinket filename) that we're documenting it
+    // rather than namespacing/detecting the collision.
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
@@ -312,8 +329,24 @@ function usesVPython(code) {
 // True when the program opts into the inline console module. Gate for applying
 // the async transform on the python3 path — programs that don't import console
 // take the untouched runPythonAsync path.
+//
+// Supported API: `import console` (including aliased `import console as c`)
+// plus the attribute form `console.input(...)` — that's the only call shape
+// the transform (_async_transform.py) knows how to rewrite with an `await`.
+//
+// Deliberately NOT gated: `from console import input`. That form binds the
+// module's `async def input` directly into the caller's namespace, shadowing
+// the builtin `input()`. The transform only rewrites attribute-access calls
+// (`console.input(...)`), so a bare `input(...)` after `from console import
+// input` would need the transform to rewrite ALL `input()` calls — which
+// would also catch the unrelated builtin `input()` (window.prompt) path and
+// break it. Rather than risk that, we leave this combination ungated: the
+// program runs un-transformed, the bare call returns an un-awaited coroutine,
+// and it fails/misbehaves at runtime same as it always would have (previously
+// a clean `ModuleNotFoundError` since `console` didn't exist). This is a
+// known, documented gap, not an oversight.
 function usesConsole(code) {
-  return /(^|\n)\s*(import\s+console\b|from\s+console\b)/.test(code);
+  return /(^|\n)\s*import\s+console\b/.test(code);
 }
 
 // Inject the GlowScript graphics library into the embed window (same realm as
@@ -507,7 +540,7 @@ var VARS_HELPER = [
   // KEEP IN SYNC with RECORD_HELPER's _SKIP + _snap_ns filters (the step
   // debugger's per-step snapshots): a runner-injected name added here but not
   // there makes the debugger show internals the explorer hides, or vice versa.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate'}",
+  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   "_baseline = user_ns.get('__trinket_baseline__') or set()",
   '_out = []',
   'for _name, _val in list(user_ns.items()):',
@@ -753,7 +786,7 @@ var RECORD_HELPER = [
   // must hide the same runner-injected names. They live in separate helper
   // strings/namespaces, so a shared definition would add more machinery than
   // it removes — this cross-reference is the guard.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate'}",
+  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   'class _TrinketStopRecording(Exception): pass',
   '_steps = []',
   '_snaps = []',
@@ -1203,6 +1236,17 @@ function runStepThrough() {
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
     if (usesVPython(prog)) {
       $('#debug-note').text('Step through is not available for VPython programs');
+      setTimeout(function() { $('#debug-note').text(''); }, 4000);
+      return null;
+    }
+    if (usesConsole(prog)) {
+      // The recorder (RECORD_HELPER) execs the RAW user source under
+      // sys.settrace — it never routes through ensureConsoleTransform/
+      // transform_source, so a `console.input()` call would run un-awaited
+      // (a silently-wrong coroutine, and the input field would never open).
+      // Bail with the same mechanism/style as the VPython guard above rather
+      // than teaching the recorder about the transform.
+      $('#debug-note').text('Step through is not available for programs that read console input');
       setTimeout(function() { $('#debug-note').text(''); }, 4000);
       return null;
     }
