@@ -81,7 +81,8 @@
         hideGeneratedCode : ["{{ config.app.hideGeneratedCode | join('","') | safe }}"],
         runOption         : {{ config.app.runOption      | json        | safe }},
         emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
-        assetsEnabled     : {{ 'true' if config.features.assets else 'false' }}
+        assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
+        accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }}
       }
     };
   </script>
