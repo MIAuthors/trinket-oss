@@ -38,6 +38,20 @@ var MATPLOTLIB_SETUP_CODE = [
   "del _plt",
 ].join('\n');
 
+// The `console` module surfaced to python3 user code: an async input() that
+// reads inline from the trinket console. `input()` (the builtin) is unchanged;
+// this is an opt-in, importable alternative. runPythonAsync permits the await.
+var CONSOLE_MODULE_CODE = [
+  'import js',
+  '',
+  'async def input(prompt=""):',
+  '    r = await js.window.__trinket_console_input(str(prompt) if prompt else "")',
+  '    if r is None:',
+  '        raise EOFError',
+  '    return str(r)',
+  ''
+].join('\n');
+
 var api;
 var codeRuns = {};
 var editor;
@@ -116,6 +130,25 @@ window.__trinket_console_write = function(text) {
   writeOut(String(text));
 };
 
+// Inline console input for the `console` module: append the prompt, open a
+// jqconsole input field, resolve with the typed line (null on cancel). Same
+// widget/flow the Skulpt runner uses (python.js: skulpt_inputfun).
+window.__trinket_console_input = function(prompt) {
+  initConsoleOutput();
+  window.readyForSnapshot = true;
+  return new Promise(function(resolve) {
+    if (prompt) { jqconsole.Write(String(prompt)); }
+    var active = document.activeElement;
+    $('#console-output').addClass('console-active');
+    jqconsole.Input(function(line) {
+      $('#console-output').removeClass('console-active');
+      resolve(line);
+      if (active) { try { $(active).focus(); } catch (e) {} }
+    });
+    jqconsole.Focus();
+  });
+};
+
 function ensurePyodide() {
   if (pyodideLoading) return pyodideLoading;
 
@@ -155,6 +188,12 @@ function ensurePyodide() {
         '_b.input = _trinket_input',
         'del _b, _trinket_input'
       ].join('\n'));
+    } catch (e) {}
+    // Make `import console` resolve to the inline-input module (opt-in; the
+    // builtin input() above is unchanged). Written to the FS root, which is on
+    // sys.path, so a plain `import console` finds it.
+    try {
+      py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
     // Record the pristine namespace so the variable explorer can show only the
     // names the user's program introduces, not Python built-ins / library imports.

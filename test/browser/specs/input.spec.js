@@ -75,3 +75,35 @@ test.describe('Pyodide input()', () => {
     }).toPass({ timeout: 90_000 });
   });
 });
+
+test.describe('Pyodide console.input()', () => {
+  // Types into the inline jqconsole field (NOT a window.prompt dialog).
+  async function answerInlineConsole(page, value) {
+    await expect(page.locator('#console-output.console-active')).toBeVisible({ timeout: 90_000 });
+    await page.locator('#console-output').click();
+    await page.keyboard.type(value);
+    await page.keyboard.press('Enter');
+  }
+
+  test('await console.input() reads inline from the console', async ({ page }) => {
+    await page.goto('/embed/python3');
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue(
+        'import console\nname = await console.input("your name? ")\nprint("hi", name)', 1);
+    });
+    await page.locator('.run-it').first().click();
+
+    await answerInlineConsole(page, 'Ada');
+
+    await expect(async () => {
+      const text = await page.evaluate(() => {
+        const out = document.querySelector('#outputContainer');
+        return out ? (out.innerText || '') : '';
+      });
+      expect(text).toContain('your name?'); // prompt echoed inline
+      expect(text).toContain('hi Ada');     // value returned
+      expect(text).not.toContain('I/O error');
+    }).toPass({ timeout: 90_000 });
+  });
+});
