@@ -191,46 +191,94 @@
         return Object.keys($scope.invitations).length;
       }
 
+      // Roster rows come in two kinds and the server does the right thing for
+      // each: existing accounts are enrolled immediately (returned in `enrolled`),
+      // new emails become pending invitations (returned in `invitations`). Large
+      // rosters (up to a few thousand) are submitted in sequential batches so no
+      // single request times out or bursts the backend — progress is shown live.
+      var INVITE_BATCH = 100;
+
+      $scope.inviteProgress = { active : false, done : 0, total : 0 };
+
+      function applyRosterBatch(result, totals) {
+        if (!result || !result.success) { return; }
+        angular.forEach(result.enrolled || [], function(user) {
+          user.role = defaultRole;
+          $scope.users.push(user);
+          totals.enrolled++;
+        });
+        angular.forEach(result.invitations || [], function(invitation) {
+          $scope.invitations[ invitation.email.toLowerCase() ] = Restangular.restangularizeElement($scope.course, invitation, 'invitations');
+          if (invitation.status === "invalid") { totals.invalid++; }
+          else { totals.invited++; }
+        });
+      }
+
+      function reportRoster(totals) {
+        var parts = [];
+        if (totals.enrolled) { parts.push(totals.enrolled + " enrolled"); }
+        if (totals.invited)  { parts.push(totals.invited + " invited"); }
+
+        var message, className;
+        if (parts.length) {
+          message   = parts.join(", ") + ".";
+          className = 'success';
+          if (totals.invited) {
+            message += " Invited students will join when they sign in with their email address.";
+          }
+        }
+        else {
+          message   = "No new students added.";
+          className = 'warning';
+        }
+        if (totals.invalid) { message += " " + totals.invalid + " invalid email(s) skipped."; }
+        if (totals.failed)  { message += " " + totals.failed + " batch(es) failed — please retry."; className = 'alert'; }
+
+        $("#invitations-sent-messages").notify(message, { className : className });
+      }
+
       $scope.inviteUsersToCourse = function() {
-        $scope.sendingInvitations = true;
-
         var students = parseCsvInput($scope.inviteForm.studentList);
-        $scope.course.customPOST({ students : students }, "invitations")
-          .then(
-            function(result) {
-              var invitationsSent = 0;
+        if (!students.length) { return; }
 
-              $timeout(function() {
-                $scope.sendingInvitations    = false;
-                $scope.inviteForm.studentList = "";
-              }, 500);
+        var batches = [];
+        for (var i = 0; i < students.length; i += INVITE_BATCH) {
+          batches.push(students.slice(i, i + INVITE_BATCH));
+        }
 
-              if (result.success) {
-                angular.forEach(result.invitations, function(invitation) {
-                  $scope.invitations[ invitation.email.toLowerCase() ] = Restangular.restangularizeElement($scope.course, invitation, 'invitations');
-                  if (invitation.status !== "invalid") {
-                    invitationsSent++;
-                  }
-                });
+        var totals = { enrolled : 0, invited : 0, invalid : 0, failed : 0 };
 
-                if (invitationsSent) {
-                  $("#invitations-sent-messages").notify(
-                    invitationsSent + " student(s) added. They can now sign up with their email address."
-                    , { className : 'success' }
-                  );
-                }
-                else {
-                  $("#invitations-sent-messages").notify(
-                    "No new students added."
-                    , { className : 'warning' }
-                  );
-                }
+        $scope.sendingInvitations = true;
+        $scope.inviteProgress = { active : true, done : 0, total : students.length };
+
+        function processBatch(index) {
+          if (index >= batches.length) {
+            $scope.sendingInvitations     = false;
+            $scope.inviteProgress.active  = false;
+            $scope.inviteForm.studentList = "";
+            $(document).foundation('dropdown', 'reflow');
+            reportRoster(totals);
+            return;
+          }
+
+          $scope.course.customPOST({ students : batches[index] }, "invitations")
+            .then(
+              function(result) {
+                applyRosterBatch(result, totals);
+              },
+              function(err) {
+                // Skip the failed batch but keep going — one bad chunk shouldn't
+                // abandon the rest of the roster.
+                totals.failed++;
               }
-            },
-            function(err) {
-              $scope.sendingInvitations = false;
-            }
-          );
+            )
+            .then(function() {
+              $scope.inviteProgress.done += batches[index].length;
+              processBatch(index + 1);
+            });
+        }
+
+        processBatch(0);
       }
 
       $scope.deleteInvitation = function(invitation) {

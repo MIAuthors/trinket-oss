@@ -333,6 +333,10 @@
                   <button type="submit" class="button small secondary bottom" ng-class="{'disabled':sendingInvitations}">
                     <i ng-class="sendingInvitations ? 'fa fa-circle-o-notch fa-spin' : 'fa fa-add'"></i> Add Students
                   </button>
+                  <p ng-if="inviteProgress.total > 1" style="margin-top:0.25rem; margin-bottom:0">
+                    <i ng-if="inviteProgress.active" class="fa fa-circle-o-notch fa-spin"></i>
+                    Processed {{inviteProgress.done}} / {{inviteProgress.total}} students
+                  </p>
                 </div>
               </div>
               <div class="row">
