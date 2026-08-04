@@ -58,7 +58,77 @@ cap on the direct route too, so falling back wouldn't help.
 
 ---
 
-## 2. Materials-bucket lifecycle rule: expire `imports/tmp/`
+## 2. Bucket CORS: allow the browser to PUT directly to storage
+
+A signed URL authorizes the *request*, but the browser still performs a
+cross-origin `PUT` to `https://storage.googleapis.com/...` (GCS) or to the
+garage/S3 host — and the bucket must have a **CORS policy** allowing the app's
+origin to PUT. Without it the browser blocks the upload at the preflight
+(`OPTIONS`) and the import appears to stop instantly. This applies to **both**
+GCS and garage/S3.
+
+Set CORS once per materials bucket. `origin` must list every browser-facing
+host the app is served from (the deploy's public URL; add a no-traffic
+candidate/tag URL too when testing one). `PUT` + the `Content-Type` request
+header are what the upload needs; `GET`/`HEAD` are harmless.
+
+### GCS
+
+```bash
+cat > /tmp/materials-cors.json <<'EOF'
+[
+  {
+    "origin": ["https://<app-host>"],
+    "method": ["PUT", "GET", "HEAD"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
+EOF
+
+gcloud storage buckets update gs://<materials-bucket> \
+  --cors-file=/tmp/materials-cors.json --project <PROJECT>
+
+# verify:
+gcloud storage buckets describe gs://<materials-bucket> --format='value(cors_config)'
+```
+
+Per-deploy origins, e.g. `https://trinket.matterandinteractions.org` (mandi),
+`https://rba-uindy.spvi.net` (uindy). CORS is a bucket setting — it takes
+effect immediately, **no redeploy needed**.
+
+### garage / S3-compatible
+
+Apply the equivalent S3 CORS configuration:
+
+```bash
+cat > /tmp/materials-cors.json <<'EOF'
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://<app-host>"],
+      "AllowedMethods": ["PUT", "GET", "HEAD"],
+      "AllowedHeaders": ["Content-Type"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}
+EOF
+
+aws --endpoint-url <garage-s3-endpoint> s3api put-bucket-cors \
+  --bucket <materials-bucket> --cors-configuration file:///tmp/materials-cors.json
+```
+
+(Check your garage version's CORS support — some builds require enabling it.)
+
+**Symptom if skipped:** the browser console shows *"…has been blocked by CORS
+policy: No 'Access-Control-Allow-Origin' header is present"*, the `PUT` to
+storage fails `net::ERR_FAILED`, and the import stops with no course created.
+(Hit live on the trial 2026-08-04 before the materials-bucket CORS was set.)
+
+---
+
+## 3. Materials-bucket lifecycle rule: expire `imports/tmp/`
 
 The app deletes the temp upload object as soon as `from-storage` import
 completes. This lifecycle rule is a safety net for uploads that never
@@ -129,7 +199,7 @@ indefinitely, quietly costing storage.
 
 ---
 
-## 3. Self-host (garage): no IAM step, but verify `aws.publicEndpoint`
+## 4. Self-host (garage): no IAM step, but verify `aws.publicEndpoint`
 
 Self-hosted/garage deploys sign PUT URLs with the existing S3 access key
 (no service-account impersonation involved), so **step 1 does not apply**
@@ -155,7 +225,7 @@ that deploy — not left unset, and not pointing at an internal-only host.
 Any deploy that fronts garage/minio behind a different browser-facing host
 (reverse proxy, custom domain) must keep this in sync with that host.
 
-The materials-bucket lifecycle rule from step 2 is still recommended for
+The materials-bucket lifecycle rule from step 3 is still recommended for
 self-host deploys (garage/S3 variant).
 
 **Symptom if skipped / misconfigured:** the signed upload URL points at an
@@ -166,7 +236,7 @@ misconfiguration.
 
 ---
 
-## 4. Config knobs (deploy overlay: `imports.largeUpload`)
+## 5. Config knobs (deploy overlay: `imports.largeUpload`)
 
 Defaults live in `config/default.yaml`:
 
