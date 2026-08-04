@@ -43,11 +43,18 @@ gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
 This is a one-time grant per project (survives redeploys — it's IAM, not
 part of the revision). Re-run it if the runtime SA is ever changed.
 
-**Symptom if skipped:** `POST /api/imports/upload-url` fails (signing
-throws). The client catches this and silently falls back to the small
-direct-POST-only import path — large archives just won't have the option
-to use the fast path, and archives over the 32 MiB ingress cap will fail
-at the load balancer.
+**Symptom if skipped:** `POST /api/imports/upload-url` fails — V4 signing
+throws, `getImportUploadUrl`'s `.catch` calls `request.fail({error: ...})`,
+and the routeParser shim emits that as **HTTP 200** with an error-shaped
+body (no `.code()` set). The browser's `.done()` handler fires anyway,
+`resp.data` is undefined, and the user sees a blocking **"Could not start
+upload."** alert — the import does not proceed. There is **no fallback**
+to the direct multipart POST in this case: the client only falls back to
+`submitCourseDirect` on a real HTTP **501** (the `isSignedUploadAvailable()
+=== false` / opt-out case in `getImportUploadUrl`, `lib/controllers/
+imports.js`), not on a signing error. That's intentional — a file large
+enough to need this path would just exceed the 32 MiB Cloud Run ingress
+cap on the direct route too, so falling back wouldn't help.
 
 ---
 
@@ -179,9 +186,13 @@ imports:
 
 **Operator action:** confirm `maxArchiveBytes` is set to a value that fits
 comfortably in the Cloud Run instance's memory — the import buffers the
-whole archive in memory during processing. The 100 MiB default fits the
-2 Gi Cloud Run instances currently used by mandi and uindy; raise the
-Cloud Run memory allocation before raising `maxArchiveBytes` on any deploy.
+whole archive in memory during processing. Verify the deploy's actual
+Cloud Run memory allocation (`gcloud run services describe trinket
+--region us-central1 --project <PROJECT> --format='value(spec.template.
+spec.containers[0].resources.limits.memory)'`) rather than assuming it —
+2 Gi or more is recommended for the 100 MiB default ceiling. Raise the
+Cloud Run memory allocation before raising `maxArchiveBytes` on any
+deploy.
 
 **Symptom if skipped:** setting `maxArchiveBytes` too high for the
 instance's memory risks OOM-killed import requests on large archives
