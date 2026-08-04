@@ -195,10 +195,48 @@
   });
 
   // ── Course import ──────────────────────────────────────────────────────────
-  function submitCourse(force) {
-    var file = pendingCourseFile || ($courseFile[0].files[0]);
-    if (!file) return;
+  var clientConfig = (window.trinket && window.trinket.config) || {};
 
+  function handleCourseResponse(resp) {
+    if (!resp.data) { showAlert(resp.error || 'Import failed.'); return; }
+    var d = resp.data;
+
+    if (d.status === 'missing_refs') {
+      var $list = $('#missingRefsList').empty();
+      (d.missing || []).forEach(function(sc) {
+        $list.append('<li><code>' + sc + '</code></li>');
+      });
+      $('#missingRefsWarning').show();
+    } else if (d.status === 'ok') {
+      var href = d.url || ('/courses/' + d.courseId);
+      $('#courseLink').attr('href', href);
+      $('#courseResult').show();
+      showSuccess('Course imported successfully!');
+      if (d.warnings && d.warnings.length) {
+        var $wlist = $('#assetWarningList').empty();
+        d.warnings.forEach(function(w) { $wlist.append('<li>' + w + '</li>'); });
+        $('#assetWarnings').show();
+      } else {
+        $('#assetWarnings').hide();
+      }
+    } else {
+      showAlert(d.message || 'Unexpected response.');
+    }
+  }
+
+  function courseFail(xhr) {
+    var msg = 'Upload failed.';
+    try { msg = JSON.parse(xhr.responseText).error || msg; } catch(e) {}
+    showAlert(msg);
+  }
+
+  function resetCourseBtn() {
+    $courseBtn.prop('disabled', false);
+    $courseSpin.hide();
+    $courseSpin.text('Uploading…');
+  }
+
+  function submitCourseDirect(file, force) {
     var fd = new FormData();
     fd.append('file', file);
     if ($courseName.val()) fd.append('name', $courseName.val());
@@ -217,41 +255,80 @@
       processData : false,
       contentType : false
     })
-    .done(function(resp) {
-      if (!resp.data) { showAlert(resp.error || 'Import failed.'); return; }
-      var d = resp.data;
+    .done(handleCourseResponse)
+    .fail(courseFail)
+    .always(resetCourseBtn);
+  }
 
-      if (d.status === 'missing_refs') {
-        var $list = $('#missingRefsList').empty();
-        (d.missing || []).forEach(function(sc) {
-          $list.append('<li><code>' + sc + '</code></li>');
-        });
-        $('#missingRefsWarning').show();
-      } else if (d.status === 'ok') {
-        var href = d.url || ('/courses/' + d.courseId);
-        $('#courseLink').attr('href', href);
-        $('#courseResult').show();
-        showSuccess('Course imported successfully!');
-        if (d.warnings && d.warnings.length) {
-          var $wlist = $('#assetWarningList').empty();
-          d.warnings.forEach(function(w) { $wlist.append('<li>' + w + '</li>'); });
-          $('#assetWarnings').show();
-        } else {
-          $('#assetWarnings').hide();
+  // Large-archive path: mint a signed URL, PUT the zip straight to storage
+  // (bypassing the Cloud Run 32 MiB ingress cap), then import from the
+  // stored object. Falls back to the direct multipart POST whenever the
+  // signed-URL flow is unavailable (501) or otherwise fails to start.
+  function submitCourseLarge(file, force) {
+    $courseBtn.prop('disabled', true);
+    $courseSpin.show();
+    $('#missingRefsWarning').hide();
+    $('#courseResult').hide();
+    $('#importAlert').hide();
+
+    $.ajax({
+      url         : '/api/imports/upload-url',
+      method      : 'POST',
+      contentType : 'application/json',
+      data        : '{}'
+    })
+    .done(function(resp) {
+      var d = resp && resp.data;
+      if (!d || !d.url) { showAlert('Could not start upload.'); resetCourseBtn(); return; }
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', d.url);
+      xhr.setRequestHeader('Content-Type', 'application/zip');
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round((e.loaded / e.total) * 100);
+          $courseSpin.text('Uploading… ' + pct + '%');
         }
-      } else {
-        showAlert(d.message || 'Unexpected response.');
-      }
+      };
+      xhr.onload = function() {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          showAlert('Upload failed (' + xhr.status + ').');
+          resetCourseBtn();
+          return;
+        }
+        $courseSpin.text('Importing…');
+        $.ajax({
+          url         : '/api/imports/course/from-storage',
+          method      : 'POST',
+          contentType : 'application/json',
+          data        : JSON.stringify({ key: d.key, name: $courseName.val() || undefined, force: !!force })
+        })
+        .done(handleCourseResponse)
+        .fail(courseFail)
+        .always(resetCourseBtn);
+      };
+      xhr.onerror = function() {
+        showAlert('Upload failed.');
+        resetCourseBtn();
+      };
+      xhr.send(file);
     })
     .fail(function(xhr) {
-      var msg = 'Upload failed.';
-      try { msg = JSON.parse(xhr.responseText).error || msg; } catch(e) {}
-      showAlert(msg);
-    })
-    .always(function() {
-      $courseBtn.prop('disabled', false);
-      $courseSpin.hide();
+      if (xhr.status === 501) { return submitCourseDirect(file, force); }
+      showAlert('Could not start upload.');
+      resetCourseBtn();
     });
+  }
+
+  function submitCourse(force) {
+    var file = pendingCourseFile || ($courseFile[0].files[0]);
+    if (!file) return;
+
+    var lu = clientConfig.largeUpload || {};
+    if (lu.enabled && file.size > (lu.threshold || 26214400)) {
+      return submitCourseLarge(file, force);
+    }
+    return submitCourseDirect(file, force);
   }
 
   $courseBtn.on('click', function() { submitCourse(false); });
