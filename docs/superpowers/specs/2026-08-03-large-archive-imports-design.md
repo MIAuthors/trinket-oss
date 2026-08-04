@@ -39,11 +39,15 @@ Decisions (locked in brainstorming):
   a **~25 MiB threshold** (safely under 32 MiB); otherwise direct POST.
 - **Scope:** all backends — GCS (mandi/uindy) via IAM-signed V4 URLs, S3/garage
   (self-host) via presigned PUT. Additive to picup, not disruptive.
-- **Ceiling:** **100 MiB**, configurable (`imports.maxArchiveBytes`). Comfortably
-  within the 2 Gi budget (extrapolated peak ~0.8–1 GB).
-- **No feature flag:** the large path is auto-available whenever storage is
-  configured; if it is not, the client falls back to direct POST (small files
-  only). Nothing new to toggle per deploy.
+- **Ceiling:** **100 MiB**, configurable (`imports.largeUpload.maxArchiveBytes`).
+  Comfortably within the 2 Gi budget (extrapolated peak ~0.8–1 GB).
+- **Per-deploy configurable, opt-out capable:** the large path is auto-available
+  whenever storage is configured **and** `imports.largeUpload.enabled` is true
+  (the default) — so out of the box no deploy has to toggle anything. But a
+  deploy may set `enabled: false` to opt out entirely (e.g. policy reasons,
+  wanting imports kept small, or no lifecycle rule set up); it then behaves
+  exactly as if storage were unconfigured — the client falls back to direct POST
+  (small files only). Thresholds and ceiling are likewise per-deploy overridable.
 - **Temp object location:** reuse the existing **`materials`** bucket under an
   `imports/tmp/` prefix (no new bucket) + a lifecycle rule for cleanup.
 
@@ -74,7 +78,8 @@ Client picks the path by file size:
 - Returns `{ url, key, expiresAt }` where `url` is a signed **PUT** URL, TTL
   ~15 min, constrained to `content-type: application/zip` (and
   `application/octet-stream`).
-- 200 `{ data: { url, key, expiresAt } }`. If storage is not configured, 501 /
+- 200 `{ data: { url, key, expiresAt } }`. If large upload is unavailable —
+  storage not configured **or** `imports.largeUpload.enabled` is false — 501 /
   a clear "large upload not available" so the client falls back gracefully.
 
 **New route — `POST /api/imports/course/from-storage`**
@@ -83,8 +88,11 @@ Client picks the path by file size:
 - Body (JSON, tiny): `{ key: string, name?: string(≤140), force?: boolean }`.
 - **Ownership check:** the `{userId}` segment embedded in `key` MUST equal the
   authenticated user's id; else 403. (Prevents importing another user's object.)
+- Reject with 501 if large upload is unavailable (storage unconfigured or
+  `imports.largeUpload.enabled` is false) — the route must not accept storage
+  imports for an opted-out deploy.
 - Download the object (`readObject(key)`), enforce
-  `size ≤ imports.maxArchiveBytes` (else 413 with a clear message).
+  `size ≤ imports.largeUpload.maxArchiveBytes` (else 413 with a clear message).
 - Feed the buffer into the **existing** pipeline. Refactor `importCourse` so the
   post-`JSZip.loadAsync` logic (autoImportBundledTrinkets → parseCourseZip →
   resolveAllRefs → createCourseFromChapters) is a shared function
@@ -104,17 +112,22 @@ Client picks the path by file size:
 - `FileUtil.readObject(key)` → `Promise<Buffer>` (GCS `file.download()` /
   S3 `getObject`).
 - `FileUtil.deleteObject(key)` → best-effort delete.
-- `FileUtil.isSignedUploadAvailable()` → boolean (storage configured + backend
-  supported), used by the upload-url route and surfaced to the client.
+- `FileUtil.isSignedUploadAvailable()` → boolean: `imports.largeUpload.enabled`
+  (default true) **and** storage configured with a supported backend. This single
+  predicate is the opt-out authority — both new routes gate on it and the client
+  reads it. Setting `enabled: false` makes it return false, collapsing behaviour
+  to the storage-unconfigured case (direct POST only).
 
 ### Client (`lib/views/users/includes/import.html`)
 
 - On course submit, branch on `file.size`:
-  - `> largeUploadThresholdBytes` **and** large-upload available →
+  - `> largeUpload.thresholdBytes` **and** large-upload available →
     signed-URL flow: `GET/POST upload-url` → `PUT` to storage with an
     **XHR progress bar** → `POST from-storage` → on `{status:'ok'}` navigate to
     the course.
-  - else → existing `submitCourse()` multipart POST.
+  - else → existing `submitCourse()` multipart POST. (When the deploy has opted
+    out, availability is false, so every file takes this path — large ones then
+    surface the explicit oversize error rather than failing silently.)
 - **Error surfacing (fixes the silent-failure):** every failure path — no URL,
   PUT non-2xx, oversize (413), import error, or `missing_refs` — shows an
   explicit message (red box), never a dead end. This also patches the existing
@@ -127,10 +140,15 @@ Client picks the path by file size:
 
 ```yaml
 imports:
-  maxArchiveBytes: 104857600          # 100 MiB — validated ceiling on from-storage
-  largeUploadThresholdBytes: 26214400 # 25 MiB — client switch point (< 32 MiB cap)
+  largeUpload:
+    enabled: true                 # per-deploy opt-out; false = direct POST only (small files)
+    thresholdBytes: 26214400      # 25 MiB — client switch point (< 32 MiB cap)
+    maxArchiveBytes: 104857600    # 100 MiB — validated server ceiling on from-storage
 ```
-Both overridable per deploy. No feature flag.
+All three overridable per deploy. `enabled` defaults true, so the feature is on
+out of the box wherever storage is configured; a deploy sets `enabled: false` to
+opt out. A deploy that wants the large path but a different ceiling/threshold
+overrides just those keys.
 
 ## Security
 
@@ -172,7 +190,10 @@ Self-host (garage) needs no IAM step — presigned URLs use the existing S3 key.
 
 - **Unit:** `signUploadUrl` produces a valid signed PUT for GCS and for S3
   (shape/params); `from-storage` ownership check (mismatched userId → 403);
-  oversize object → 413; `isSignedUploadAvailable` reflects config.
+  oversize object → 413; `isSignedUploadAvailable` reflects config — true when
+  `enabled` + storage configured, **false when `enabled: false`** even with
+  storage configured; with `enabled: false` both `upload-url` and `from-storage`
+  return 501.
 - **Integration (flow harness):** seed an object into test storage (garage via
   the existing `TEST_S3=garage` profile), `POST from-storage`, assert the course
   is created — reusing the import-repro plumbing from the #9 investigation.
