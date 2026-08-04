@@ -1506,4 +1506,11 @@ module.exports = [
       }
     }
   }
+  ,{
+    route : 'POST /api/imports/upload-url imports.getImportUploadUrl',
+    config : {
+      auth: 'session',
+      pre : ['canCreateCourse(user)']
+    }
+  }
 ]
