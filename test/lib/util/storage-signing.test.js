@@ -19,6 +19,35 @@ describe('storage signUploadUrl', () => {
     expect(url).toMatch(/X-Amz-Expires=900|Expires=/);   // presigned params present
   });
 
+  it('s3 backend signs against config.aws.publicEndpoint when set (browser-reachable host)', async () => {
+    // The browser can't resolve an internal S3 endpoint (garage:3900 /
+    // minio:9000), and under SigV4 the host is part of the signature — so a
+    // signed PUT URL must be SIGNED against the public endpoint, not
+    // rewritten afterward. Same requirement as the signed-GET precedent at
+    // lib/controllers/users.js:1184-1198.
+    const AWS = require('aws-sdk');
+    if (!AWS.config.credentials || !AWS.config.credentials.accessKeyId) {
+      AWS.config.update({ accessKeyId: 'test-access-key', secretAccessKey: 'test-secret-key' });
+    }
+    const config = require('config');
+    const s3 = require('../../../lib/util/storage-backend-s3');
+
+    const original = config.aws.publicEndpoint;
+    let signedUrl;
+    try {
+      config.aws.publicEndpoint = 'http://localhost:9999';
+      signedUrl = await s3.signUploadUrl('some-bucket', 'imports/tmp/u1/abc.zip', 'application/zip', 900);
+    } finally {
+      config.aws.publicEndpoint = original;
+    }
+    expect(signedUrl).toMatch(/localhost:9999/);
+
+    // Unset: falls back to the default (non-public) endpoint — no leftover
+    // localhost host from the previous case.
+    const defaultUrl = await s3.signUploadUrl('some-bucket', 'imports/tmp/u1/abc.zip', 'application/zip', 900);
+    expect(defaultUrl).not.toMatch(/localhost:9999/);
+  });
+
   it.skipIf(!process.env.GCS_TEST)('gcs backend returns a v4 write url', async () => {
     const gcs = require('../../../lib/util/storage-backend-gcs');
     const url = await gcs.signUploadUrl('some-bucket', 'imports/tmp/u1/abc.zip', 'application/zip', 900);
