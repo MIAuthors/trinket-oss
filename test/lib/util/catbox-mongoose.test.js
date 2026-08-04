@@ -95,3 +95,70 @@ describe.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('catbox-mongoose se
     expect(await SESSIONS().countDocuments({ _id: 's:dead' })).toBe(0);
   });
 });
+
+// Self-applying migration on start(). Merging the schema fix alone does NOT fix a
+// running deployment: Mongoose's autoIndex adds the new expiresAt index but never
+// drops the removed one, and sessions written before this field existed have no
+// expiresAt for the TTL monitor to act on (picup prod: 494 of 797 already stale).
+// So start() reconciles both, idempotently, so a deploy actually heals prod
+// instead of leaving two manual steps in a PR body.
+describe.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('catbox-mongoose boot migration', () => {
+  let engine;
+
+  beforeEach(async () => {
+    const { Engine } = require('../../../lib/util/catbox-mongoose');
+    engine = new Engine({});
+    await engine.start();
+    await SESSIONS().syncIndexes();
+  });
+
+  it('drops the stale numeric stored_1 TTL index left on production', async () => {
+    // Reproduce prod: the old index (on a Number field, so it reaped nothing) is present.
+    await SESSIONS().collection.createIndex({ stored: 1 }, { name: 'stored_1', expireAfterSeconds: 0 });
+    expect((await SESSIONS().collection.indexes()).map((i) => i.name)).toContain('stored_1');
+
+    await engine.start(); // boot migration reconciles indexes
+
+    const names = (await SESSIONS().collection.indexes()).map((i) => i.name);
+    expect(names, 'stale stored_1 index was not dropped').not.toContain('stored_1');
+    expect(names, 'working expiresAt_1 index went missing').toContain('expiresAt_1');
+  });
+
+  it('is a no-op on the index when no stale stored_1 exists', async () => {
+    // Idempotent: a clean deploy (or a second boot) must not error.
+    await expect(engine.start()).resolves.not.toThrow();
+    const names = (await SESSIONS().collection.indexes()).map((i) => i.name);
+    expect(names).toContain('expiresAt_1');
+  });
+
+  it('backfills expiresAt on legacy ttl sessions so the monitor can reap them', async () => {
+    const stored = Date.now() - 120000;
+    await SESSIONS().collection.insertOne({ _id: 's:legacy', value: {}, stored, ttl: 60000 });
+
+    await engine.start(); // boot migration backfills
+
+    const doc = await SESSIONS().collection.findOne({ _id: 's:legacy' });
+    expect(doc.expiresAt).toBeInstanceOf(Date);
+    expect(doc.expiresAt.getTime()).toBe(stored + 60000);
+  });
+
+  it('never stamps expiresAt on a session without a ttl (must not be swept)', async () => {
+    await SESSIONS().collection.insertOne({ _id: 's:permanent', value: {}, stored: Date.now() });
+
+    await engine.start();
+
+    const doc = await SESSIONS().collection.findOne({ _id: 's:permanent' });
+    expect(doc.expiresAt == null, 'expiresAt was stamped on a ttl-less session').toBe(true);
+  });
+
+  it('lets the TTL monitor finally reap a backfilled legacy session end-to-end', async () => {
+    await SESSIONS().collection.insertOne({
+      _id: 's:legacy-expired', value: {}, stored: Date.now() - 120000, ttl: 60000
+    });
+
+    await engine.start(); // stamps expiresAt in the past
+
+    const gone = await waitForDeletion('s:legacy-expired');
+    expect(gone, 'backfilled legacy session was never reaped by the TTL monitor').toBe(true);
+  });
+});
