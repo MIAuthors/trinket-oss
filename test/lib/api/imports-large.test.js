@@ -114,11 +114,19 @@ describe('POST /api/imports/course/from-storage', () => {
   });
 
   describe.skipIf(!S3_MODE)('against a real object (TEST_S3=garage)', () => {
-    it('returns 413 and deletes the object when it exceeds maxArchiveBytes', async () => {
+    it('returns 413 via the size preflight (without downloading) and deletes the object when it exceeds maxArchiveBytes', async () => {
       await freshLogin('user');
       const userId = await currentUserId();
       const key = 'imports/tmp/' + userId + '/' + crypto.randomUUID() + '.zip';
       const oversizeBuf = Buffer.alloc(64, 'x');   // 64 bytes, larger than the 10-byte cap below
+
+      // The size ceiling must be enforced via a metadata/HEAD request BEFORE
+      // the object is downloaded — buffering the whole object into memory
+      // first would defeat maxArchiveBytes as a memory bound. Spy on
+      // readImportObjectAsBuffer (the download path) to prove it is never
+      // reached when the preflight (importObjectSize) already rejects.
+      const FileUtil = require('../../../lib/util/file');
+      const downloadSpy = vi.spyOn(FileUtil, 'readImportObjectAsBuffer');
 
       const origImports = config.imports;
       try {
@@ -127,11 +135,12 @@ describe('POST /api/imports/course/from-storage', () => {
 
         const r = await flow.post('/api/imports/course/from-storage', { key: key });
         expect(r.statusCode).toBe(413);
+        expect(downloadSpy).not.toHaveBeenCalled();
       } finally {
         config.imports = origImports;
+        downloadSpy.mockRestore();
       }
 
-      const FileUtil = require('../../../lib/util/file');
       await expect(FileUtil.readImportObjectAsBuffer(key)).rejects.toBeTruthy();
     });
 
