@@ -3,7 +3,7 @@
 
   return angular
     .module("courseEditor")
-    .controller("dashboardControl", ['$scope', '$location', '$routeParams', '$filter', '$timeout', '$sce', 'Restangular', 'trinketCourse', 'trinketRoles', 'markdownParser', function($scope, $location, $routeParams, $filter, $timeout, $sce, Restangular, trinketCourse, trinketRoles, markdownParser) {
+    .controller("dashboardControl", ['$scope', '$location', '$routeParams', '$filter', '$timeout', '$sce', '$http', 'Restangular', 'trinketCourse', 'trinketRoles', 'trinketConfig', 'markdownParser', function($scope, $location, $routeParams, $filter, $timeout, $sce, $http, Restangular, trinketCourse, trinketRoles, trinketConfig, markdownParser) {
       var cache = TrinketIO.import("utils.cache");
 
       var parser = markdownParser({
@@ -77,6 +77,15 @@
       };
 
       $scope.showInstructions = false;
+
+      // "Download student work" affordance shared by the course dashboard
+      // and the assignment (material) dashboard. $scope.material is only
+      // populated on the assignment route (see the routing branch below),
+      // so its presence is what selects the assignment-scoped export vs.
+      // the whole-course export.
+      $scope.canViewSubmissions = trinketRoles.hasPermission("view-assignment-submissions", "course", { id : $scope.courseId });
+
+      $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : null };
 
       $scope.feedbackForm = {
         comments : ""
@@ -356,6 +365,65 @@
 
       $scope.canSendFeedback = function() {
         return trinketRoles.hasPermission("send-submission-feedback", "course", { id : $scope.courseId });
+      }
+
+      // NOTE on transport: $scope.course is a top-level Restangular resource
+      // (courses/{id}), so $scope.course.customPOST({}, 'exports/submissions')
+      // would resolve correctly. But $scope.material is restangularized as a
+      // child of its lesson (trinketCourse / course.js: lesson.materials =
+      // Restangular.restangularizeCollection(lesson, ...)), so
+      // material.customPOST(...) would build
+      // .../lessons/{lessonId}/materials/{materialId}/exports/submissions —
+      // which 404s, because the server route (config/api_routes.js) is the
+      // FLAT .../courses/{courseId}/materials/{materialId}/exports/submissions
+      // (same flat shape as the existing feedback.csv link in
+      // material_dashboard.html, which is a plain href for the same reason).
+      // So both calls go through $http + trinketConfig.getUrl() directly,
+      // matching the pattern CourseControl.downloadCourse() already uses in
+      // root.js — this sidesteps Restangular's nesting entirely and keeps
+      // the course/material code paths symmetric.
+      $scope.exportStudentWork = function() {
+        var path = ($scope.material && $scope.material.id)
+          ? '/api/courses/' + $scope.courseId + '/materials/' + $scope.material.id + '/exports/submissions'
+          : '/api/courses/' + $scope.courseId + '/exports/submissions';
+
+        $scope.studentWorkExport = { running : true, ready : false, downloadUrl : null, error : null };
+
+        $http.post(trinketConfig.getUrl(path), {})
+          .then(function(res) {
+            var body = res.data || {};
+            var id = body.data && body.data.exportId;
+
+            if (!id) {
+              $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : (body.data && body.data.error) || 'Could not start export' };
+              return;
+            }
+
+            pollExport(id);
+          }, function() {
+            $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : 'Could not start export' };
+          });
+      }
+
+      function pollExport(id) {
+        $http.get(trinketConfig.getUrl('/api/exports/' + id))
+          .then(function(res) {
+            var d = (res.data && res.data.data) || {};
+
+            if (d.status === 'failed') {
+              $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : d.errorMessage || 'Export failed' };
+              return;
+            }
+
+            if (d.downloadAvailable) {
+              $scope.studentWorkExport = { running : false, ready : true, downloadUrl : d.downloadUrl, error : null };
+              return;
+            }
+
+            $timeout(function() { pollExport(id); }, 2000);
+          }, function() {
+            $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : 'Export status error' };
+          });
       }
 
       $scope.cancelFeedback = function() {
