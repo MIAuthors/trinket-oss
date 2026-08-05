@@ -100,3 +100,35 @@ describe.skipIf(!FB_MODE)('Account-takeover protection (email_verified gate)', (
     expect(after.firebaseUid).toBeTruthy();          // linked, as intended
   });
 });
+
+// MIAuthors #10 — an EXISTING Trinket user added to a course via "Add Students"
+// must get enrolled on their next login, not only brand-new signups. The enroll
+// loop used to live inside the new-user branch of the session handler.
+describe.skipIf(!FB_MODE)('Course enrollment on login for existing users (#10)', () => {
+  function save(doc) { return new Promise((res, rej) => doc.save((e) => e ? rej(e) : res(doc))); }
+
+  it('enrolls an existing account (no firebaseUid) that has a pending invitation', async () => {
+    const studentEmail = 'existing-student-10@example.com';
+
+    // instructor + course
+    const owner = await save(new User({ email: 'inst-10@example.com', username: 'inst-10', fullname: 'Inst' }));
+    const course = new Course({ name: 'Roster 10', _owner: owner, ownerSlug: owner.username });
+    await save(course);
+    await course.addUser(owner, ['course-owner']);
+
+    // an EXISTING account (no firebaseUid) + a pending invitation (the "Add Students" case)
+    await save(new User({ email: studentEmail, username: 'existing-student-10', fullname: 'Student' }));
+    await save(new CourseInvitation({ courseId: course.id, email: studentEmail, status: 'pending', token: 'tok-10' }));
+
+    // that existing user logs in with a verified token
+    await flow.switchUser('');
+    const token = await flow.mintFirebaseToken({ email: studentEmail, password: 'pw123456' }, { verified: true });
+    const r = await flow.post('/api/auth/session', { idToken: token });
+    expect(r.statusCode).toBe(200);
+
+    // …and is now enrolled in the course
+    const reloaded = await Course.findById(course.id);
+    const emails = (reloaded.users || []).map((u) => u.email);
+    expect(emails).toContain(studentEmail);
+  });
+});

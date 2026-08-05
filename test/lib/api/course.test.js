@@ -326,6 +326,43 @@ describe('Course Creation', () => {
         expect(flow.lastResponse.statusCode).toBe(404);
       });
     });
+
+    // -----------------------------------------------------------------
+    // Add Students — a mixed roster (existing accounts + new emails).
+    // Existing accounts enroll immediately; new emails become invitations
+    // (Aaron's request; builds on #10). Verifies the {enrolled, invitations}
+    // response shape the client roster/pending lists consume.
+    // -----------------------------------------------------------------
+    describe('When I add a mixed student roster', () => {
+      let courseId;
+
+      beforeEach(async () => {
+        await flow.switchUser('user');
+        await flow.createCourse();
+        courseId = flow.lastResponse.body.course.id;
+        // an existing Trinket account that is NOT yet in the course
+        await new User({ email: 'roster-existing@x.edu', username: 'roster-existing', fullname: 'Existing' }).save();
+      });
+
+      it('enrolls existing accounts and invites new emails in one response', async () => {
+        const r = await flow.post('/api/courses/' + courseId + '/invitations', {
+          students: [
+            { email: 'roster-existing@x.edu', name: 'Existing' },
+            { email: 'roster-newcomer@x.edu', name: 'Newcomer' }
+          ]
+        });
+
+        expect(r.statusCode).toBe(200);
+        expect(r.body.success).toBe(true);
+
+        const enrolledEmails = (r.body.enrolled || []).map((u) => u.email);
+        const invitedEmails  = (r.body.invitations || []).map((i) => i.email);
+
+        expect(enrolledEmails).toContain('roster-existing@x.edu');   // existing → enrolled now
+        expect(invitedEmails).toContain('roster-newcomer@x.edu');    // new → invited
+        expect(invitedEmails).not.toContain('roster-existing@x.edu'); // existing never invited
+      });
+    });
   });
 
   // -------------------------------------------------------------------
