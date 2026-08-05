@@ -56,6 +56,21 @@ describe('Trinket Creation', () => {
       trinketLang      = flow.lastResponse.body.data.lang;
     });
 
+    // Regression (review finding on #76): updateMetrics's no-metric branch used
+    // to `return Trinket.findById(id, cb)` — a callback-driven query handed back
+    // to the pre-handler shim, which double-executes on the Mongo backend and
+    // 500s. An empty metrics PUT must return the current trinket, once, with 200.
+    describe('When updating metrics with an empty payload', () => {
+      it('returns the current metrics without double-executing (no 500)', async () => {
+        // Empty payload -> no metric key -> the `if (!metric)` branch. Pre-fix that
+        // branch returned a callback-driven query through the shim, double-executing
+        // on Mongo -> 500. The route's reply schema filters the body to data.metrics.
+        const r = await flow.put('/api/trinkets/' + trinketId + '/metrics', {});
+        expect(r.statusCode).toBe(200);                 // pre-fix: 500 (double-exec)
+        expect(r.body.data).toHaveProperty('metrics');
+      });
+    });
+
     // Regression: GET /api/trinkets (the My-Trinkets list). The original
     // implementation was a raw-mongoose aggregate that HANGS on the firestore
     // backend (driver buffers forever with no mongo connection) — caught live
