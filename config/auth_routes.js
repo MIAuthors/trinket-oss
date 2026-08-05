@@ -78,7 +78,11 @@ providers.local = [
       redirect : '/welcome'
     },
     fail : {
-      redirect : '/{formName}'
+      // /users is served only by the signup form, so any failure (duplicate
+      // account, validation, recaptcha) belongs back on the signup page. This
+      // was '/{formName}', which interpolated the form's formName="sign-up" to
+      // the nonexistent /sign-up route → 404 (#89). /signup is the real route.
+      redirect : '/signup'
     },
     config : {
       pre : [{ method: helpers.lowerUserFields }],
