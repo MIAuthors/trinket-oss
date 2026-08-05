@@ -17,9 +17,9 @@ const path = require('path');
 // app-booting side effects.
 const Export = require('../../../lib/models/export');
 
-let createSubmissionsArchive;
+let createSubmissionsArchive, sanitizeFolderName;
 beforeAll(() => {
-  ({ createSubmissionsArchive } = require('../../../lib/workers/exports'));
+  ({ createSubmissionsArchive, sanitizeFolderName } = require('../../../lib/workers/exports'));
 });
 
 describe('createSubmissionsArchive', () => {
@@ -161,5 +161,42 @@ describe('createSubmissionsArchive', () => {
     const manifest = JSON.parse(zip.readAsText('manifest.json'));
     expect(manifest.assignments[0].submissionCount).toBe(0);
     expect(manifest.assignments[0].students).toEqual([]);
+  });
+
+  // Defense-in-depth: the student folder slug must go through
+  // sanitizeFolderName like the assignment slug does, even though the
+  // username source is normally trusted (unique, server-controlled), so a
+  // stray path character (e.g. from a legacy/imported account) can never
+  // produce a zip entry that escapes the assignment folder.
+  it('sanitizes a student username containing an unsafe path character into a single folder segment', async () => {
+    student1.username = 'bad/name';
+    await student1.save();
+
+    // resolveStudent() reads the course's denormalized `users` snapshot
+    // (set at course.addUser() time) before ever falling back to a fresh
+    // User lookup, so the unsafe username also has to be reflected there
+    // to exercise the path a stale/legacy denormalized record would hit.
+    const CourseModel = Course.model;
+    await CourseModel.updateOne(
+      { _id: course.id, 'users.userId': student1.id },
+      { $set: { 'users.$.username': 'bad/name' } }
+    );
+
+    const exportRecord = new Export({ type: 'course-submissions', courseId: course.id, _owner: owner });
+    const result = await createSubmissionsArchive(exportRecord, tempFile);
+
+    expect(result.processed).toBe(2);
+
+    const zip = new AdmZip(tempFile);
+    const names = zip.getEntries().map((e) => e.entryName);
+
+    const sanitized = sanitizeFolderName('bad/name');
+    expect(sanitized).toBe('badname');
+    expect(names).toContain('HW1/' + sanitized + '/main.py');
+    // No stray '/' from the raw username leaked a second path segment.
+    expect(names.some((n) => n.startsWith('HW1/bad/'))).toBe(false);
+
+    // Unaffected sibling: a normal username still sanitizes to itself.
+    expect(names).toContain('HW1/bobstudent/main.py');
   });
 });

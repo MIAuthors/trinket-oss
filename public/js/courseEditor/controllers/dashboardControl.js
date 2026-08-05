@@ -394,12 +394,29 @@
             var body = res.data || {};
             var id = body.data && body.data.exportId;
 
-            if (!id) {
-              $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : (body.data && body.data.error) || 'Could not start export' };
+            if (id) {
+              pollExport(id);
               return;
             }
 
-            pollExport(id);
+            // Server-side dedup: Export.findPendingOrProcessing found an
+            // in-flight export, and the endpoint replied via
+            // request.fail({ error, exportId }) — which serializes as a
+            // top-level { error, exportId, flash } body with no `data`
+            // wrapper (see lib/util/routeParser.js request.fail). Treat
+            // that distinctly from a real failure: if it carried the
+            // in-flight exportId, resume polling it instead of dead-ending
+            // on the generic error.
+            if (body.error) {
+              if (body.exportId) {
+                pollExport(body.exportId);
+                return;
+              }
+              $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : body.error };
+              return;
+            }
+
+            $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : 'Could not start export' };
           }, function() {
             $scope.studentWorkExport = { running : false, ready : false, downloadUrl : null, error : 'Could not start export' };
           });
