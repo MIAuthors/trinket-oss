@@ -1,11 +1,12 @@
 (function(angular) {
   'use strict';
 
-  angular.module('trinket.joinCourse', []).directive('joinCourse', ['$modal', function($modal) {
+  angular.module('trinket.joinCourse', []).directive('joinCourse', ['$modal', 'trinketConfig', function($modal, trinketConfig) {
     function link(scope, element) {
-      scope.courses     = scope.courses     || [];
-      scope.coursesById = scope.coursesById || {};
-      scope.buttonClass = scope.buttonClass || "";
+      scope.courses              = scope.courses     || [];
+      scope.coursesById          = scope.coursesById || {};
+      scope.buttonClass          = scope.buttonClass || "";
+      scope.accessCodeEnrollment = trinketConfig.get('accessCodeEnrollment');
 
       scope.openJoinCourse = function() {
         var $modalInstance = $modal.open({

@@ -8,6 +8,7 @@
       $scope.currentMaterial     = currentMaterial;
       $scope.assignmentDashboard = assignmentDashboard;
       $scope.emailEnabled        = trinketConfig.get('emailEnabled');
+      $scope.accessCodeEnrollment = trinketConfig.get('accessCodeEnrollment');
 
       $scope.users    = [];
       $scope.user     = {};

@@ -9,6 +9,7 @@ features:
   stepDebugger: false  # "Step through" record & replay debugger in the Variables tab (requires variableExplorer)
   requireAuthToFork: false  # Require login to fork/share a trinket; false = allow anonymous forks (trinket.io default)
   courseImport: true   # Show an "Import a Course" button on the home page. Instructor-only via canCreateCourse; deploys without an instructor concept render it hidden regardless of the flag.
+  accessCodeEnrollment: false  # Self-service course join via access code (instructor mints a code, students enter it). Off by default; enable per-deploy for public/self-serve servers without LMS/SMTP. Gates the instructor UI, the student UI, AND the server endpoints together.
   trinkets:
     # Client-side languages - work out of the box
     python: false      # Skulpt-based Python 2/3 (disabled; superseded by pyodide, which is shown as "Python")
