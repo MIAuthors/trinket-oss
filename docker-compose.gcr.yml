@@ -28,7 +28,10 @@ services:
 
   app:
     build: .
-    platform: linux/arm64
+    # No platform pin: build host-native (arm64 on Apple Silicon, amd64 on Intel
+    # hosts and CI). A hard-coded linux/arm64 forced QEMU on amd64 boxes and the
+    # app timed out reaching the Firestore emulator on boot. Set
+    # DOCKER_DEFAULT_PLATFORM=linux/amd64 if you deliberately want Cloud-Run parity.
     image: trinket-gcr/app:latest
     ports:
       - 3001:3000
