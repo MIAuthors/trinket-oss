@@ -86,7 +86,11 @@ describe('createSubmissionsArchive', () => {
   });
 
   it('builds a by-assignment/student archive with manifest, prompt, code, feedback, and metadata', async () => {
-    const exportRecord = new Export({ type: 'course-submissions', courseId: course.id, _owner: owner });
+    // Persisted, mirroring the real caller (processStudentWorkExport saves the
+    // Export record via the API before it's ever queued/passed here). On
+    // firestore, findByIdAndUpdate's progress writes below throw NOT_FOUND
+    // against an unsaved record.
+    const exportRecord = await new Export({ type: 'course-submissions', courseId: course.id, _owner: owner }).save();
 
     const result = await createSubmissionsArchive(exportRecord, tempFile);
 
@@ -127,9 +131,10 @@ describe('createSubmissionsArchive', () => {
   });
 
   it('restricts to a single assignment for assignment-submissions scope', async () => {
-    const exportRecord = new Export({
+    // Persisted — see comment in the previous test.
+    const exportRecord = await new Export({
       type: 'assignment-submissions', courseId: course.id, materialId: material.id, _owner: owner
-    });
+    }).save();
 
     const result = await createSubmissionsArchive(exportRecord, tempFile);
 
@@ -148,7 +153,8 @@ describe('createSubmissionsArchive', () => {
     material.trinket.trinketId = '507f191e810c19729de860ea';
     await material.save();
 
-    const exportRecord = new Export({ type: 'course-submissions', courseId: course.id, _owner: owner });
+    // Persisted — see comment in the first test in this file.
+    const exportRecord = await new Export({ type: 'course-submissions', courseId: course.id, _owner: owner }).save();
     const result = await createSubmissionsArchive(exportRecord, tempFile);
 
     expect(result.processed).toBe(0);
@@ -176,13 +182,18 @@ describe('createSubmissionsArchive', () => {
     // (set at course.addUser() time) before ever falling back to a fresh
     // User lookup, so the unsafe username also has to be reflected there
     // to exercise the path a stale/legacy denormalized record would hit.
+    // $elemMatch (not a flat dotted filter) is the positional-update shape
+    // lib/models/course.js's own methods use (updateRole/recordView/updateView)
+    // — the firestore backend's updateOne only resolves "users.$.foo" updates
+    // against an $elemMatch filter, matching that production convention.
     const CourseModel = Course.model;
     await CourseModel.updateOne(
-      { _id: course.id, 'users.userId': student1.id },
+      { _id: course.id, users: { $elemMatch: { userId: student1.id } } },
       { $set: { 'users.$.username': 'bad/name' } }
     );
 
-    const exportRecord = new Export({ type: 'course-submissions', courseId: course.id, _owner: owner });
+    // Persisted — see comment in the first test in this file.
+    const exportRecord = await new Export({ type: 'course-submissions', courseId: course.id, _owner: owner }).save();
     const result = await createSubmissionsArchive(exportRecord, tempFile);
 
     expect(result.processed).toBe(2);

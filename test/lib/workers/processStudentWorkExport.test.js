@@ -166,7 +166,10 @@ describe('student-work-export queue action / processStudentWorkExport', () => {
   });
 
   it('marks the Export failed (with errorMessage) when the course cannot be found, without touching S3', async () => {
-    const bogusCourseId = new mongoose.Types.ObjectId();
+    // The firestore backend stores ObjectId ref fields as string ids; a raw
+    // ObjectId value fails to serialize on save (see export.test.js). Use its
+    // string form — still a well-formed, non-existent id.
+    const bogusCourseId = new mongoose.Types.ObjectId().toString();
     const exportRecord = new Export({ _owner: owner, type: 'course-submissions', courseId: bogusCourseId, status: 'pending' });
     await exportRecord.save();
 
