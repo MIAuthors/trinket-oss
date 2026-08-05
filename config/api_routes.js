@@ -1507,4 +1507,25 @@ module.exports = [
       }
     }
   }
+  ,{
+    route : 'POST /api/imports/upload-url imports.getImportUploadUrl',
+    config : {
+      auth: 'session',
+      pre : ['canCreateCourse(user)']
+    }
+  }
+  ,{
+    route : 'POST /api/imports/course/from-storage imports.importCourseFromStorage',
+    config : {
+      auth: 'session',
+      pre : ['canCreateCourse(user)'],
+      validate : {
+        payload : {
+          key   : Joi.string().pattern(/^imports\/tmp\/[^/]+\/[A-Za-z0-9-]+\.zip$/).required(),
+          name  : Joi.string().max(140).optional(),
+          force : Joi.boolean().optional()
+        }
+      }
+    }
+  }
 ]

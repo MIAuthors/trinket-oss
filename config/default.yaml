@@ -1,6 +1,12 @@
 storage:
   backend: s3   # s3 (aws-sdk) or gcs (@google-cloud/storage)
 
+imports:
+  largeUpload:
+    enabled: true                 # per-deploy opt-out; false = direct POST only (small files)
+    thresholdBytes: 26214400      # 25 MiB — client switch point (< 32 MiB ingress cap)
+    maxArchiveBytes: 104857600    # 100 MiB — server ceiling enforced on from-storage
+
 features:
   courses: true   # Enable/disable courses feature entirely
   assets: false   # Enable/disable asset uploads (requires S3 or compatible storage)

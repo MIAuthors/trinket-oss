@@ -82,7 +82,11 @@
         runOption         : {{ config.app.runOption      | json        | safe }},
         emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
         assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
-        accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }}
+        accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }},
+        largeUpload       : {
+          enabled   : {{ 'true' if (config.imports and config.imports.largeUpload and config.imports.largeUpload.enabled) else 'false' }},
+          threshold : {{ config.imports.largeUpload.thresholdBytes if (config.imports and config.imports.largeUpload) else 0 }}
+        }
       }
     };
   </script>
