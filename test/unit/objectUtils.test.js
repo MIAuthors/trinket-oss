@@ -58,4 +58,27 @@ describe('objectUtils.serialize', () => {
     expect(out.a).toEqual({ x: 1 });
     expect(out.b).toEqual({ x: 1 });               // both kept; not dropped as a "cycle"
   });
+
+  // Regression: an ObjectId is a VALUE, not a structure to walk into. Recursing
+  // copied ObjectId.prototype's methods (including toJSON) onto a plain {}; that
+  // copy has no internal id, so JSON.stringify later invoked the copied toJSON
+  // and threw "Cannot read properties of undefined (reading 'toString')" — inside
+  // hapi's Response._marshal, after the handler returned, surfacing as an
+  // unexplained 500 (/api/courses, /api/featured-courses, the class-page fallback).
+  it('serializes an ObjectId to its hex string instead of recursing into it', () => {
+    const ObjectId = require('mongoose').Types.ObjectId;
+    const id = new ObjectId('6a320f7ffeb6b8c4f946d67d');
+
+    expect(serialize(id)).toBe('6a320f7ffeb6b8c4f946d67d');
+
+    // The shape that actually broke: an array of unpopulated refs (Course.lessons)
+    // surviving into a SECOND serialize pass, as request.success does.
+    const once  = { name: 'Physics 201', lessons: [id, id] };
+    const twice = serialize({ data: [once] });
+    expect(twice.data[0].lessons).toEqual([
+      '6a320f7ffeb6b8c4f946d67d',
+      '6a320f7ffeb6b8c4f946d67d'
+    ]);
+    expect(() => JSON.stringify(twice)).not.toThrow();   // pre-fix: threw
+  });
 });
