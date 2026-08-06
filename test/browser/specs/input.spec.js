@@ -181,7 +181,8 @@ test.describe('Pyodide console.py shadow guard (#1)', () => {
 
     const resp = await page.goto(`/embed/python3/${newShortCode}`);
     expect(resp.status()).toBe(200);
-    await expect(page.locator('.ace_editor')).toBeVisible();
+    // A two-file trinket renders one ACE editor per file, so scope to the first.
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
     await page.locator('.run-it').first().click();
 
     await expect(async () => {
