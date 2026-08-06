@@ -3,6 +3,9 @@ name: tests
 on:
   push:
   pull_request:
+  # Allow re-running the suite on demand (e.g. to confirm a failure was an
+  # infra stall rather than a real regression) without pushing an empty commit.
+  workflow_dispatch:
 
 jobs:
   test:
