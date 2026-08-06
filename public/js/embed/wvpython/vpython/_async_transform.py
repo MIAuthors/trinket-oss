@@ -44,6 +44,12 @@ _BASE_AWAIT_NAMES = frozenset({'rate', 'sleep', 'get_library'})
 # Attribute calls (obj.<attr>(...)) that are awaitable primitives.
 _BASE_AWAIT_ATTRS = frozenset({'waitfor'})
 
+# Trinket-local addition (upstream candidate for wmWVPRunner; keep in sync).
+# Namespaced primitives keyed by the module whose alias must own the call, so
+# `console.input()` is awaited while `builtins.input()` / `widget.input()` are
+# not. Awaited ONLY when the object is an in-scope alias of the named module.
+_MODULE_AWAIT_ATTRS = {'console': frozenset({'input'})}
+
 
 def _scope_descendants(node):
     """Yield descendants of ``node`` within the same function scope.
@@ -68,6 +74,23 @@ def _scope_calls(func_node):
                 yield n
 
 
+def _module_aliases(tree, module):
+    """Names bound to the top-level `module` package by an ``import`` statement.
+
+    ``import M`` / ``import M.sub`` bind ``M``; ``import M as x`` binds ``x``.
+    ``import M.sub as bar`` binds the submodule, not ``M``, so it's excluded.
+    """
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == module:
+                    aliases.add(a.asname or module)
+                elif a.name.startswith(module + '.') and a.asname is None:
+                    aliases.add(module)
+    return aliases
+
+
 def _vpython_module_aliases(tree):
     """Names bound to the ``vpython`` *module* by an ``import`` statement.
 
@@ -77,18 +100,10 @@ def _vpython_module_aliases(tree):
     excluded. Used so namespaced primitive calls (``vp.rate(...)``) are awaited
     while look-alike attributes on unrelated objects (``meter.rate()``) are not.
     """
-    aliases = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for a in node.names:
-                if a.name == 'vpython':
-                    aliases.add(a.asname or 'vpython')
-                elif a.name.startswith('vpython.') and a.asname is None:
-                    aliases.add('vpython')
-    return aliases
+    return _module_aliases(tree, 'vpython')
 
 
-def _is_trigger_call(call, async_names, async_methods, vp_aliases):
+def _is_trigger_call(call, async_names, async_methods, vp_aliases, module_alias_map):
     """True if this Call should be awaited given what we know is async so far."""
     func = call.func
     if isinstance(func, ast.Name):
@@ -101,9 +116,16 @@ def _is_trigger_call(call, async_names, async_methods, vp_aliases):
         # Namespaced module primitives (vp.rate(), vpython.sleep()): only when
         # the object is a vpython-module alias, so `meter.rate()` on some
         # unrelated object is never awaited (awaiting a non-coroutine raises).
-        return (func.attr in _BASE_AWAIT_NAMES
+        if (func.attr in _BASE_AWAIT_NAMES
                 and isinstance(func.value, ast.Name)
-                and func.value.id in vp_aliases)
+                and func.value.id in vp_aliases):
+            return True
+        # Configured namespaced primitives (console.input()): awaited only when
+        # the object is an in-scope alias of the owning module.
+        if isinstance(func.value, ast.Name):
+            for _mod, _attrs in _MODULE_AWAIT_ATTRS.items():
+                if func.attr in _attrs and func.value.id in module_alias_map.get(_mod, ()):
+                    return True
     return False
 
 
@@ -125,7 +147,7 @@ def _collect_functions(tree):
     return funcs
 
 
-def _compute_async(tree, vp_aliases):
+def _compute_async(tree, vp_aliases, module_alias_map):
     """Find which functions must be async. Returns (ids, names, methods)."""
     funcs = _collect_functions(tree)
 
@@ -145,7 +167,7 @@ def _compute_async(tree, vp_aliases):
         for node, is_method in funcs:
             if id(node) in async_ids:
                 continue
-            if any(_is_trigger_call(c, async_names, async_methods, vp_aliases)
+            if any(_is_trigger_call(c, async_names, async_methods, vp_aliases, module_alias_map)
                    for c in _scope_calls(node)):
                 async_ids.add(id(node))
                 (async_methods if is_method else async_names).add(node.name)
@@ -205,7 +227,8 @@ def transform_source(src):
         return src
 
     vp_aliases = _vpython_module_aliases(tree)
-    async_ids, async_names, async_methods = _compute_async(tree, vp_aliases)
+    module_alias_map = {mod: _module_aliases(tree, mod) for mod in _MODULE_AWAIT_ATTRS}
+    async_ids, async_names, async_methods = _compute_async(tree, vp_aliases, module_alias_map)
 
     awaited_calls = {
         id(n.value)
@@ -228,7 +251,7 @@ def transform_source(src):
         if (isinstance(node, ast.Call)
                 and id(node) not in awaited_calls
                 and id(node) not in lambda_calls
-                and _is_trigger_call(node, async_names, async_methods, vp_aliases)):
+                and _is_trigger_call(node, async_names, async_methods, vp_aliases, module_alias_map)):
             insertions.append((node.lineno, node.col_offset, 'await '))
 
     return _apply_insertions(src, insertions)

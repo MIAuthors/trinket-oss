@@ -292,6 +292,53 @@ def test_unrelated_sleep_attr_not_awaited():
     assert "await clk.sleep" not in t(src)
 
 
+# --- console.input(): awaited only on a `console` module alias -----------------
+
+def test_console_input_toplevel_is_awaited():
+    out = t("import console\nname = console.input('Name? ')\n")
+    assert "await console.input(" in out
+
+def test_console_input_aliased_import_is_awaited():
+    out = t("import console as c\nname = c.input('Name? ')\n")
+    assert "await c.input(" in out
+
+def test_console_input_nested_is_awaited():
+    out = t("import console\nn = int(console.input('n? '))\n")
+    assert "await console.input(" in out
+
+def test_console_input_in_user_function_promotes_and_propagates():
+    src = (
+        "import console\n"
+        "def ask():\n"
+        "    return console.input('x? ')\n"
+        "v = ask()\n"
+    )
+    out = t(src)
+    assert "async def ask" in out          # function that gained an await is async
+    assert "await console.input(" in out
+    assert "await ask()" in out            # caller of the now-async function is awaited
+
+def test_console_input_output_is_valid_python():
+    out = t("import console\nname = console.input('Name? ')\n")
+    assert is_valid_python("async def _m():\n" + "".join("    " + ln + "\n" for ln in out.splitlines()))
+
+def test_builtin_input_is_never_awaited():
+    # No `console` import: input() is the untouched builtin — must NOT be awaited.
+    out = t("name = input('Name? ')\n")
+    assert "await" not in out
+
+def test_input_attr_on_non_console_object_not_awaited():
+    # `.input` on something that isn't a console module alias must not be awaited.
+    src = "import console\nwidget = get_widget()\nwidget.input('x')\n"
+    out = t(src)
+    assert "await widget.input" not in out
+
+def test_no_console_import_is_byte_for_byte_unchanged():
+    # The backward-compat guarantee: without `console`, output == input.
+    src = "x = 1\nprint(x)\ny = input()\n"
+    assert t(src) == src
+
+
 if __name__ == "__main__":
     # Dependency-free runner so CI can invoke `python3 test/test_async_transform.py`
     # (also works under pytest). Exits non-zero on any failure.

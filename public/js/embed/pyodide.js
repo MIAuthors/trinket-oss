@@ -38,6 +38,24 @@ var MATPLOTLIB_SETUP_CODE = [
   "del _plt",
 ].join('\n');
 
+// The `console` module surfaced to python3 user code: an async input() that
+// reads inline from the trinket console. `input()` (the builtin) is unchanged;
+// this is an opt-in, importable alternative. runPythonAsync permits the await.
+// The `r is None` / EOFError branch mirrors the `input()` builtin's cancel
+// handling, but jqconsole has no cancel affordance today, so __trinket_console_input
+// never actually resolves null — this is reserved for a future stop mechanism
+// (kept intentionally, not dead code to delete).
+var CONSOLE_MODULE_CODE = [
+  'import js',
+  '',
+  'async def input(prompt=""):',
+  '    r = await js.window.__trinket_console_input(str(prompt) if prompt else "")',
+  '    if r is None:',
+  '        raise EOFError',
+  '    return str(r)',
+  ''
+].join('\n');
+
 var api;
 var codeRuns = {};
 var editor;
@@ -95,6 +113,12 @@ function resetOutput(consoleOnly) {
     jqconsole.Append(loadingHeader());
   }
 
+  // A fresh run may interrupt a pending console.input() (jqconsole is reset
+  // above, so its Input() callback — the only other place this class is
+  // removed — never fires). Clear it here too so stale "active input"
+  // styling can't survive into a run that isn't waiting on input.
+  $('#console-output').removeClass('console-active');
+
   if (!consoleOnly) {
     $('#graphic').empty();
     $('#graphic').removeData("graphicMode");
@@ -107,6 +131,38 @@ function writeOut(text) {
     jqconsole.Write(text);
   }
 }
+
+// Direct, synchronous console write that bypasses Pyodide's *batched* stdout
+// (which buffers partial lines until a newline). Used to echo an input prompt
+// into the console before a blocking window.prompt, and by the console module's
+// inline input. Exposed on window so Pyodide's `from js import ...` can reach it.
+window.__trinket_console_write = function(text) {
+  writeOut(String(text));
+};
+
+// Inline console input for the `console` module: append the prompt, open a
+// jqconsole input field, resolve with the typed line. Same widget/flow the
+// Skulpt runner uses (python.js: skulpt_inputfun). jqconsole.Input has no
+// cancel affordance, so `resolve` here only ever fires with the typed line;
+// the Promise<string|null> signature (and the module's EOFError-on-null
+// branch) is reserved for a future stop mechanism, not reachable today.
+window.__trinket_console_input = function(prompt) {
+  initConsoleOutput();
+  window.readyForSnapshot = true;
+  return new Promise(function(resolve) {
+    if (prompt) { jqconsole.Write(String(prompt)); }
+    var active = document.activeElement;
+    $('#console-output').addClass('console-active');
+    jqconsole.Input(function(line) {
+      $('#console-output').removeClass('console-active');
+      resolve(line);
+      if (active) { try { $(active).focus(); } catch (e) {} }
+    });
+    if (!autoRun) {
+      jqconsole.Focus();
+    }
+  });
+};
 
 function ensurePyodide() {
   if (pyodideLoading) return pyodideLoading;
@@ -136,7 +192,7 @@ function ensurePyodide() {
         'def _trinket_input(prompt=""):',
         '    import js',
         '    if prompt:',
-        '        print(prompt, end="")',
+        '        js.window.__trinket_console_write(str(prompt))',
         '    r = js.window.prompt(str(prompt) if prompt else "")',
         '    if r is None:',
         '        print()',
@@ -147,6 +203,22 @@ function ensurePyodide() {
         '_b.input = _trinket_input',
         'del _b, _trinket_input'
       ].join('\n'));
+    } catch (e) {}
+    // Make `import console` resolve to the inline-input module (opt-in; the
+    // builtin input() above is unchanged). Written to the Pyodide working
+    // directory (/home/pyodide), which is on sys.path, so a plain
+    // `import console` finds it.
+    //
+    // This write is unconditional, so a trinket that ships its OWN console.py
+    // (a secondary file synced via syncFilesToFS) shadows it — last write wins,
+    // and the user's module is what `import console` resolves to. In that case
+    // userShadowsConsole() (near usesConsole, below) detects the user file and
+    // SKIPS the async transform, so their code runs untransformed — pre-feature
+    // behavior — instead of the transform inserting `await` before a
+    // `console.input(...)` call that may not be a coroutine in their module (a
+    // hard error).
+    try {
+      py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
     // Record the pristine namespace so the variable explorer can show only the
     // names the user's program introduces, not Python built-ins / library imports.
@@ -252,6 +324,43 @@ function usesVPython(code) {
       || /(^|\n)\s*(import\s+vpython|from\s+vpython\b)/.test(code);
 }
 
+// True when the program opts into the inline console module. Gate for applying
+// the async transform on the python3 path — programs that don't import console
+// take the untouched runPythonAsync path.
+//
+// Supported API: `import console` (including aliased `import console as c`)
+// plus the attribute form `console.input(...)` — that's the only call shape
+// the transform (_async_transform.py) knows how to rewrite with an `await`.
+//
+// Deliberately NOT gated: `from console import input`. That form binds the
+// module's `async def input` directly into the caller's namespace, shadowing
+// the builtin `input()`. The transform only rewrites attribute-access calls
+// (`console.input(...)`), so a bare `input(...)` after `from console import
+// input` would need the transform to rewrite ALL `input()` calls — which
+// would also catch the unrelated builtin `input()` (window.prompt) path and
+// break it. Rather than risk that, we leave this combination ungated: the
+// program runs un-transformed, the bare call returns an un-awaited coroutine,
+// and it fails/misbehaves at runtime same as it always would have (previously
+// a clean `ModuleNotFoundError` since `console` didn't exist). This is a
+// known, documented gap, not an oversight.
+function usesConsole(code) {
+  return /(^|\n)\s*import\s+console\b/.test(code);
+}
+
+// A trinket that ships its own console.py shadows our inline-input module:
+// syncFilesToFS writes the user's file over ours on every run, so `import
+// console` resolves to their module. When that happens we must NOT apply the
+// async transform — their console.input may be an ordinary function, and
+// `await`-ing a non-coroutine is a hard error. Skipping the transform restores
+// pre-feature behavior (their console.py just runs). See the CONSOLE_MODULE_CODE
+// write for the collision note.
+function userShadowsConsole() {
+  try {
+    var files = editor.getAllFiles();
+    return !!(files && Object.prototype.hasOwnProperty.call(files, 'console.py'));
+  } catch (e) { return false; }
+}
+
 // Inject the GlowScript graphics library into the embed window (same realm as
 // Pyodide, so the bridge's `from js import sphere, …` resolves). Memoized.
 function ensureGlow() {
@@ -308,6 +417,30 @@ function ensureVpython() {
     .then(function() { return pyodide.runPythonAsync('from random import *'); })
     .then(function() { return pyodide.runPythonAsync('from vpython import *'); });
   return vpythonLoading;
+}
+
+var ASYNC_TRANSFORM_URL = '/js/embed/wvpython/vpython/_async_transform.py';
+var consoleTransformLoading = null;
+// Fetch the pure-ast transform source and expose transform_source in a private
+// module, WITHOUT importing the vpython package (heavy: glow/scene/etc.).
+function ensureConsoleTransform() {
+  if (consoleTransformLoading) return consoleTransformLoading;
+  consoleTransformLoading = fetch(ASYNC_TRANSFORM_URL)
+    .then(function(r) { return r.text(); })
+    .then(function(src) {
+      pyodide.FS.writeFile('_trinket_async_transform.py', src);
+      return pyodide.runPythonAsync(
+        'from _trinket_async_transform import transform_source');
+    })
+    .catch(function(e) {
+      // Don't cache a rejected load. Otherwise a single transient fetch failure
+      // poisons consoleTransformLoading for the life of the page, and EVERY
+      // subsequent console-using run fails until reload. Clearing it lets the
+      // next run retry the fetch.
+      consoleTransformLoading = null;
+      throw e;
+    });
+  return consoleTransformLoading;
 }
 
 // Run a VPython program: load glow + scene + bridge, comment out the version
@@ -427,7 +560,7 @@ var VARS_HELPER = [
   // KEEP IN SYNC with RECORD_HELPER's _SKIP + _snap_ns filters (the step
   // debugger's per-step snapshots): a runner-injected name added here but not
   // there makes the debugger show internals the explorer hides, or vice versa.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate'}",
+  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   "_baseline = user_ns.get('__trinket_baseline__') or set()",
   '_out = []',
   'for _name, _val in list(user_ns.items()):',
@@ -673,7 +806,7 @@ var RECORD_HELPER = [
   // must hide the same runner-injected names. They live in separate helper
   // strings/namespaces, so a shared definition would add more machinery than
   // it removes — this cross-reference is the guard.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate'}",
+  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   'class _TrinketStopRecording(Exception): pass',
   '_steps = []',
   '_snaps = []',
@@ -1126,6 +1259,17 @@ function runStepThrough() {
       setTimeout(function() { $('#debug-note').text(''); }, 4000);
       return null;
     }
+    if (usesConsole(prog) && !userShadowsConsole()) {
+      // The recorder (RECORD_HELPER) execs the RAW user source under
+      // sys.settrace — it never routes through ensureConsoleTransform/
+      // transform_source, so a `console.input()` call would run un-awaited
+      // (a silently-wrong coroutine, and the input field would never open).
+      // Bail with the same mechanism/style as the VPython guard above rather
+      // than teaching the recorder about the transform.
+      $('#debug-note').text('Step through is not available for programs that read console input');
+      setTimeout(function() { $('#debug-note').text(''); }, 4000);
+      return null;
+    }
     return pyodide.loadPackagesFromImports(prog).then(function() {
       if (debugCancelled || running) return null; // cancelled, or a normal run got in first
       var setup = Promise.resolve();
@@ -1476,6 +1620,14 @@ function startRun() {
             "if _plt.get_fignums():\n" +
             "    _plt.show()\n"
           ).then(function() { return result; });
+        });
+      }
+      if (usesConsole(prog) && !userShadowsConsole()) {
+        return ensureConsoleTransform().then(function() {
+          pyodide.globals.set('__user_source__', prog || '');
+          var asyncProg = pyodide.runPython(
+            'transform_source(__user_source__)');
+          return pyodide.runPythonAsync(asyncProg);
         });
       }
       return pyodide.runPythonAsync(prog || '');
