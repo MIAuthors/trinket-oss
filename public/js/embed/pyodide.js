@@ -209,16 +209,14 @@ function ensurePyodide() {
     // directory (/home/pyodide), which is on sys.path, so a plain
     // `import console` finds it.
     //
-    // Known limitation: this write is unconditional, so a trinket that ships
-    // its OWN console.py (a secondary file synced via syncFilesToFS) collides
-    // with it — last write wins, and whichever module's console.input ends up
-    // on disk is the one `import console` sees. If the user's own module wins,
-    // usesConsole() still gates the async transform on (the still-matching)
-    // `import console`, so the transform's `await` gets inserted before a
-    // `console.input(...)` call that may not even be a coroutine in the
-    // user's module — a hard error, not silent misbehavior. Rare enough
-    // (console.py is not a common trinket filename) that we're documenting it
-    // rather than namespacing/detecting the collision.
+    // This write is unconditional, so a trinket that ships its OWN console.py
+    // (a secondary file synced via syncFilesToFS) shadows it — last write wins,
+    // and the user's module is what `import console` resolves to. In that case
+    // userShadowsConsole() (near usesConsole, below) detects the user file and
+    // SKIPS the async transform, so their code runs untransformed — pre-feature
+    // behavior — instead of the transform inserting `await` before a
+    // `console.input(...)` call that may not be a coroutine in their module (a
+    // hard error).
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
@@ -349,6 +347,20 @@ function usesConsole(code) {
   return /(^|\n)\s*import\s+console\b/.test(code);
 }
 
+// A trinket that ships its own console.py shadows our inline-input module:
+// syncFilesToFS writes the user's file over ours on every run, so `import
+// console` resolves to their module. When that happens we must NOT apply the
+// async transform — their console.input may be an ordinary function, and
+// `await`-ing a non-coroutine is a hard error. Skipping the transform restores
+// pre-feature behavior (their console.py just runs). See the CONSOLE_MODULE_CODE
+// write for the collision note.
+function userShadowsConsole() {
+  try {
+    var files = editor.getAllFiles();
+    return !!(files && Object.prototype.hasOwnProperty.call(files, 'console.py'));
+  } catch (e) { return false; }
+}
+
 // Inject the GlowScript graphics library into the embed window (same realm as
 // Pyodide, so the bridge's `from js import sphere, …` resolves). Memoized.
 function ensureGlow() {
@@ -419,6 +431,14 @@ function ensureConsoleTransform() {
       pyodide.FS.writeFile('_trinket_async_transform.py', src);
       return pyodide.runPythonAsync(
         'from _trinket_async_transform import transform_source');
+    })
+    .catch(function(e) {
+      // Don't cache a rejected load. Otherwise a single transient fetch failure
+      // poisons consoleTransformLoading for the life of the page, and EVERY
+      // subsequent console-using run fails until reload. Clearing it lets the
+      // next run retry the fetch.
+      consoleTransformLoading = null;
+      throw e;
     });
   return consoleTransformLoading;
 }
@@ -1239,7 +1259,7 @@ function runStepThrough() {
       setTimeout(function() { $('#debug-note').text(''); }, 4000);
       return null;
     }
-    if (usesConsole(prog)) {
+    if (usesConsole(prog) && !userShadowsConsole()) {
       // The recorder (RECORD_HELPER) execs the RAW user source under
       // sys.settrace — it never routes through ensureConsoleTransform/
       // transform_source, so a `console.input()` call would run un-awaited
@@ -1602,7 +1622,7 @@ function startRun() {
           ).then(function() { return result; });
         });
       }
-      if (usesConsole(prog)) {
+      if (usesConsole(prog) && !userShadowsConsole()) {
         return ensureConsoleTransform().then(function() {
           pyodide.globals.set('__user_source__', prog || '');
           var asyncProg = pyodide.runPython(

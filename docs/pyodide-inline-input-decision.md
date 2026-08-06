@@ -96,9 +96,20 @@ independent controls keep the blast radius tiny:
   `runPythonAsync` + jqconsole, both already loaded.
 - **Directly answers Lori's question** ("some other function I can use… like standard
   Python 3"), and reads like standard Python.
-- **Residual risk:** the transform's known edges (`console.input()` inside a `lambda` or
-  comprehension can't be awaited) apply — but only inside opt-in programs, and they're
-  rare for input() and documentable.
+- **Residual risk / known gaps** (all confined to opt-in programs that `import console`):
+  - **Transform edges:** `console.input()` inside a `lambda` or comprehension can't be
+    awaited by the rewrite — rare for input(), same as the VPython path.
+  - **Secondary files:** the transform (and `usesConsole` gating) operate on the **main
+    file only** — `syncFilesToFS` writes the other files to the Pyodide FS but returns just
+    the main source. A helper module doing `import console; console.input(...)` is **not**
+    rewritten, so the call returns an un-awaited coroutine and the input field never opens.
+    This is the same structural constraint the VPython transform has, and it's the gap a
+    user is most likely to trip over. Workaround: call `console.input()` from the main file
+    (or write `await console.input(...)` explicitly in the helper).
+  - **`console.py` shadowing (guarded):** a trinket that ships its own `console.py` shadows
+    our module. `userShadowsConsole()` detects the user file and **skips the transform**, so
+    their code runs untransformed (pre-feature behavior) rather than the transform inserting
+    `await` before a call that may not be a coroutine in their module.
 
 #### Flavor 1 — `console` module with explicit `await`, no transform — **minimal fallback**
 Same `console` module, but students write `name = await console.input("Name? ")` and we
