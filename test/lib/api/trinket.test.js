@@ -56,6 +56,21 @@ describe('Trinket Creation', () => {
       trinketLang      = flow.lastResponse.body.data.lang;
     });
 
+    // Regression (review finding on #76): updateMetrics's no-metric branch used
+    // to `return Trinket.findById(id, cb)` — a callback-driven query handed back
+    // to the pre-handler shim, which double-executes on the Mongo backend and
+    // 500s. An empty metrics PUT must return the current trinket, once, with 200.
+    describe('When updating metrics with an empty payload', () => {
+      it('returns the current metrics without double-executing (no 500)', async () => {
+        // Empty payload -> no metric key -> the `if (!metric)` branch. Pre-fix that
+        // branch returned a callback-driven query through the shim, double-executing
+        // on Mongo -> 500. The route's reply schema filters the body to data.metrics.
+        const r = await flow.put('/api/trinkets/' + trinketId + '/metrics', {});
+        expect(r.statusCode).toBe(200);                 // pre-fix: 500 (double-exec)
+        expect(r.body.data).toHaveProperty('metrics');
+      });
+    });
+
     // Regression: GET /api/trinkets (the My-Trinkets list). The original
     // implementation was a raw-mongoose aggregate that HANGS on the firestore
     // backend (driver buffers forever with no mongo connection) — caught live
@@ -104,6 +119,20 @@ describe('Trinket Creation', () => {
         await flow.get('/api/trinkets/' + trinketId);
         expect(flow.lastResponse.body.data.metrics.forks).toEqual(1);
       });
+    });
+
+    // Regression: the blank-editor embed route GET /embed/{lang} (what "New
+    // Trinket" opens) has getDefaultTrinket as its `trinket` pre-handler, which
+    // does bare `return reply()` when there is no ?category — so request.pre.trinket
+    // MUST be null. A pre-handler-shim change (slug-alias redirect fix) made bare
+    // reply() resolve to the reply() shim object instead — truthy — so the handler
+    // ran the "existing trinket" branch: User.findById(undefined) 500'd on Firestore
+    // (Cloud Run prod), and on Mongo Draft.findOneMoreRecent with an undefined
+    // trinket id served the LAST trinket's draft (blank editor prefilled with stale
+    // code). Both faces of the same bug; a null pre.trinket fixes both.
+    it('should serve a blank editor (200, no stale trinket) for New Trinket', async () => {
+      await flow.get('/embed/python');
+      expect(flow.lastResponse.statusCode).toEqual(200);
     });
 
     // The next 3 tests exercise non-API (HTML) routes, served once the python

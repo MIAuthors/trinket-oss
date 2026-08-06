@@ -92,18 +92,21 @@ describe('Course Creation', () => {
         expect(flow.lastResponse.body.course).toHaveProperty('slug', 'foo-bar');
       });
 
-      // TODO(app-bug): genuine app bug, NOT an inject artifact — verified 500 over a
-      // real HTTP listener (server.start() on port 0), not just server.inject().
-      // courseBySlug (lib/util/helpers.js) does reply().redirect(url).permanent().takeover()
-      // for an aliased (old) slug. The routeParser fakeReply wrapper
-      // (lib/util/routeParser.js convertPreHandlers) resolves the pre-handler Promise on
-      // the first reply() call — reply() is invoked with no args, so it resolves with null —
-      // and the later .takeover() resolve is a no-op (Promise already settled). So pre.course
-      // becomes null and classes.viewClass crashes with
-      // "TypeError: Cannot read properties of null (reading 'archived')" → 500 instead of 301.
-      // Cannot fix from test/ (the defect is in lib/routeParser.js's redirect-takeover
-      // handling). Asserting 301 requires a lib/ fix.
-      it.skip('should redirect me to the current course if I use the original course slug', async () => {
+      // Slug-alias redirect: renaming a course changes its slug; the old slug is
+      // aliased and its URL must 301 to the new slug. Regression guard for the
+      // routeParser fakeReply fix — the pre-handler shim used to resolve the Promise
+      // with null on the bare reply() before .redirect().takeover() ran (pre.course
+      // became null -> 500 instead of 301). Fixed in lib/util/routeParser.js: defer
+      // the bare reply() and resolve .takeover() with a real h.redirect(...) response.
+      //
+      // skipIf(firestore): the alias is recorded by preserveSlug, a post('init')
+      // hook, and the Firestore backend does not run post('init') hooks (only
+      // pre/post save — firestore-backend.js:1141-1142), so _original_slug is never
+      // captured and getIdBySlug(oldSlug) returns null -> 404. This is a real
+      // Firestore-backend gap (renamed slugs don't redirect on GCR prod), tracked
+      // separately from the New-Trinket shim fix. Un-skip once post('init') hooks
+      // run on the Firestore backend.
+      it.skipIf(process.env.TEST_DB_BACKEND === 'firestore')('should redirect me to the current course if I use the original course slug', async () => {
         const originalSlug = course.slug;
         // Rename the course so the slug changes, then verify the old slug redirects.
         await flow.updateCourse(course.id, { name: 'foo bar' });
@@ -321,6 +324,43 @@ describe('Course Creation', () => {
       it('should no longer exist', async () => {
         await flow.getCourse(courseId);
         expect(flow.lastResponse.statusCode).toBe(404);
+      });
+    });
+
+    // -----------------------------------------------------------------
+    // Add Students — a mixed roster (existing accounts + new emails).
+    // Existing accounts enroll immediately; new emails become invitations
+    // (Aaron's request; builds on #10). Verifies the {enrolled, invitations}
+    // response shape the client roster/pending lists consume.
+    // -----------------------------------------------------------------
+    describe('When I add a mixed student roster', () => {
+      let courseId;
+
+      beforeEach(async () => {
+        await flow.switchUser('user');
+        await flow.createCourse();
+        courseId = flow.lastResponse.body.course.id;
+        // an existing Trinket account that is NOT yet in the course
+        await new User({ email: 'roster-existing@x.edu', username: 'roster-existing', fullname: 'Existing' }).save();
+      });
+
+      it('enrolls existing accounts and invites new emails in one response', async () => {
+        const r = await flow.post('/api/courses/' + courseId + '/invitations', {
+          students: [
+            { email: 'roster-existing@x.edu', name: 'Existing' },
+            { email: 'roster-newcomer@x.edu', name: 'Newcomer' }
+          ]
+        });
+
+        expect(r.statusCode).toBe(200);
+        expect(r.body.success).toBe(true);
+
+        const enrolledEmails = (r.body.enrolled || []).map((u) => u.email);
+        const invitedEmails  = (r.body.invitations || []).map((i) => i.email);
+
+        expect(enrolledEmails).toContain('roster-existing@x.edu');   // existing → enrolled now
+        expect(invitedEmails).toContain('roster-newcomer@x.edu');    // new → invited
+        expect(invitedEmails).not.toContain('roster-existing@x.edu'); // existing never invited
       });
     });
   });

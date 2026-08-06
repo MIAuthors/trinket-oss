@@ -488,20 +488,21 @@ module.exports = [
     route : 'GET /api/courses/{courseId}/accessCode course.getAccessCode',
     config : {
       auth: 'session',
-      pre : ['course(params.courseId)']
+      pre : [helpers.accessCodeEnrollmentEnabled, 'course(params.courseId)']
     }
   },
   {
     route : 'POST /api/courses/{courseId}/accessCode course.generateAccessCode',
     config : {
       auth: 'session',
-      pre : ['course(params.courseId)']
+      pre : [helpers.accessCodeEnrollmentEnabled, 'course(params.courseId)']
     }
   },
   {
     route : 'POST /api/courses/join course.join',
     config : {
       auth: 'session',
+      pre : [helpers.accessCodeEnrollmentEnabled],
       validate : {
         payload : {
           accessCode: Joi.string().min(6).required()
@@ -579,6 +580,20 @@ module.exports = [
   },
   {
     route : 'GET /api/courses/{courseId}/materials/{materialId}/feedback.csv course.exportMaterialFeedbackCsv',
+    config : {
+      auth: 'session',
+      pre : ['course(params.courseId)']
+    }
+  },
+  {
+    route : 'POST /api/courses/{courseId}/exports/submissions course.exportCourseSubmissions',
+    config : {
+      auth: 'session',
+      pre : ['course(params.courseId)']
+    }
+  },
+  {
+    route : 'POST /api/courses/{courseId}/materials/{materialId}/exports/submissions course.exportAssignmentSubmissions',
     config : {
       auth: 'session',
       pre : ['course(params.courseId)']
@@ -1500,6 +1515,27 @@ module.exports = [
       validate : {
         payload : {
           file  : Joi.any().required(),
+          name  : Joi.string().max(140).optional(),
+          force : Joi.boolean().optional()
+        }
+      }
+    }
+  }
+  ,{
+    route : 'POST /api/imports/upload-url imports.getImportUploadUrl',
+    config : {
+      auth: 'session',
+      pre : ['canCreateCourse(user)']
+    }
+  }
+  ,{
+    route : 'POST /api/imports/course/from-storage imports.importCourseFromStorage',
+    config : {
+      auth: 'session',
+      pre : ['canCreateCourse(user)'],
+      validate : {
+        payload : {
+          key   : Joi.string().pattern(/^imports\/tmp\/[^/]+\/[A-Za-z0-9-]+\.zip$/).required(),
           name  : Joi.string().max(140).optional(),
           force : Joi.boolean().optional()
         }

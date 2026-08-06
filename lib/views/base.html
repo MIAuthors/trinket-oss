@@ -81,7 +81,12 @@
         hideGeneratedCode : ["{{ config.app.hideGeneratedCode | join('","') | safe }}"],
         runOption         : {{ config.app.runOption      | json        | safe }},
         emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
-        assetsEnabled     : {{ 'true' if config.features.assets else 'false' }}
+        assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
+        accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }},
+        largeUpload       : {
+          enabled   : {{ 'true' if (config.imports and config.imports.largeUpload and config.imports.largeUpload.enabled) else 'false' }},
+          threshold : {{ config.imports.largeUpload.thresholdBytes if (config.imports and config.imports.largeUpload) else 0 }}
+        }
       }
     };
   </script>
@@ -109,7 +114,14 @@
   {% if flash.requested %}
   <input id="requestedLogin" type="hidden" value="{{flash.requested}}">
   {% endif %}
-  {% block announcement_banner %}{% endblock %}
+  {% block announcement_banner %}
+  {% if config.app.announcement %}
+  <div data-alert class="alert-box warning announcement-banner" role="status">
+   {{ config.app.announcement | safe }}
+   <a href="#" class="close" aria-label="Dismiss">&times;</a>
+  </div>
+  {% endif %}
+  {% endblock %}
   {% block nav %}
     <div class="nav-wrapper">
       <nav class="top-bar" data-topbar data-options="is_hover: false" role="navigation" role="menubar" aria-label="Main Navigation">

@@ -1,6 +1,12 @@
 storage:
   backend: s3   # s3 (aws-sdk) or gcs (@google-cloud/storage)
 
+imports:
+  largeUpload:
+    enabled: true                 # per-deploy opt-out; false = direct POST only (small files)
+    thresholdBytes: 26214400      # 25 MiB — client switch point (< 32 MiB ingress cap)
+    maxArchiveBytes: 104857600    # 100 MiB — server ceiling enforced on from-storage
+
 features:
   courses: true   # Enable/disable courses feature entirely
   assets: false   # Enable/disable asset uploads (requires S3 or compatible storage)
@@ -9,6 +15,7 @@ features:
   stepDebugger: false  # "Step through" record & replay debugger in the Variables tab (requires variableExplorer)
   requireAuthToFork: false  # Require login to fork/share a trinket; false = allow anonymous forks (trinket.io default)
   courseImport: true   # Show an "Import a Course" button on the home page. Instructor-only via canCreateCourse; deploys without an instructor concept render it hidden regardless of the flag.
+  accessCodeEnrollment: false  # Self-service course join via access code (instructor mints a code, students enter it). Off by default; enable per-deploy for public/self-serve servers without LMS/SMTP. Gates the instructor UI, the student UI, AND the server endpoints together.
   trinkets:
     # Client-side languages - work out of the box
     python: false      # Skulpt-based Python 2/3 (disabled; superseded by pyodide, which is shown as "Python")
@@ -325,6 +332,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - java
     - glowscript-blocks
     - R
@@ -334,6 +342,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - pygame
     - java
     - glowscript-blocks
@@ -344,6 +353,7 @@ app:
     - glowscript
     - blocks
     - python3
+    - pyodide
     - pygame
     - java
     - glowscript-blocks
@@ -354,6 +364,7 @@ app:
     - python
     - html
     - python3
+    - pyodide
     - pygame
     - java
     - blocks
@@ -367,6 +378,7 @@ app:
     - python
     - pygame
     - python3
+    - pyodide
     - R
     - glowscript
     - html
@@ -383,6 +395,9 @@ app:
       - run
       - console
     python3:
+      - run
+      - console
+    pyodide:
       - run
       - console
     R:

@@ -122,6 +122,32 @@ function ensurePyodide() {
     // text without its trailing newline, so we re-add it per write.
     py.setStdout({ batched: function(s) { writeOut(s + '\n'); } });
     py.setStderr({ batched: function(s) { writeOut(s + '\n'); } });
+    // Wire input() to a browser prompt. Pyodide configures no stdin by default,
+    // so CPython's input() raises `OSError: [Errno 29] I/O error` the instant a
+    // program reads input — which broke every intro-course trinket that uses
+    // input(). Override the builtin directly (robust across Pyodide's evolving
+    // setStdin/autoEOF contract): echo the prompt to the console (as a terminal
+    // would), collect one line via window.prompt (also shown in the dialog),
+    // echo the entry back, and treat a cancelled dialog as EOF. Runs once at
+    // init; self-deletes its temporaries so the variable explorer and
+    // __trinket_baseline__ stay clean.
+    try {
+      py.runPython([
+        'def _trinket_input(prompt=""):',
+        '    import js',
+        '    if prompt:',
+        '        print(prompt, end="")',
+        '    r = js.window.prompt(str(prompt) if prompt else "")',
+        '    if r is None:',
+        '        print()',
+        '        raise EOFError',
+        '    print(r)',
+        '    return str(r)',
+        'import builtins as _b',
+        '_b.input = _trinket_input',
+        'del _b, _trinket_input'
+      ].join('\n'));
+    } catch (e) {}
     // Record the pristine namespace so the variable explorer can show only the
     // names the user's program introduces, not Python built-ins / library imports.
     try { py.runPython('__trinket_baseline__ = set(globals().keys())'); } catch (e) {}
@@ -1679,14 +1705,15 @@ window.TrinketAPI = {
 
     // Make the separator between the graphic/output pane and the console
     // draggable to resize them (matplotlib figures, VPython scene, stdout).
-    $('#output-dragbar').mousedown(function(e) {
+    $('#output-dragbar').css('touch-action', 'none'); // iPad: pointer drag, not scroll
+    $('#output-dragbar').on('pointerdown', function(e) {
       e.preventDefault();
 
       var containerHeight = $('.trinket-content-wrapper').height();
       var containerTop    = $('.trinket-content-wrapper').offset().top;
       var dragbarHeight   = $('#output-dragbar').height();
 
-      $(document).on('mousemove.output-dragbar', function(e) {
+      $(document).on('pointermove.output-dragbar', function(e) {
         var topHeight    = e.pageY - containerTop - dragbarHeight / 2;
         var bottomHeight = containerHeight - topHeight - dragbarHeight / 2;
         if (topHeight >= 20 && bottomHeight >= 20) {
@@ -1695,8 +1722,8 @@ window.TrinketAPI = {
         }
       });
 
-      $(document).on('mouseup.output-dragbar', function() {
-        $(document).off('mousemove.output-dragbar mouseup.output-dragbar');
+      $(document).on('pointerup.output-dragbar', function() {
+        $(document).off('pointermove.output-dragbar pointerup.output-dragbar');
         // Remember the split so the next Run keeps it instead of resetting.
         var gh = $('#graphic-wrap').height();
         var ch = $('#console-wrap').height();

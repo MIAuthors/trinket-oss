@@ -18,7 +18,7 @@ set -euo pipefail
 #   export GOOGLE_CLOUD_REGION=us-central1 # default: us-central1
 #   export SERVICE_NAME=trinket            # default: trinket
 #   export REPO_NAME=trinket               # Artifact Registry repo name
-#   export MEMORY=512Mi                    # default: 512Mi
+#   export MEMORY=2Gi                    # default: 2Gi
 #   export MAX_INSTANCES=10                # default: 10
 #   export SKIP_BUILD=1                    # reuse the existing image tag
 #   export ADMIN_EMAILS='["you@example.com"]'  # JSON array of admin emails
@@ -38,7 +38,7 @@ Optional:
   GOOGLE_CLOUD_REGION      Region (default: us-central1)
   SERVICE_NAME             Cloud Run service name (default: trinket)
   REPO_NAME                Artifact Registry repo name (default: trinket)
-  MEMORY                   Container memory (default: 512Mi)
+  MEMORY                   Container memory (default: 2Gi)
   MAX_INSTANCES            Max instances (default: 10)
   PUBLIC_HOSTNAME          Public-facing hostname used to build config.url and all
                            server-side absolute URLs (logout/other redirects, share
@@ -139,7 +139,7 @@ GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
 GOOGLE_CLOUD_REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 SERVICE_NAME="${SERVICE_NAME:-trinket}"
 REPO_NAME="${REPO_NAME:-trinket}"
-MEMORY="${MEMORY:-512Mi}"
+MEMORY="${MEMORY:-2Gi}"
 MAX_INSTANCES="${MAX_INSTANCES:-10}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 SKIP_DEPLOY="${SKIP_DEPLOY:-false}"

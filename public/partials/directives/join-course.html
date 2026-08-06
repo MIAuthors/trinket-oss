@@ -1,4 +1,4 @@
-<a class="button" ng-class="buttonClass" ng-click="openJoinCourse()"><i class="fa fa-user-plus"></i> Join Course</a>
+<a class="button" ng-class="buttonClass" ng-if="accessCodeEnrollment" ng-click="openJoinCourse()"><i class="fa fa-user-plus"></i> Join Course</a>
 
 <script type="text/ng-template" id="joinCourse.html">
   <div id="join-course-messages"></div>

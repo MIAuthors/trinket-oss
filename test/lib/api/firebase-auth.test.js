@@ -25,6 +25,22 @@ describe.skipIf(!FB_MODE)('Firebase Auth session establishment', () => {
     expect(flow.lastResponse.statusCode).toEqual(200);
   });
 
+  it('delivers a real string redirect in the response body (not the shim builder)', async () => {
+    // Regression (login "account created" every time): the handler did a bare
+    // `return reply({status, redirect})`. In the hapi-shim that returns a
+    // chainable builder, not a resolved response — so hapi serialized the
+    // builder (all function props) to `{}` and the browser never saw `redirect`.
+    // login-firebase.html then fell back to a hardcoded '/welcome' on EVERY
+    // login, which flashes "Your account has been created." A terminal .code(200)
+    // resolves the real {status, redirect} body. switchUser seeds the user first,
+    // so this is a returning account → must land on '/home', as a STRING.
+    delete flow.cookies['user'];
+    await flow.switchUser('user');
+    const body = flow.lastResponse.body;
+    expect(typeof body.redirect).toBe('string');   // pre-fix: [Function redirect]
+    expect(body.redirect).toBe('/home');            // returning user, not /welcome
+  });
+
   it('rejects a garbage ID token', async () => {
     await flow.switchUser('');          // anonymous jar
     const r = await flow.post('/api/auth/session', { idToken: 'not-a-real-token' });
@@ -82,5 +98,37 @@ describe.skipIf(!FB_MODE)('Account-takeover protection (email_verified gate)', (
     expect(r.statusCode).toBe(200);
     const after = await reloadVictim();
     expect(after.firebaseUid).toBeTruthy();          // linked, as intended
+  });
+});
+
+// MIAuthors #10 — an EXISTING Trinket user added to a course via "Add Students"
+// must get enrolled on their next login, not only brand-new signups. The enroll
+// loop used to live inside the new-user branch of the session handler.
+describe.skipIf(!FB_MODE)('Course enrollment on login for existing users (#10)', () => {
+  function save(doc) { return new Promise((res, rej) => doc.save((e) => e ? rej(e) : res(doc))); }
+
+  it('enrolls an existing account (no firebaseUid) that has a pending invitation', async () => {
+    const studentEmail = 'existing-student-10@example.com';
+
+    // instructor + course
+    const owner = await save(new User({ email: 'inst-10@example.com', username: 'inst-10', fullname: 'Inst' }));
+    const course = new Course({ name: 'Roster 10', _owner: owner, ownerSlug: owner.username });
+    await save(course);
+    await course.addUser(owner, ['course-owner']);
+
+    // an EXISTING account (no firebaseUid) + a pending invitation (the "Add Students" case)
+    await save(new User({ email: studentEmail, username: 'existing-student-10', fullname: 'Student' }));
+    await save(new CourseInvitation({ courseId: course.id, email: studentEmail, status: 'pending', token: 'tok-10' }));
+
+    // that existing user logs in with a verified token
+    await flow.switchUser('');
+    const token = await flow.mintFirebaseToken({ email: studentEmail, password: 'pw123456' }, { verified: true });
+    const r = await flow.post('/api/auth/session', { idToken: token });
+    expect(r.statusCode).toBe(200);
+
+    // …and is now enrolled in the course
+    const reloaded = await Course.findById(course.id);
+    const emails = (reloaded.users || []).map((u) => u.email);
+    expect(emails).toContain(studentEmail);
   });
 });

@@ -6,5 +6,11 @@ config/local.yaml~
 config/local.*.yaml
 config/firebase-service-account.json
 *.log
-.env
+# Per-deploy overlay secrets must never ship in the image. deploy-dir.js only
+# needs config/ + views/ + public/ from deploys/<name>/; the .env (sourced by
+# deploy-cloudrun.sh) and any private keys are deploy-time tooling / injected via
+# Secret Manager at runtime. Match .env at ANY depth (root + deploys/<name>/) and
+# LTI/private keys under deploys/.
+**/.env
+deploys/**/*.pem
 .gcloudignore
