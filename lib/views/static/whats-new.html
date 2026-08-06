@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}What's New — {{ config.app.siteName }}{% endblock %}
+
+{% block body_id %}whats-new{% endblock %}
+
+{% block content %}
+<div class="row" style="padding: 40px 0 10px;">
+  <div class="small-12 columns">
+    <h2>What's New</h2>
+  </div>
+</div>
+
+<div class="row">
+  <div class="small-12 medium-8 columns">
+
+    <p class="lead">{{ config.app.siteName }} has had a lot of work done since it launched. Here are the changes you're most likely to notice.</p>
+
+    <h3>Writing and running code</h3>
+    <ul>
+      <li><strong>Python is real Python.</strong> Your code runs actual CPython in the
+        browser, so libraries like <code>numpy</code> and <code>matplotlib</code> work
+        the way they do on a desktop — and there's now a single <em>Python</em> option
+        instead of several confusing variants.</li>
+      <li><strong><code>input()</code> works.</strong> Programs that ask the user for
+        input used to fail immediately. They don't any more.</li>
+      {% if config.features.variableExplorer %}
+      <li><strong>Variables tab.</strong> See every variable your program creates, and
+        click to expand lists, dictionaries and objects.</li>
+      {% endif %}
+      {% if config.features.stepDebugger %}
+      <li><strong>Step through your code.</strong> Run your program, then walk through it
+        one line at a time — <em>forwards and backwards</em>. Watch variables change,
+        drag the slider to jump around, and click in the left margin to set a breakpoint
+        and skip straight to the interesting part.</li>
+      {% endif %}
+      <li><strong>Better plots and graphics.</strong> matplotlib labels no longer get cut
+        off, and the VPython canvas can be resized properly.</li>
+      <li><strong>iPad friendly.</strong> The dividers between your code and the output
+        can be dragged with a finger.</li>
+    </ul>
+
+    <h3>For instructors</h3>
+    <ul>
+      <li><strong>Publishing works.</strong> The Publish dialog previously did nothing at
+        all when clicked. You can now publish a trinket to its own page and share the link.</li>
+      <li><strong>A My Courses page</strong>, and course deletion you can actually find.</li>
+      <li><strong>Manage trinkets in bulk</strong> — select several at once to move or
+        delete them, with filters and date ranges to find what you need.</li>
+      <li><strong>Download student work</strong>, including your feedback, as a single export.</li>
+      <li><strong>Easier rosters.</strong> Students who already have accounts are enrolled
+        when they log in, and adding a large class at once works reliably.</li>
+      <li><strong>Course pages behave.</strong> Image uploads work, the markdown editor
+        highlights properly, and large course archives import without hitting a size limit.</li>
+    </ul>
+
+    <h3>Coming from trinket.io</h3>
+    <ul>
+      <li>Old trinket.io links point at the matching trinket here.</li>
+      <li>Imported course pages now show <em>this</em> site's trinkets, instead of quietly
+        loading trinket.io's editor.</li>
+      <li>Imported Python trinkets open correctly, including older ones that used to show
+        "this trinket type is not available".</li>
+    </ul>
+
+    <h3>Fixes you'll simply stop noticing</h3>
+    <ul>
+      <li>A whole classroom logging in from one network no longer gets locked out.</li>
+      <li>Returning users aren't greeted with "your account has been created" every time.</li>
+      <li>Renaming a course or trinket no longer breaks its old link.</li>
+      <li>"Download All" only includes the trinkets you actually still have.</li>
+      <li>Saving a course page no longer gets stuck on a "modified in another window" error.</li>
+    </ul>
+
+    <p style="margin-top: 30px;">
+      Something not working the way you expect?
+      {% if config.app.supportEmail %}
+      Email <a href="mailto:{{ config.app.supportEmail }}">{{ config.app.supportEmail }}</a>.
+      {% else %}
+      Let your site administrator know.
+      {% endif %}
+    </p>
+
+  </div>
+</div>
+{% endblock %}
