@@ -8,6 +8,12 @@
 !public/img/brand/
 !public/img/brand/**
 
+# ...and the build stamp (gitignored, written by scripts/build-info.sh just
+# before `gcloud builds submit`) MUST be baked in. Without this negation the
+# `#!include:.gitignore` above drops it from the upload and GET /version reports
+# "unknown" for commit/branch/builtAt on every Cloud Run deploy — verified live.
+!build-info.json
+
 # Not needed to build the image
 test/
 *.md
