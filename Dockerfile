@@ -68,7 +68,16 @@ RUN npm run build:css
 
 RUN npm run build
 
+# Build identity, surfaced by GET /version. COMMIT_ID was declared here for a
+# long time but never promoted to ENV and never passed by any build, so it
+# stamped nothing and there was no way to tell which build a deploy was running.
 ARG COMMIT_ID
+ARG GIT_BRANCH
+ARG BUILD_TIME
+ENV COMMIT_ID=$COMMIT_ID \
+    GIT_BRANCH=$GIT_BRANCH \
+    BUILD_TIME=$BUILD_TIME
+
 ARG NODE_ENV
 ENV NODE_ENV=$NODE_ENV
 

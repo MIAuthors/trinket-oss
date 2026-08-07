@@ -90,3 +90,6 @@ coverage
 
 # Per-deploy customization folders (private clones; see config/deploy-dir.js)
 deploys/
+
+# Generated at build time by scripts/build-info.sh (stamps GET /version)
+build-info.json
