@@ -3,6 +3,9 @@ name: tests
 on:
   push:
   pull_request:
+  # Allow re-running the suite on demand (e.g. to confirm a failure was an
+  # infra stall rather than a real regression) without pushing an empty commit.
+  workflow_dispatch:
 
 jobs:
   test:
@@ -17,6 +20,11 @@ jobs:
       matrix:
         backend: [mongo, firestore]
     name: test (${{ matrix.backend }})
+    # Without a timeout a stalled dependency download hangs the leg for the
+    # 6h default instead of failing fast. Observed repeatedly: one leg sitting
+    # at 15m+ (normal run is ~1-3m) and being cancelled, with the other leg
+    # green — i.e. an infra stall, never an assertion failure.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +41,19 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
+      # --- Mongo profile only: cache the mongod binary ---
+      # mongodb-memory-server downloads mongod (~100MB, fastdl.mongodb.org) on
+      # every fresh runner; `cache: 'npm'` above does NOT cover it. That
+      # uncached third-party download is the mongo leg's flaky step. Keyed to
+      # the pinned version in test/helpers/mongo-global.mjs — bump it there and
+      # the key changes, so the cache can't go stale.
+      - name: Cache mongod binary
+        if: matrix.backend == 'mongo'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongod-${{ runner.os }}-6.0.14
+
       # --- Firestore profile only: run the standalone Firestore emulator jar ---
       # (same jar and invocation as test/firestore-emulator.Dockerfile).
       - name: Set up JDK (Firestore emulator)
@@ -42,11 +63,28 @@ jobs:
           distribution: temurin
           java-version: '11'
 
+      # Same rationale as the mongod cache: the emulator jar was re-downloaded
+      # from storage.googleapis.com on every run. Keyed to the pinned version.
+      - name: Cache Firestore emulator jar
+        if: matrix.backend == 'firestore'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/firestore.jar
+          key: firestore-emulator-v1.19.8
+
       - name: Start Firestore emulator
         if: matrix.backend == 'firestore'
         run: |
-          curl -sSL -o /tmp/firestore.jar \
-            https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+          # Only download on a cache miss, and make that fallback resilient:
+          # --retry rides out a transient stall instead of hanging, and
+          # --max-time bounds the attempt so the job timeout is never the
+          # thing that catches it.
+          if [ ! -s /tmp/firestore.jar ]; then
+            curl -sSL --retry 3 --retry-all-errors --retry-delay 5 \
+              --connect-timeout 20 --max-time 300 \
+              -o /tmp/firestore.jar \
+              https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+          fi
           java -jar /tmp/firestore.jar --host 127.0.0.1 --port 8089 &
           for i in $(seq 1 60); do
             curl -s 127.0.0.1:8089 >/dev/null && break
