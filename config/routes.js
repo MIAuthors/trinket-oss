@@ -31,6 +31,12 @@ routes = [
     route : 'GET /account-deleted users.deleted'
   },
   {
+    // Which build is this deploy serving? Public (identity only); site admins
+    // also get infrastructure detail. No auth config needed — the default
+    // strategy is session/mode:'try', so request.user is set when logged in.
+    route : 'GET /version version.show'
+  },
+  {
     route : 'PUT /api/users/{userId} users.updateProfile',
     config : {
       auth: 'session',

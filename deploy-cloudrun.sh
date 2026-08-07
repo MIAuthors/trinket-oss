@@ -339,6 +339,11 @@ else
   echo "--- Configuring Docker auth ---"
   gcloud auth configure-docker "${GOOGLE_CLOUD_REGION}-docker.pkg.dev" --quiet
 
+  # Stamp the build identity reported by GET /version. Must run BEFORE the
+  # source tarball is uploaded — build-info.json is part of the build context.
+  echo "--- Stamping build info ---"
+  bash "$(dirname "$0")/scripts/build-info.sh"
+
   # Build and push with Cloud Build
   echo "--- Building image with Cloud Build ---"
   gcloud builds submit \
