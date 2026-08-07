@@ -232,11 +232,25 @@ fi
 # Deploy Firestore indexes and rules via Firebase CLI
 echo "--- Deploying Firestore indexes and rules ---"
 if command -v firebase &>/dev/null && [[ -f "${SCRIPT_DIR}/firestore.indexes.json" ]]; then
-  firebase deploy --only firestore:indexes,firestore:rules \
-    --project="${GOOGLE_CLOUD_PROJECT}" \
-    --account "$(gcloud config get-value account)" \
-    --non-interactive
-  echo "    Indexes submitted (may take 1-2 min to build in background)"
+  # NON-FATAL by design. This is an idempotent "ensure indexes/rules" step, and
+  # under `set -e` any non-zero exit here aborts the run BEFORE the image is
+  # built — so the service silently keeps serving the old code while the output
+  # says "Deploy complete!". That is not hypothetical: firebase-tools 15.22.4
+  # deployed indexes and rules successfully, then a trailing internal
+  # `withTimeout()` rejected 10s later ("Timed out.", utils.js:313) and exited 2,
+  # which skipped the container deploy entirely. An auxiliary step must never be
+  # able to block shipping the application.
+  if firebase deploy --only firestore:indexes,firestore:rules \
+      --project="${GOOGLE_CLOUD_PROJECT}" \
+      --account "$(gcloud config get-value account)" \
+      --non-interactive; then
+    echo "    Indexes submitted (may take 1-2 min to build in background)"
+  else
+    _FIREBASE_RC=$?
+    echo "    !! WARNING: firebase CLI exited ${_FIREBASE_RC}. Indexes/rules may or may not"
+    echo "    !! have been applied — check the output above and firebase-debug.log."
+    echo "    !! Continuing with the container deploy (this step is not required to ship code)."
+  fi
 else
   echo "    Skipping: firebase CLI not found or firestore.indexes.json missing"
 fi
@@ -578,15 +592,26 @@ fi
 
 # Create a monthly budget alert (idempotent — skips if a budget already exists).
 echo "--- Ensuring billing budget alert (${MONTHLY_BUDGET} USD/month) ---"
-_BILLING_ACCOUNT=$(timeout 20 gcloud billing projects describe "${GOOGLE_CLOUD_PROJECT}" \
+
+# `timeout` is GNU coreutils: macOS ships neither it nor gtimeout, so the calls
+# below died with 127 ("command not found") under `set -e` — at the very END of
+# every deploy from a Mac. Harmless (the deploy is complete by then) but it
+# returns a failing exit code, which breaks any wrapper that checks it. Use
+# whichever is available; if neither, run the command unbounded.
+if command -v timeout &>/dev/null;    then _TIMEOUT=timeout
+elif command -v gtimeout &>/dev/null; then _TIMEOUT=gtimeout
+else _TIMEOUT=""; fi
+_t() { local secs="$1"; shift; if [[ -n "${_TIMEOUT}" ]]; then "${_TIMEOUT}" "${secs}" "$@"; else "$@"; fi; }
+
+_BILLING_ACCOUNT=$(_t 20 gcloud billing projects describe "${GOOGLE_CLOUD_PROJECT}" \
   --format='value(billingAccountName)' --quiet 2>/dev/null | sed 's|billingAccounts/||')
 if [[ -n "${_BILLING_ACCOUNT}" ]]; then
-  _EXISTING_BUDGET=$(timeout 20 gcloud billing budgets list \
+  _EXISTING_BUDGET=$(_t 20 gcloud billing budgets list \
     --billing-account="${_BILLING_ACCOUNT}" \
     --filter="displayName=trinket-${GOOGLE_CLOUD_PROJECT}" \
     --format='value(name)' --quiet 2>/dev/null | head -1)
   if [[ -z "${_EXISTING_BUDGET}" ]]; then
-    timeout 30 gcloud billing budgets create \
+    _t 30 gcloud billing budgets create \
       --billing-account="${_BILLING_ACCOUNT}" \
       --display-name="trinket-${GOOGLE_CLOUD_PROJECT}" \
       --budget-amount="${MONTHLY_BUDGET}USD" \
