@@ -189,6 +189,9 @@
                   {% endif %}
                   <li class="divider" role="presentation"></li>
                   <li><a href="/account"><i class="fa fa-gear"></i> My Settings</a></li>
+                  {% if canImport %}
+                  <li><a href="/account/import"><i class="fa fa-upload"></i> Import Trinkets</a></li>
+                  {% endif %}
                   {% if user.isInstructor or user.hasRole("admin") %}
                   <li><a href="/lti/connect"><i class="fa fa-plug"></i> Connect LMS</a></li>
                   {% endif %}
