@@ -208,6 +208,23 @@ function ensurePyodideConsole() {
   return pyodideConsole;
 }
 
+// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
+// Everything we put in the console is Python text, and Python text is full of
+// angle brackets: a traceback names its scope `<module>` and its console frame
+// `<console>`, and repr() renders an object as `<Foo object at 0x…>`. Parsed as
+// HTML those become unknown tags and DISAPPEAR — a REPL traceback rendered as
+// `File "", line 1, in ` with both names silently eaten, and an object's repr
+// vanished completely. It is also an injection hole: an exception message or a
+// repr containing markup is executed by the page, and both can carry
+// student-controlled text.
+//
+// Escape here and keep the `false` (jqconsole's own escaping would also swallow
+// the ANSI codes the run path emits) — the convention python.js already uses.
+function escapeConsoleHtml(text) {
+  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
@@ -222,7 +239,7 @@ function startReplPrompt() {
     try {
       result = console_.push(input);
     } catch (e) {
-      jqconsole.Write(String(e && e.message || e) + '\n', 'jqconsole-error', false);
+      jqconsole.Write(escapeConsoleHtml(String(e && e.message || e)) + '\n', 'jqconsole-error', false);
       startReplPrompt();
       return;
     }
@@ -232,11 +249,11 @@ function startReplPrompt() {
     Promise.resolve(result)
       .then(function(value) {
         if (value !== undefined && value !== null) {
-          jqconsole.Write(pyodide.runPython('repr')(value) + '\n', 'jqconsole-output', false);
+          jqconsole.Write(escapeConsoleHtml(pyodide.runPython('repr')(value)) + '\n', 'jqconsole-output', false);
         }
       })
       .catch(function(err) {
-        jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+        jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
       })
       .then(function() { startReplPrompt(); });
 
@@ -286,12 +303,20 @@ function startReplPrompt() {
 // Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
 function startRepl() {
   initConsoleOutput();
+
+  // The console palette is a MODE, not a default. Base `.jqconsole-output` is
+  // WHITE, for the dark console a running program draws into; the light REPL
+  // palette lives behind `.console-mode` (static/scss/embed/_python.scss). The
+  // Skulpt REPL sets that class on the way in (python.js) and the run path
+  // clears it again. This REPL only ever cleared it, so its output was white on
+  // the near-white (#f9f9f9) REPL background — legible only by selecting it.
+  $('#console-output').addClass('console-mode');
   return ensurePyodide().then(function() {
     jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
-                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', false);
+                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
     startReplPrompt();
   }).catch(function(err) {
-    jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+    jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
   });
 }
 
@@ -1295,7 +1320,7 @@ function renderDebugStep() {
       jqconsole.Append(loadingHeader());
       jqconsole.Write(debugRec.output.slice(0, st.out));
       if (wantErr) {
-        jqconsole.Write('\n' + debugRec.error + '\n', 'jqconsole-error', false);
+        jqconsole.Write('\n' + escapeConsoleHtml(debugRec.error) + '\n', 'jqconsole-error', false);
       }
     } else if (st.out > debugLastOut) {
       // Forward over new output: append just the delta.
@@ -1359,7 +1384,7 @@ function exitReplay(quiet) {
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
     jqconsole.Write(rec.output);
-    if (rec.error) jqconsole.Write('\n' + rec.error + '\n', 'jqconsole-error', false);
+    if (rec.error) jqconsole.Write('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
   }
   paintVariables();
 }
@@ -1776,7 +1801,7 @@ function startRun() {
     // Python exceptions reject with a PythonError whose message is the traceback.
     var msg = (err && (err.message || err.toString())) || 'Error';
     if (jqconsole) {
-      jqconsole.Write('\n' + msg + '\n', 'jqconsole-error', false);
+      jqconsole.Write('\n' + escapeConsoleHtml(msg) + '\n', 'jqconsole-error', false);
     }
     finishRun(serializedCode, err);
   });

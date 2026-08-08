@@ -135,4 +135,64 @@ test.describe('Pyodide REPL (#109 spike)', () => {
       expect(await consoleText(page)).toContain('1024');
     }).toPass({ timeout: 60_000 });
   });
+
+  // --- Found by Steve's manual smoke test of the console on :3001 -------------
+  // Both defects are in what the REPL PRINTS rather than what it evaluates,
+  // which is why every test above — all of which check evaluation — stayed green.
+
+  test('output is legible: the light-background console palette is applied', async ({ page }) => {
+    // `.jqconsole-output` is WHITE by default — the palette for the dark console
+    // a running program draws into. The light REPL palette lives behind
+    // `.console-mode`, which the Skulpt REPL sets and this one did not, leaving
+    // white text on the #f9f9f9 REPL background.
+    await page.goto('/embed/python3?runMode=console&start=result');
+    await replPrompt(page);
+
+    expect(await page.evaluate(() =>
+      document.getElementById('console-output').classList.contains('console-mode')
+    )).toBe(true);
+
+    const color = await page.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.className = 'jqconsole-output';
+      document.querySelector('.jqconsole').appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    });
+    expect(color).not.toBe('rgb(255, 255, 255)');
+  });
+
+  test('angle brackets in output survive rendering (repr)', async ({ page }) => {
+    // The console wrote unescaped HTML, so every <...> in Python text was parsed
+    // as a tag and vanished — an object's repr disappeared completely.
+    await page.goto('/embed/python3?runMode=console&start=result');
+    await replPrompt(page);
+
+    await typeLine(page, 'class Foo: pass');
+    await page.keyboard.press('Enter');          // blank line closes the block
+    await typeLine(page, 'Foo()');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toMatch(/<__main__\.Foo object at 0x[0-9a-f]+>/);
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('markup in an exception message is shown, not executed', async ({ page }) => {
+    // The same unescaped write, seen as an injection rather than a rendering bug.
+    await page.goto('/embed/python3?runMode=console&start=result');
+    await replPrompt(page);
+
+    await typeLine(page, 'raise ValueError(\'<img src=x onerror="window.__pwned=1">\')');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('<img src=x onerror="window.__pwned=1">');
+    }).toPass({ timeout: 60_000 });
+
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+    expect(await page.evaluate(() =>
+      document.querySelectorAll('.jqconsole img:not(#powered-by-trinket)').length
+    )).toBe(0);
+  });
+
 });
