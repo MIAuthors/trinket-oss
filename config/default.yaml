@@ -112,6 +112,14 @@ app:
   supportEmail: ''
   adminEmail: ''
   logo: '/img/trinket-logo.png'
+  # Compact mark used where the wide logo above doesn't fit — notably the EMBED
+  # header at medium-down widths (lib/views/embed/base.html), which is what an
+  # embedded trinket box in course text actually is.
+  #
+  # ⚠️ A deploy that overrides `logo` must override `logoIcon` TOO. Overriding
+  # only `logo` leaves this stock Trinket mark in every small embed while the
+  # branded logo appears in full screen — reported as "the icon defaults to the
+  # Trinket.io logo, but full screen shows the correct branded icon" (issue #47).
   logoIcon: '/img/trinket-logo-circles.png'
   hostname: 0.0.0.0
   port: 3000

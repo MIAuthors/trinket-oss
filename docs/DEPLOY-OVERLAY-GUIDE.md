@@ -97,6 +97,7 @@ stock config (your values win) and shadows any view/asset by matching relative p
 app:
   siteName: 'Example Trinket'
   logo: '/img/brand/logo.png'          # your file in deploys/<name>/public/img/brand/
+  logoIcon: '/img/brand/icon.png'      # ⚠️ SET THIS TOO — see below
   announcement: '⚠️ Test server — data may be wiped.'   # shows in preview too
   branding:
     lead: 'A browser-based coding platform for computational physics.'
@@ -128,6 +129,16 @@ aws:
 ```
 
 Every block is optional — anything you leave out inherits the stock value.
+
+> ⚠️ **`logo` and `logoIcon` are a pair — override both.** `logo` is the wide
+> mark; `logoIcon` is the compact one used where that doesn't fit, notably the
+> **embed header at medium-down widths** — which is exactly what an embedded
+> trinket box inside course text is. Override only `logo` and your branding
+> appears in full screen while **every small embed still shows the stock Trinket
+> mark** (issue #47). If you have no separate icon, point `logoIcon` at the same
+> file rather than leaving it to inherit.
+>
+> Check a running deploy: `curl -s https://<host>/embed/python3 | grep 'show-for-medium-down'`.
 
 ---
 
