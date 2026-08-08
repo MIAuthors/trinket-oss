@@ -2097,6 +2097,20 @@ window.TrinketAPI = {
     if (trinket.code && (start === 'result') && autoRun !== false) {
       this.showResult();
     }
+    else if (this._queryString.outputOnly) {
+      // #66: outputOnly hides the editor, and showCode() below hides the output
+      // pane — so an outputOnly embed WITHOUT autorun hid both and rendered
+      // completely blank. The console is otherwise created lazily on first Run,
+      // which never happens here.
+      //
+      // Reveal the (empty) console instead. Deliberately not forcing a run: the
+      // embed author left autorun off on purpose, and "only show output" still
+      // means the output pane is the thing on screen — it just starts empty
+      // until the viewer presses Run.
+      $('#codeOutput').removeClass('hide');
+      $('#editor').addClass('hide');
+      initConsoleOutput();
+    }
     else {
       this.showCode();
       resetOutput();

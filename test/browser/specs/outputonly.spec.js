@@ -1,0 +1,88 @@
+const { test, expect } = require('@playwright/test');
+
+// Issue #66: an embed with ?outputOnly=true but NO autorun rendered completely
+// blank. outputOnly hides the editor, and the non-autorun path hid the output
+// pane as well, so nothing was on screen — and the console is created lazily on
+// first Run, which never happened.
+//
+// "Only show output" should mean the output pane IS the embed, even before it
+// has anything in it. Deliberately not fixed by forcing a run: the author left
+// autorun off on purpose.
+test.describe('outputOnly without autorun (#66)', () => {
+  async function panes(page) {
+    return page.evaluate(() => {
+      const vis = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      return {
+        output: vis('#codeOutput'),
+        console: vis('#console-output'),
+        editor: vis('#editor')
+      };
+    });
+  }
+
+  test('shows the output pane instead of a blank frame', async ({ page }) => {
+    await page.goto('/embed/python3?outputOnly=true');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.output, 'the output pane must be visible').toBe(true);
+      expect(p.console, 'the console itself must be on screen').toBe(true);
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('still hides the editor (outputOnly is honoured)', async ({ page }) => {
+    await page.goto('/embed/python3?outputOnly=true');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.editor, 'outputOnly must still hide the editor').toBeFalsy();
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('does NOT auto-run — the author left autorun off', async ({ page }) => {
+    // The pane appears, but empty: fixing the blank frame must not smuggle in an
+    // autorun the embed author didn't ask for.
+    await page.goto('/embed/python3?outputOnly=true');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.console).toBe(true);
+    }).toPass({ timeout: 60_000 });
+
+    const text = await page.evaluate(() =>
+      document.querySelector('#console-output')?.innerText || '');
+    expect(text).not.toContain('hello from the trinket');
+  });
+
+  test('REGRESSION: outputOnly WITH autorun still shows output, not the editor', async ({ page }) => {
+    // Asserts PANE STATE rather than execution. Two reasons: a bare
+    // /embed/python3 has no saved code to autorun (and outputOnly implies
+    // noEditor, so none can be typed), and pane state is the only thing this fix
+    // could plausibly disturb — the new branch runs ONLY when the autorun branch
+    // did not, so the autorun path is untouched.
+    //
+    // Checked against unmodified main first: an execution-based version of this
+    // test failed there identically, i.e. it was a bad test, not a regression.
+    await page.goto('/embed/python3?outputOnly=true&start=result');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.output, 'autorun + outputOnly must still show the output pane').toBe(true);
+      expect(p.editor, 'and must still hide the editor').toBeFalsy();
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('REGRESSION: an ordinary embed still opens on the editor', async ({ page }) => {
+    await page.goto('/embed/python3');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.editor, 'the normal embed must still show the editor').toBe(true);
+    }).toPass({ timeout: 60_000 });
+  });
+});
