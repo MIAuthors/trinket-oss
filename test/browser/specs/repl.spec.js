@@ -120,4 +120,19 @@ test.describe('Pyodide REPL (#109 spike)', () => {
       expect(text).toContain('ordinary run 2');
     }).toPass({ timeout: 90_000 });
   });
+
+  test('the Share dialog\'s "Interactive console only" option reaches the REPL', async ({ page }) => {
+    // The dialog emits runOption=console (NOT runMode=console): the server keeps
+    // it as runOption, so its runMode fallback never fires. If the REPL keyed on
+    // runMode alone, the dialog's option would still be dead — which is the
+    // complaint in #109. This asserts the advertised control actually works.
+    await page.goto('/embed/python3?runOption=console&start=result');
+    await replPrompt(page);
+
+    await typeLine(page, '2**10');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('1024');
+    }).toPass({ timeout: 60_000 });
+  });
 });

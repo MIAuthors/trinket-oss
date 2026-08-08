@@ -2151,10 +2151,20 @@ window.TrinketAPI = {
     editor.reset(trinket.code);
     editor.assets(trinket.assets ? trinket.assets.slice() : []);
 
-    // SPIKE (#109): runMode=console opens the interactive REPL instead of the
-    // run-a-program flow. Gated strictly on the mode, so every ordinary trinket
-    // takes the unchanged path below.
-    if (api.runMode === 'console') {
+    // #109: open the interactive REPL instead of the run-a-program flow.
+    //
+    // Accept BOTH spellings, because the two entry points disagree:
+    //   * runOption=console — what the Share/Embed dialog emits ("Interactive
+    //     console only"); the server keeps it as runOption and leaves runMode
+    //     empty, since its runMode fallback only fires when runOption is unset.
+    //   * runMode=console  — what markdown ```python3.console``` blocks emit,
+    //     and what a previously-shared console link carries.
+    // Keying on only one of them would leave the dialog's option dead — the very
+    // complaint this issue is about.
+    //
+    // Gated strictly on console mode, so every ordinary trinket takes the
+    // unchanged path below.
+    if (api.runMode === 'console' || runOption === 'console') {
       this.showResult();
       startRepl();
       return;
