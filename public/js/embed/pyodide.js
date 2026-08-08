@@ -164,6 +164,137 @@ window.__trinket_console_input = function(prompt) {
   });
 };
 
+// ---------------------------------------------------------------------------
+// SPIKE (issue #109): interactive REPL on Pyodide.
+//
+// The "Interactive console" the Share dialog used to advertise was the
+// server-backed `console` trinket type, which is gone. Pyodide ships its own
+// REPL engine (pyodide.console.PyodideConsole) that handles the hard part —
+// deciding whether a line completes a statement — so the work here is only
+// wiring it to jq-console, which is already bundled and already drives program
+// output and input().
+//
+// The loop deliberately mirrors python.js's Skulpt REPL (startPrompt): a
+// jqconsole.Prompt whose second callback reports how far to indent a
+// continuation line, then re-prompt after each evaluation.
+//
+// TWO EXISTING SYSTEMS THIS MUST NOT DISTURB — both are safe by construction:
+//
+//  1. VPython rate() cancellation. The wrapper around window.rate() and the
+//     cancelRequested/rerunQueued state belong to runProgram; a REPL evaluation
+//     never enters that path, never sets runningIsVpython, and never installs or
+//     removes the rate wrapper. (A VPython animation typed AT the prompt is out
+//     of scope for the spike — it would run with the unwrapped rate().)
+//
+//  2. console.input(). It calls jqconsole.Input(), which cannot coexist with an
+//     ACTIVE jqconsole.Prompt. It doesn't have to: exactly as in python.js, the
+//     prompt is consumed before evaluation begins and is only re-armed after the
+//     evaluation settles — so during evaluation jqconsole is free, and
+//     `console.input()` typed at the REPL works unchanged. `await` at the prompt
+//     works too, because PyodideConsole evaluates asynchronously.
+// ---------------------------------------------------------------------------
+var pyodideConsole = null;   // the PyodideConsole instance, created on first use
+var replActive     = false;  // a REPL prompt is armed or evaluating
+
+// Build the PyodideConsole. Its globals are the SAME namespace the Run button
+// uses, so a REPL session can inspect what a program just defined — the main
+// reason a REPL is useful in a classroom.
+function ensurePyodideConsole() {
+  if (pyodideConsole) return pyodideConsole;
+  pyodideConsole = pyodide.runPython(
+    'from pyodide.console import PyodideConsole\n' +
+    'PyodideConsole(globals())\n'
+  );
+  return pyodideConsole;
+}
+
+// One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
+function startReplPrompt() {
+  if (!jqconsole) return;
+  replActive = true;
+
+  jqconsole.Prompt(true, function(input) {
+    // Blank line: just re-prompt (matches python.js and the CPython REPL).
+    if (/^\s*$/.test(input)) { startReplPrompt(); return; }
+
+    var console_ = ensurePyodideConsole();
+    var result;
+    try {
+      result = console_.push(input);
+    } catch (e) {
+      jqconsole.Write(String(e && e.message || e) + '\n', 'jqconsole-error', false);
+      startReplPrompt();
+      return;
+    }
+
+    // push() returns a Future; awaiting it runs the statement. Errors arrive as
+    // a rejection carrying the formatted traceback, which is what we display.
+    Promise.resolve(result)
+      .then(function(value) {
+        if (value !== undefined && value !== null) {
+          jqconsole.Write(pyodide.runPython('repr')(value) + '\n', 'jqconsole-output', false);
+        }
+      })
+      .catch(function(err) {
+        jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+      })
+      .then(function() { startReplPrompt(); });
+
+  }, function(input) {
+    // Continuation callback. jq-console's contract (see python.js's Skulpt REPL,
+    // which defaults `multilineReturn = false`): return FALSE to submit the
+    // statement, or a NUMBER to keep reading with that indent. Returning 0 does
+    // NOT mean "execute" — it means "continue, indent 0", which is how the first
+    // version of this spike left every expression sitting at a `...` prompt.
+    //
+    // Ask Python itself whether the statement is finished: codeop.compile_command
+    // is what the CPython REPL uses, returns None while input is incomplete, and
+    // has no side effects (pushing the line into the console buffer would consume
+    // it).
+    try {
+      var complete = pyodide.runPython(
+        'import codeop\n' +
+        'def __trinket_is_complete(src):\n' +
+        '    try:\n' +
+        '        return codeop.compile_command(src, "<console>", "single") is not None\n' +
+        '    except (SyntaxError, OverflowError, ValueError):\n' +
+        '        return True\n' +   // let evaluation report the real error
+        '__trinket_is_complete\n'
+      )(input);
+      if (complete) return false;   // submit
+    } catch (e) {
+      return false;                 // submit; let evaluation surface the error
+    }
+
+    var lines = input.split('\n');
+    var last  = lines[lines.length - 1] || '';
+
+    // CPython's REPL rule: inside a block, a BLANK line ends it. Without this the
+    // block never terminates — codeop keeps reporting "incomplete" for a suite
+    // that could still be extended, so the prompt sits at `...` forever.
+    if (lines.length > 1 && /^\s*$/.test(last)) return false;
+
+    // The number is an indent LEVEL (jq-console multiplies it), NOT a character
+    // count. Returning the measured character width made each continuation line
+    // deeper than the last — 4, then 8, then 26 spaces. python.js only ever
+    // returns 0/1/small negatives for the same reason: 1 to open a suite after a
+    // colon, 0 to hold the current indent.
+    return /:\s*$/.test(last) ? 1 : 0;
+  });
+}
+
+// Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
+function startRepl() {
+  initConsoleOutput();
+  return ensurePyodide().then(function() {
+    jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
+                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', false);
+    startReplPrompt();
+  }).catch(function(err) {
+    jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+  });
+}
+
 function ensurePyodide() {
   if (pyodideLoading) return pyodideLoading;
 
@@ -2019,6 +2150,15 @@ window.TrinketAPI = {
   reset : function(trinket, initial) {
     editor.reset(trinket.code);
     editor.assets(trinket.assets ? trinket.assets.slice() : []);
+
+    // SPIKE (#109): runMode=console opens the interactive REPL instead of the
+    // run-a-program flow. Gated strictly on the mode, so every ordinary trinket
+    // takes the unchanged path below.
+    if (api.runMode === 'console') {
+      this.showResult();
+      startRepl();
+      return;
+    }
 
     if (trinket.code && (start === 'result') && autoRun !== false) {
       this.showResult();
