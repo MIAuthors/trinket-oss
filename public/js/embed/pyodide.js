@@ -208,6 +208,39 @@ function ensurePyodideConsole() {
   return pyodideConsole;
 }
 
+// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
+// Everything we put in the console is Python text, and Python text is full of
+// angle brackets: a traceback names its scope `<module>` and its console frame
+// `<console>`, and repr() renders an object as `<Foo object at 0x…>`. Parsed as
+// HTML those become unknown tags and DISAPPEAR — which is why a REPL traceback
+// rendered as `File "", line 1, in ` with both names silently eaten, and why the
+// dangling `, in` this file documents was never Python's doing at all.
+//
+// It is also an injection hole: an exception message or a repr that contains
+// markup is executed by the page, and both can carry student-controlled text.
+//
+// The fix is the convention python.js already uses — escape here, keep the
+// `false` (jqconsole's own escaping would also swallow the ANSI codes the run
+// path emits).
+function escapeConsoleHtml(text) {
+  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
+// Write an error raised at the REPL prompt, through the SAME traceback filter
+// the Run button uses (#107). Without this the REPL reported the raw Pyodide
+// traceback — a dozen frames of console.py, codeop.py and _base.py above the one
+// line that matters — which is precisely the noise #107 exists to remove. The
+// frames are, if anything, worse here: at a prompt every frame above the user's
+// single line is interpreter plumbing.
+//
+// `<stdin>` matches what CPython names the console frame, so a filtered REPL
+// traceback reads exactly like the one a student sees in a terminal.
+function writeReplError(err) {
+  var msg = String(err && err.message || err);
+  jqconsole.Write(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
@@ -222,7 +255,7 @@ function startReplPrompt() {
     try {
       result = console_.push(input);
     } catch (e) {
-      jqconsole.Write(String(e && e.message || e) + '\n', 'jqconsole-error', false);
+      writeReplError(e);
       startReplPrompt();
       return;
     }
@@ -232,11 +265,11 @@ function startReplPrompt() {
     Promise.resolve(result)
       .then(function(value) {
         if (value !== undefined && value !== null) {
-          jqconsole.Write(pyodide.runPython('repr')(value) + '\n', 'jqconsole-output', false);
+          jqconsole.Write(escapeConsoleHtml(pyodide.runPython('repr')(value)) + '\n', 'jqconsole-output', false);
         }
       })
       .catch(function(err) {
-        jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+        writeReplError(err);
       })
       .then(function() { startReplPrompt(); });
 
@@ -286,12 +319,21 @@ function startReplPrompt() {
 // Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
 function startRepl() {
   initConsoleOutput();
+
+  // The console palette is a MODE, not a default. Base `.jqconsole-output` is
+  // WHITE, for the dark console a running program draws into; the light REPL
+  // palette lives behind `.console-mode` (static/scss/embed/_python.scss). The
+  // Skulpt REPL sets that class on the way in (python.js) and the run path
+  // clears it again. This REPL only ever cleared it, so its output was white on
+  // the near-white (#f9f9f9) REPL background — legible only by selecting it.
+  $('#console-output').addClass('console-mode');
+
   return ensurePyodide().then(function() {
     jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
-                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', false);
+                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
     startReplPrompt();
   }).catch(function(err) {
-    jqconsole.Write(String(err && err.message || err) + '\n', 'jqconsole-error', false);
+    writeReplError(err);
   });
 }
 
@@ -510,14 +552,29 @@ function isCancelError(err) {
 // Also fixes two smaller defects visible above: the user frame's filename is
 // EMPTY (`File ""`), and the scope name is missing at module level, leaving a
 // dangling `, in`.
-var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:, in (.*))?\s*$/;
+// `, in <scope>` is optional, and BOTH halves of it are unreliable: at module
+// level Python leaves the scope name empty, and the line arrives with its
+// trailing whitespace already stripped — so the text is `, in` with nothing
+// after it. Requiring a literal `, in ` (with the space) made that line fail to
+// match, and an unmatched line is passed through verbatim, which is exactly the
+// `File "", line 1, in` the filter is supposed to repair. Tolerate both forms.
+var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:,\s*in\s*(.*?))?\s*$/;
 // Pyodide's own frames: the stdlib zip, the _pyodide package, its asm module.
 var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap/;
 // Names Python uses when code has no real file — all mean "the user's program".
 var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
 
 function formatPythonTraceback(msg, mainName) {
-  if (!msg || String(msg).indexOf('File "') === -1) return msg;
+  if (!msg) return msg;
+
+  // `_IncompleteInputError` is Pyodide's internal name for input that ends
+  // mid-statement (`print("helo` at the prompt). CPython raises a plain
+  // SyntaxError there, and the leading underscore advertises an implementation
+  // detail no student should have to recognise — the same reason the frames
+  // below get dropped. Rename it; the message text is already accurate.
+  msg = String(msg).replace(/(^|\n)_IncompleteInputError:/g, '$1SyntaxError:');
+
+  if (msg.indexOf('File "') === -1) return msg;
 
   var lines = String(msg).split('\n');
   var out = [];
@@ -1406,7 +1463,7 @@ function renderDebugStep() {
       jqconsole.Append(loadingHeader());
       jqconsole.Write(debugRec.output.slice(0, st.out));
       if (wantErr) {
-        jqconsole.Write('\n' + debugRec.error + '\n', 'jqconsole-error', false);
+        jqconsole.Write('\n' + escapeConsoleHtml(debugRec.error) + '\n', 'jqconsole-error', false);
       }
     } else if (st.out > debugLastOut) {
       // Forward over new output: append just the delta.
@@ -1470,7 +1527,7 @@ function exitReplay(quiet) {
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
     jqconsole.Write(rec.output);
-    if (rec.error) jqconsole.Write('\n' + rec.error + '\n', 'jqconsole-error', false);
+    if (rec.error) jqconsole.Write('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
   }
   paintVariables();
 }
@@ -1897,7 +1954,7 @@ function startRun() {
     // Show the student THEIR frames, not the runtime's (see formatPythonTraceback).
     var msg = (err && (err.message || err.toString())) || 'Error';
     if (jqconsole) {
-      jqconsole.Write('\n' + formatPythonTraceback(msg, mainFile) + '\n', 'jqconsole-error', false);
+      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(msg, mainFile)) + '\n', 'jqconsole-error', false);
     }
     // collectErrorData below still receives the RAW error: telemetry wants the
     // full stack, only the human-facing console is trimmed.
