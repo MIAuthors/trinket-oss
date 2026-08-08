@@ -306,12 +306,21 @@
   <i class="fa fa-pencil"></i>
   <label class="show-for-large-up">Code</label>
 </a>
-<a class="button run-it menu-button item allow-original"
-   data-action="code.run"
-   title="View the result."
+{# `split` is what renders the dropdown caret (Foundation). python.html and R.html
+   suppress it only when the trinket is locked to one run option — a share that
+   said "Run only" should not offer Console. Same condition here. #}
+<a class="button run-it menu-button item {{'' if (runOption and not runMode) else 'split'}} allow-original"
+   data-action="code.{{runOption if runOption else 'run'}}"
+   title="{{'View the result.' if not runOption or runOption == 'run' else 'Run code interactively.'}}"
    role="button" aria-label="Run Button" tabindex="0">
-  <i class="fa fa-play"></i>
-  <label class="show-for-large-up">Run</label>
+  <i class="fa {{'fa-play' if not runOption or runOption == 'run' else 'fa-terminal'}}"></i>
+  <label class="show-for-large-up">{{'Run' if not runOption or runOption == 'run' else 'Console'}}</label>
+  {# The caret that opens the run_options dropdown below. python.html and R.html
+     have always had it; this template did not, so on a python3 trinket the
+     Console entry config advertises (config.runOption.python3: [run, console])
+     had no way to be reached — the REPL was only ever reachable by URL or by
+     the Share dialog's "Interactive console only". #}
+  <span data-dropdown="run-options" data-options="align:bottom" role="menu"></span>
 </a>
 {# Stop: revealed by the runner only while a program is running (#108).
    Cancellation is cooperative — the program unwinds at its next yield point
@@ -324,6 +333,15 @@
   <i class="fa fa-stop"></i>
   <label class="show-for-large-up">Stop</label>
 </a>
+{% endif %}
+{% endblock %}
+
+{% block run_options %}
+{% if not outputOnly %}
+<ul id="run-options" class="f-dropdown" data-dropdown-content>
+  <li><a class="menu-button" data-action="code.run" data-button="run"><i class="fa fa-play"></i>Run</a></li>
+  <li><a class="menu-button" data-action="code.console" data-button="console"><i class="fa fa-terminal"></i>Console</a></li>
+</ul>
 {% endif %}
 {% endblock %}
 

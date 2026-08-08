@@ -229,4 +229,77 @@ test.describe('Pyodide REPL (#109 spike)', () => {
     }).toPass({ timeout: 60_000 });
   });
 
+
+  // --- The Run menu (Steve: "I don't see console in the run menu?") -----------
+  // config.runOption.python3 is [run, console], and python.html/R.html render a
+  // dropdown offering both — but pyodide.html never defined the run_options block,
+  // so on a python3 trinket the REPL was reachable only by URL or by the Share
+  // dialog. These cover the menu path end to end.
+
+  async function pickRunOption(page, button) {
+    await page.evaluate((b) => {
+      $('.run-it [data-dropdown="run-options"]').trigger('click');
+      $('#run-options a[data-button="' + b + '"]').trigger('click');
+    }, button);
+  }
+
+  test('the Run menu offers Console, and it opens the REPL', async ({ page }) => {
+    await page.goto('/embed/python3');
+
+    expect(await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#run-options a')).map(a => a.getAttribute('data-button'))
+    )).toEqual(['run', 'console']);
+    // the caret that opens it — Foundation renders it from the `split` class
+    expect(await page.evaluate(() => document.querySelector('.run-it').classList.contains('split'))).toBe(true);
+
+    await pickRunOption(page, 'console');
+
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+    expect(await page.evaluate(() =>
+      document.querySelector('.run-it label').textContent.trim()
+    )).toBe('Console');
+  });
+
+  test('re-selecting Console keeps the session instead of resetting it', async ({ page }) => {
+    // consoleResult originally called showResult(), which calls runCode() — so
+    // choosing Console RAN the program, resetting the console and destroying the
+    // REPL's transcript and namespace.
+    await page.goto('/embed/python3');
+    await pickRunOption(page, 'console');
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+
+    await typeLine(page, 'x = 6*7');
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('x = 6*7');
+    }).toPass({ timeout: 30_000 });
+
+    await pickRunOption(page, 'console');          // again, with a live session
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text, 'the session must survive').toContain('x = 6*7');
+      expect(text.match(/on Pyodide/g) || [], 'exactly one banner').toHaveLength(1);
+    }).toPass({ timeout: 30_000 });
+  });
+
+  test('REGRESSION: switching back to Run still runs the program', async ({ page }) => {
+    // showResult() was refactored to share its pane-switch with the REPL; every
+    // run path in the file goes through it.
+    await page.goto('/embed/python3');
+    await pickRunOption(page, 'console');
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('print("ran ok")', 1);
+    });
+    await pickRunOption(page, 'run');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('ran ok');
+    }).toPass({ timeout: 90_000 });
+    expect(await page.evaluate(() =>
+      document.querySelector('.run-it label').textContent.trim()
+    )).toBe('Run');
+  });
+
 });
