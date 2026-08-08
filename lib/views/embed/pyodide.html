@@ -313,6 +313,17 @@
   <i class="fa fa-play"></i>
   <label class="show-for-large-up">Run</label>
 </a>
+{# Stop: revealed by the runner only while a program is running (#108).
+   Cancellation is cooperative — the program unwinds at its next yield point
+   (rate() or time.sleep()). A loop with no yield point freezes the tab, so this
+   button could never be clicked in that case anyway; stopCode() says so. #}
+<a class="stop-it menu-button item allow-original hide"
+   data-action="code.stop"
+   title="Stop the running program."
+   role="button" aria-label="Stop Button" tabindex="0">
+  <i class="fa fa-stop"></i>
+  <label class="show-for-large-up">Stop</label>
+</a>
 {% endif %}
 {% endblock %}
 

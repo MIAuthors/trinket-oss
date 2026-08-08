@@ -292,7 +292,14 @@ var glowScene = null;      // the GlowScript canvas/scene object
 // yield point can't be cancelled this way (they also freeze the tab anyway).
 var CANCEL_MARKER = '__trinket_run_cancelled__';
 var glowRate = null;          // original glow rate(), before our wrapper
-var cancelRequested = false;  // set true to make the next rate() reject
+var cancelRequested = false;  // set true to make the next rate()/sleep() reject
+// Mirror of cancelRequested that PYTHON can see (js.window.…), used by the
+// time.sleep wrapper injected as SLEEP_CANCEL_CODE.
+window.__trinket_cancel_requested = false;
+function setCancelRequested(v) {
+  cancelRequested = v;
+  window.__trinket_cancel_requested = v;
+}
 var rerunQueued = false;      // a Run was clicked mid-run; re-run once it stops
 var runningIsVpython = false; // the in-flight run is a VPython program (cancellable)
 var vpythonBaselineCaptured = false; // folded vpython star-imports into the explorer baseline once
@@ -310,6 +317,36 @@ function installRateCancellation() {
     return glowRate.apply(this, arguments);
   };
 }
+
+// Python-side cancellation at time.sleep(), the same idea as the rate() wrapper
+// above (issue #108).
+//
+// Measured behaviour of an infinite loop in an embed:
+//   while True: pass                       -> tab FROZEN
+//   while True: print('.')                 -> tab FROZEN
+//   while True: print('.'); time.sleep(1)  -> tab RESPONSIVE
+//
+// sleep() yields to the event loop; print() and a bare loop do not. So a loop
+// containing a sleep leaves the UI alive — clicks are delivered, and this hook
+// can raise inside the program at its next sleep, unwinding the loop while the
+// student keeps whatever is in the editor.
+//
+// A loop with NO yield point cannot be stopped by any button: the thread never
+// returns to the event loop, so the click is never delivered in the first place.
+// That case needs a Worker (issue #108 stays open for it).
+var SLEEP_CANCEL_CODE = [
+  'import time as _t',
+  'import js as _js',
+  'if not getattr(_t, "_trinket_wrapped", False):',
+  '    _orig_sleep = _t.sleep',
+  '    def _trinket_sleep(seconds=0):',
+  '        if _js.window.__trinket_cancel_requested:',
+  '            raise KeyboardInterrupt("' + '__trinket_run_cancelled__' + '")',
+  '        return _orig_sleep(seconds)',
+  '    _t.sleep = _trinket_sleep',
+  '    _t._trinket_wrapped = True',
+  'del _t, _js'
+].join('\n');
 
 function isCancelError(err) {
   var msg = (err && (err.message || err.toString())) || '';
@@ -1507,6 +1544,7 @@ function hideVariables() {
 }
 
 function finishRun(serializedCode, err) {
+  $('.stop-it').addClass('hide');
   running = false;
   window.readyForSnapshot = true;
 
@@ -1547,7 +1585,7 @@ function runCode() {
     // request cancellation and queue a fresh run, so clicking Run restarts a
     // running animation. For anything else keep the old behavior (ignore).
     if (runningIsVpython) {
-      cancelRequested = true;
+      setCancelRequested(true);
       rerunQueued = true;
     }
     return;
@@ -1557,7 +1595,10 @@ function runCode() {
 }
 
 function startRun() {
-  cancelRequested = false;
+  setCancelRequested(false);
+  // Offer Stop while the program runs. Cancellation only lands at a yield point
+  // (rate()/time.sleep()); stopCode() tells the student when there isn't one.
+  $('.stop-it').removeClass('hide');
   rerunQueued = false;
   runningIsVpython = false;
 
@@ -1585,6 +1626,11 @@ function startRun() {
 
   ensurePyodide().then(function() {
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
+
+    // Make time.sleep() a cancellation point so Stop can unwind a sleeping loop
+    // (#108). Idempotent and installed once per interpreter; failure here must
+    // never prevent the program from running.
+    try { pyodide.runPython(SLEEP_CANCEL_CODE); } catch (e) {}
 
     // VPython/GlowScript programs take a separate path: glow library + the
     // vpython bridge + async rewriting, rendering 3D into the graphic pane.
@@ -1659,8 +1705,26 @@ function startRun() {
 }
 
 function stopCode() {
-  // Pyodide has no simple interrupt for an in-flight coroutine in this slice.
-  writeOut('\n[stop is not supported for Pyodide trinkets yet]\n');
+  if (!running) return;
+
+  // Cooperative cancellation: request it, and the program unwinds at its next
+  // yield point — rate() for VPython (installRateCancellation) or time.sleep()
+  // (SLEEP_CANCEL_CODE). Nothing is torn down, so the editor keeps its content.
+  setCancelRequested(true);
+  rerunQueued = false;               // Stop means stop, not restart
+  writeOut('\n[stopping…]\n');
+
+  // A loop with NO yield point (while True: pass, or print-only) never returns
+  // to the event loop, so this click could only have been delivered if the
+  // program yields somewhere. If it doesn't, say so rather than leaving the
+  // student staring at "stopping…" forever. See issue #108: interrupting that
+  // case needs Pyodide in a Worker.
+  setTimeout(function() {
+    if (running && cancelRequested) {
+      writeOut('[this program has no pause point (no sleep/rate), so it cannot be '
+             + 'stopped — reload the page to recover]\n');
+    }
+  }, 3000);
 }
 
 (function() {
