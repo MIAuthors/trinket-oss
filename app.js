@@ -230,6 +230,16 @@ const init = async () => {
           const failContext = {};
           try {
             routeParser.addUserContext(failContext, request);
+
+            // A route's fail page (typically login.html) assumes the visitor is
+            // NOT signed in. Handing a login form to someone who already is
+            // hides the actual problem — "this account lacks permission" — which
+            // is how the original report described /admin. So: authenticated and
+            // forbidden gets a real 403 page; everyone else gets the route's
+            // declared fail page.
+            if (statusCode === 403 && request.user) {
+              return h.view('403.html', failContext).code(403);
+            }
             return h.view(failHtml, failContext).code(statusCode);
           } catch (e) {
             // Never let the failure page become its own failure — fall through

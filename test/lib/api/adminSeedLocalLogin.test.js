@@ -75,5 +75,21 @@ describe('local login seeds the site admin role (#74)', () => {
 
     expect(res.statusCode, 'still a 403 — only the rendered page changes').toBe(403);
     expect(body, 'must not fall through to the generic error page').not.toMatch(/Something went wrong/i);
+
+    // A signed-in user must NOT be handed a login form: they are already logged
+    // in, so it hides the real problem. Show what's actually wrong instead.
+    expect(body, 'a signed-in user should be told they lack permission').toMatch(/No access/i);
+    expect(body, 'and should not be shown a password field').not.toMatch(/type="password"/i);
+  });
+
+  it('still shows the login page to an ANONYMOUS visitor', async () => {
+    // The route's fail page assumes a signed-out visitor — that case is
+    // unchanged. (Anonymous /admin is a 401, which redirects to /login.)
+    await flow.switchUser('');
+    const res = await flow.get('/admin');
+
+    expect([302, 200]).toContain(res.statusCode);
+    const body = String(res.payload || res.body || '');
+    expect(body).not.toMatch(/No access/i);
   });
 });
