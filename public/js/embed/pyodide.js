@@ -316,6 +316,77 @@ function isCancelError(err) {
   return msg.indexOf(CANCEL_MARKER) >= 0;
 }
 
+// Strip the runtime's own frames out of a Python traceback before a student
+// reads it (issue #107).
+//
+// PythonError.message is the FULL traceback, and Pyodide executes user code
+// through its own machinery, so a one-line mistake arrives looking like this:
+//
+//   Traceback (most recent call last):
+//     File "/lib/python313.zip/_pyodide/_base.py", line 597, in eval_code_async
+//       await CodeRunner(
+//       ...<9 lines>...
+//       .run_async(globals, locals)
+//     File "/lib/python313.zip/_pyodide/_base.py", line 411, in run_async
+//       coroutine = eval(self.code, globals, locals)
+//     File "", line 8, in
+//   ValueError: invalid literal for int() with base 10: 'hi'
+//
+// Nine of those twelve lines are ours, they come FIRST, and the only line that
+// matters is last. A beginner reads several frames of _base.py before reaching
+// their own error and reasonably concludes they broke the system.
+//
+// Also fixes two smaller defects visible above: the user frame's filename is
+// EMPTY (`File ""`), and the scope name is missing at module level, leaving a
+// dangling `, in`.
+var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:, in (.*))?\s*$/;
+// Pyodide's own frames: the stdlib zip, the _pyodide package, its asm module.
+var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap/;
+// Names Python uses when code has no real file — all mean "the user's program".
+var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
+
+function formatPythonTraceback(msg, mainName) {
+  if (!msg || String(msg).indexOf('File "') === -1) return msg;
+
+  var lines = String(msg).split('\n');
+  var out = [];
+  var keptFrame = false;
+
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(TRACEBACK_FRAME);
+    if (!m) { out.push(lines[i]); continue; }
+
+    var file = m[1];
+    if (TRACEBACK_INTERNAL.test(file)) {
+      // Drop the frame AND the source lines that belong to it: everything
+      // following that is indented further and isn't itself a frame header.
+      while (i + 1 < lines.length
+             && !TRACEBACK_FRAME.test(lines[i + 1])
+             && /^\s{4,}\S/.test(lines[i + 1])) {
+        i++;
+      }
+      continue;
+    }
+
+    keptFrame = true;
+    var scope = (m[3] || '').trim();
+    var name  = TRACEBACK_SYNTHETIC.test(file)
+      ? (mainName || 'main.py')
+      : file.replace(/^.*[\\/]/, '');          // secondary user file: basename only
+    out.push('  File "' + name + '", line ' + m[2] + (scope ? ', in ' + scope : ''));
+  }
+
+  // Every frame was ours — the student has no stack to learn from, so the
+  // "Traceback (most recent call last):" header is just noise above the message.
+  if (!keptFrame) {
+    return out.filter(function(l) {
+      return l.trim() && !/^Traceback \(most recent call last\)/.test(l.trim());
+    }).join('\n');
+  }
+
+  return out.join('\n');
+}
+
 // True when the program is a VPython/GlowScript program: either the classic
 // first-line version header ("Web VPython 3.2" / "GlowScript 3.2 VPython") or
 // an explicit vpython import.
@@ -1643,10 +1714,13 @@ function startRun() {
       return;
     }
     // Python exceptions reject with a PythonError whose message is the traceback.
+    // Show the student THEIR frames, not the runtime's (see formatPythonTraceback).
     var msg = (err && (err.message || err.toString())) || 'Error';
     if (jqconsole) {
-      jqconsole.Write('\n' + msg + '\n', 'jqconsole-error', false);
+      jqconsole.Write('\n' + formatPythonTraceback(msg, mainFile) + '\n', 'jqconsole-error', false);
     }
+    // collectErrorData below still receives the RAW error: telemetry wants the
+    // full stack, only the human-facing console is trimmed.
     finishRun(serializedCode, err);
   });
 
