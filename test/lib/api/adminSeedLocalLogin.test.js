@@ -61,4 +61,19 @@ describe('local login seeds the site admin role (#74)', () => {
 
     expect(flow.lastResponse.statusCode, '/admin should be reachable by a seeded admin').toEqual(200);
   });
+
+  it('renders the login page for a non-admin, not the generic error page', async () => {
+    // Sub-bug 2 of #74: GET /admin declares `fail: { html: 'login.html' }`, but a
+    // PRE-handler that throws (isAdmin -> Boom.forbidden) never reached that, so
+    // the reporter saw "Something went wrong" — reads as a broken site rather
+    // than "you need to sign in". The old test only checked the status code, so
+    // it passed while the page was wrong.
+    delete process.env.ADMIN_EMAILS;
+    await flow.switchUser('user');
+    const res = await flow.get('/admin');
+    const body = String(res.payload || res.body || '');
+
+    expect(res.statusCode, 'still a 403 — only the rendered page changes').toBe(403);
+    expect(body, 'must not fall through to the generic error page').not.toMatch(/Something went wrong/i);
+  });
 });
