@@ -339,14 +339,42 @@ function isCancelError(err) {
 // Also fixes two smaller defects visible above: the user frame's filename is
 // EMPTY (`File ""`), and the scope name is missing at module level, leaving a
 // dangling `, in`.
-var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:, in (.*))?\s*$/;
+// `, in <scope>` is optional, and BOTH halves of it are unreliable: at module
+// level Python leaves the scope name empty, and the line arrives with its
+// trailing whitespace already stripped — so the text is `, in` with nothing
+// after it. Requiring a literal `, in ` (with the space) made that line fail to
+// match, and an unmatched line is passed through verbatim.
+var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:,\s*in\s*(.*?))?\s*$/;
 // Pyodide's own frames: the stdlib zip, the _pyodide package, its asm module.
 var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap/;
 // Names Python uses when code has no real file — all mean "the user's program".
 var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
 
+// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
+// Everything we put in the console is Python text, and Python text is full of
+// angle brackets: a traceback names its scope `<module>`, and repr() renders an
+// object as `<Foo object at 0x…>`. Parsed as HTML those become unknown tags and
+// DISAPPEAR — which is why a traceback rendered as `File "", line 1, in ` with
+// the names silently eaten. It is also an injection hole: an exception message
+// containing markup is executed by the page.
+//
+// Escape here and keep the `false` (jqconsole's own escaping would also swallow
+// the ANSI codes the run path emits) — the convention python.js already uses.
+function escapeConsoleHtml(text) {
+  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
 function formatPythonTraceback(msg, mainName) {
-  if (!msg || String(msg).indexOf('File "') === -1) return msg;
+  if (!msg) return msg;
+
+  // `_IncompleteInputError` is Pyodide's internal name for input that ends
+  // mid-statement. CPython raises a plain SyntaxError there, and the leading
+  // underscore advertises an implementation detail no student should have to
+  // recognise — the same reason the frames below get dropped.
+  msg = String(msg).replace(/(^|\n)_IncompleteInputError:/g, '$1SyntaxError:');
+
+  if (msg.indexOf('File "') === -1) return msg;
 
   var lines = String(msg).split('\n');
   var out = [];
@@ -1235,7 +1263,7 @@ function renderDebugStep() {
       jqconsole.Append(loadingHeader());
       jqconsole.Write(debugRec.output.slice(0, st.out));
       if (wantErr) {
-        jqconsole.Write('\n' + debugRec.error + '\n', 'jqconsole-error', false);
+        jqconsole.Write('\n' + escapeConsoleHtml(debugRec.error) + '\n', 'jqconsole-error', false);
       }
     } else if (st.out > debugLastOut) {
       // Forward over new output: append just the delta.
@@ -1299,7 +1327,7 @@ function exitReplay(quiet) {
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
     jqconsole.Write(rec.output);
-    if (rec.error) jqconsole.Write('\n' + rec.error + '\n', 'jqconsole-error', false);
+    if (rec.error) jqconsole.Write('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
   }
   paintVariables();
 }
@@ -1717,7 +1745,7 @@ function startRun() {
     // Show the student THEIR frames, not the runtime's (see formatPythonTraceback).
     var msg = (err && (err.message || err.toString())) || 'Error';
     if (jqconsole) {
-      jqconsole.Write('\n' + formatPythonTraceback(msg, mainFile) + '\n', 'jqconsole-error', false);
+      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(msg, mainFile)) + '\n', 'jqconsole-error', false);
     }
     // collectErrorData below still receives the RAW error: telemetry wants the
     // full stack, only the human-facing console is trimmed.
