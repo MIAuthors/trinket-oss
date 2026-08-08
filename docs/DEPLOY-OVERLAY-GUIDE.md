@@ -88,6 +88,13 @@ stock config (your values win) and shadows any view/asset by matching relative p
 > ⚠️ The "`local.yaml` poisons tests" caveat applies to the **root** `config/local.yaml`,
 > *not* an overlay's `local.yaml`: tests never set `TRINKET_DEPLOY`, so the overlay
 > (and its `local.yaml`) is inert during test runs.
+>
+> ⚠️ **A self-host (docker compose) production deploy must set `NODE_ENV=production`
+> in its `.env`.** `docker-compose.yml` defaults it to `development` so a plain
+> `docker compose up` stays a dev stack — but that means `local-production.yaml`
+> **never loads** on a compose deploy that doesn't set it, view caching stays off,
+> and `enable: false` route gating is inert. `deploy-cloudrun.sh` sets it for you;
+> compose does not. Check a running deploy with `GET /version` (`nodeEnv`).
 
 ---
 
