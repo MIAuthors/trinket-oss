@@ -27,6 +27,16 @@ test.describe('Stop control (#108, partial)', () => {
     await page.locator('.run-it').first().click();
   }
 
+  // The toolbar re-lays out when Stop appears, so a click fired the instant it
+  // becomes visible can hit Playwright's "element is not stable" check. Wait for
+  // it to settle first — this is test timing, not product behaviour.
+  async function clickStop(page) {
+    const stop = page.locator('.stop-it');
+    await expect(stop).toBeVisible({ timeout: 90_000 });
+    await page.waitForTimeout(500);
+    await stop.click();
+  }
+
   async function output(page) {
     return page.evaluate(() => document.querySelector('#outputContainer')?.innerText || '');
   }
@@ -44,9 +54,7 @@ test.describe('Stop control (#108, partial)', () => {
 
   test('stops a sleeping loop, and the page stays usable', async ({ page }) => {
     await runCode(page, "import time\n\nwhile True:\n    print('tick')\n    time.sleep(1)");
-    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 90_000 });
-
-    await page.locator('.stop-it').click();
+    await clickStop(page);
 
     // The loop unwinds at its next sleep and the run ends — Stop goes away again.
     await expect(page.locator('.stop-it')).toBeHidden({ timeout: 30_000 });
@@ -60,8 +68,7 @@ test.describe('Stop control (#108, partial)', () => {
     // Clicking Run mid-run restarts a VPython animation by design; Stop must NOT
     // inherit that behaviour.
     await runCode(page, "import time\n\nwhile True:\n    print('tick')\n    time.sleep(1)");
-    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 90_000 });
-    await page.locator('.stop-it').click();
+    await clickStop(page);
     await expect(page.locator('.stop-it')).toBeHidden({ timeout: 30_000 });
 
     const before = (await output(page)).length;
@@ -78,5 +85,22 @@ test.describe('Stop control (#108, partial)', () => {
     }).toPass({ timeout: 90_000 });
 
     await expect(page.locator('.stop-it')).toBeHidden();
+  });
+
+  test('REGRESSION: time.sleep() still works normally', async ({ page }) => {
+    // The Stop mechanism wraps time.sleep so it can raise on cancellation. An
+    // early version of that wrapper captured its references as globals and then
+    // deleted the temporary names, so the FIRST sleep() raised NameError —
+    // breaking every program that sleeps, while the Stop tests still passed.
+    // This asserts the ordinary, uncancelled path.
+    await runCode(page, "import time\nprint('before')\ntime.sleep(0.2)\nprint('after')");
+
+    await expect(async () => {
+      const text = await output(page);
+      expect(text).toContain('before');
+      expect(text).toContain('after');          // the sleep returned normally
+      expect(text).not.toContain('NameError');
+      expect(text).not.toContain('Traceback');
+    }).toPass({ timeout: 90_000 });
   });
 });

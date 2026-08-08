@@ -334,15 +334,18 @@ function installRateCancellation() {
 // A loop with NO yield point cannot be stopped by any button: the thread never
 // returns to the event loop, so the click is never delivered in the first place.
 // That case needs a Worker (issue #108 stays open for it).
+// NOTE the default-argument binding: the wrapper must capture the original
+// sleep and the JS window AT DEFINITION TIME. An earlier version referenced them
+// as globals and then deleted the temporary names, so the first sleep() raised
+// NameError — breaking every program that sleeps. Bound defaults survive the del.
 var SLEEP_CANCEL_CODE = [
   'import time as _t',
   'import js as _js',
   'if not getattr(_t, "_trinket_wrapped", False):',
-  '    _orig_sleep = _t.sleep',
-  '    def _trinket_sleep(seconds=0):',
-  '        if _js.window.__trinket_cancel_requested:',
+  '    def _trinket_sleep(seconds=0, _orig=_t.sleep, _win=_js.window):',
+  '        if _win.__trinket_cancel_requested:',
   '            raise KeyboardInterrupt("' + '__trinket_run_cancelled__' + '")',
-  '        return _orig_sleep(seconds)',
+  '        return _orig(seconds)',
   '    _t.sleep = _trinket_sleep',
   '    _t._trinket_wrapped = True',
   'del _t, _js'
