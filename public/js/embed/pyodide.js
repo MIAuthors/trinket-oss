@@ -225,6 +225,24 @@ function escapeConsoleHtml(text) {
   return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
 }
 
+// The DOM half of switching to the output pane, WITHOUT running anything.
+// showResult() does this and then calls runCode(); the REPL needs the switch but
+// must NOT run the program — runCode() resets the console, which would wipe the
+// REPL's transcript and namespace every time Console was selected.
+function showOutputPane() {
+  $('#codeOutput').removeClass('hide');
+  $('#editor').addClass('hide');
+
+  api.closeOverlay('#modules');
+
+  $('#instructionsContainer').addClass('hide');
+  $('#outputContainer').removeClass('hide');
+
+  $('#codeOutputTab').addClass('active');
+  $('#instructionsTab').removeClass('active');
+  hideVariables();     // a run always returns focus to the Result pane
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
@@ -1986,7 +2004,7 @@ window.TrinketAPI = {
     $(document).on('trinket.code.edit',    $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',     $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop',    $.proxy(this.stopExecution, this));
-    $(document).on('trinket.code.console', $.proxy(this.showResult, this));
+    $(document).on('trinket.code.console', $.proxy(this.consoleResult, this));
 
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
     $(document).on('trinket.instructions.view', $.proxy(api.showInstructions, api));
@@ -2126,6 +2144,27 @@ window.TrinketAPI = {
     api.closeOverlay('#modules');
     api.focus();
   },
+  // The Console entry in the run-options dropdown. Previously `trinket.code.console`
+  // was bound straight to showResult, which RUNS the program — so the menu entry
+  // (once it existed) would have silently done the wrong thing rather than opening
+  // the REPL.
+  //
+  // Order matters: showResult() clears api.runMode, so runMode is set after it,
+  // not before.
+  consoleResult : function(event) {
+    if (runOption !== 'console' && event && $(event.target).data('button') === 'console') {
+      api.changeRunOption('console');
+    }
+
+    showOutputPane();
+    api.runMode = 'console';
+    api.triggerRunModeChange();
+
+    // Re-selecting Console while a prompt is already armed would print a second
+    // banner and arm a second prompt on top of the first.
+    if (!replActive) { startRepl(); }
+  },
+
   showResult : function(event) {
     if (runOption !== 'run' && event && $(event.target).data('button') === 'run') {
       api.changeRunOption('run');
@@ -2134,17 +2173,7 @@ window.TrinketAPI = {
     api.triggerRunModeChange();
     api.hasRun = true;
 
-    $('#codeOutput').removeClass('hide');
-    $('#editor').addClass('hide');
-
-    api.closeOverlay('#modules');
-
-    $('#instructionsContainer').addClass('hide');
-    $('#outputContainer').removeClass('hide');
-
-    $('#codeOutputTab').addClass('active');
-    $('#instructionsTab').removeClass('active');
-    hideVariables();     // a run always returns focus to the Result pane
+    showOutputPane();
     exitReplay(true);    // a fresh run invalidates any step-through recording
                          // (quiet: runCode resets the console right after)
 
@@ -2158,9 +2187,6 @@ window.TrinketAPI = {
     stopCode();
   },
   showTestResult : function() {},
-  consoleResult : function(event) {
-    this.showResult(event);
-  },
   toggleModules : function() {},
   hideAll : function() {},
   onOpenOverlay : function() {
@@ -2231,9 +2257,9 @@ window.TrinketAPI = {
     };
   },
   changeRunOption : function(option) {
-    var icon_classes = { run : 'fa fa-play', stop : 'fa fa-stop' };
-    var titles = { run : 'View the result.', stop : 'Stop program.' };
-    var labels = { run : 'Run', stop : 'Stop' };
+    var icon_classes = { run : 'fa fa-play', stop : 'fa fa-stop', console : 'fa fa-terminal' };
+    var titles = { run : 'View the result.', stop : 'Stop program.', console : 'Run code interactively.' };
+    var labels = { run : 'Run', stop : 'Stop', console : 'Console' };
     $('.run-it').data('action', 'code.' + option);
     $('.run-it').attr('title', titles[option]);
     $('.run-it').find('label').text(labels[option]);
