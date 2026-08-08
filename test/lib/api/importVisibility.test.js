@@ -39,4 +39,23 @@ describe('import discoverability (#6)', () => {
     const html = String(res.payload || res.body || '');
     expect(html).not.toContain('Import Trinkets');
   });
+
+  it('exposes canImport to the client app for the My Trinkets toolbar', async () => {
+    // The My Trinkets page is an Angular SPA with no server-side user context,
+    // so its Import button reads this flag. It must be gated identically to the
+    // route — a button that bounces the user to /account/profile is worse than
+    // no button (issue #6).
+    await flow.switchUser('user');
+    const res = await flow.get('/library/trinkets');
+
+    const html = String(res.payload || res.body || '');
+    expect(html, 'the SPA config blob should carry canImport').toMatch(/canImport\s*:\s*(true|false)/);
+  });
+
+  it('reports canImport=false to anonymous visitors', async () => {
+    await flow.switchUser('');
+    const res = await flow.get('/');
+    const html = String(res.payload || res.body || '');
+    expect(html).toMatch(/canImport\s*:\s*false/);
+  });
 });

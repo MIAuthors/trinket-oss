@@ -83,6 +83,12 @@
         emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
         assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
         accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }},
+        {# Whether this user may reach /account/import. Injected here because the
+           My Trinkets page is an Angular SPA with no server-side user context,
+           and its Import button must be gated exactly like the route (issue #6) —
+           a button that bounces the user to /account/profile is worse than none.
+           addUserContext computes it with the same helper the route gate uses. #}
+        canImport         : {{ 'true' if canImport else 'false' }},
         largeUpload       : {
           enabled   : {{ 'true' if (config.imports and config.imports.largeUpload and config.imports.largeUpload.enabled) else 'false' }},
           threshold : {{ config.imports.largeUpload.thresholdBytes if (config.imports and config.imports.largeUpload) else 0 }}
