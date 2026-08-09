@@ -10,6 +10,12 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
     libraryState.resetList();
   }
 
+  // Gate the toolbar's Import button exactly like GET /account/import does
+  // (issue #6). Computed server-side by addUserContext with the same helper the
+  // route uses, so the button can never advertise a page that then redirects the
+  // user away. Same pattern as assetsEnabled in the course editor.
+  $scope.canImport = trinketConfig.get('canImport');
+
   $scope.viewType = cache.get('library-view-type') || 'large';
   $scope.items    = libraryState.trinkets;
   $scope.folders  = libraryState.folders;
