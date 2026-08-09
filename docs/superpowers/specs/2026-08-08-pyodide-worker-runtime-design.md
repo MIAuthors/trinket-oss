@@ -535,3 +535,123 @@ Web VPython less load-bearing for Matter & Interactions courses.
    that trinket depends on, or does the browser half live in this repo? The
    transport abstraction is the same either way, so this can be decided later —
    but it decides where the front-end source lives.
+
+---
+
+## 16. Correction (2026-08-09) — the lineage, and why the vpython-jupyter protocol is the only one that fits an embed
+
+Steve corrected §15's architecture read. The correction matters, and it turns out
+to *strengthen* the proposal rather than weaken it.
+
+### What §15 got wrong
+
+§15 called trinket a "GlowScript publisher" because the `Dockerfile` fetches
+sha256-pinned bundles from the `rswvprunner` GCS bucket. The distribution facts
+are right; the authorship claim is not. **rsWVPRunner is a runner, not a build of
+GlowScript.** The library is authored in the classic `glowscript` repo, and
+`rsWVPRunner/package/` is a copy of `glowscript/package/` — identical bundle
+lists, `glow.2.8` … `glow.3.2` — republished to GCS by `rsWVPRunner/do_build.sh`
+(`gsutil -m cp -r deploy/* gs://rswvprunner`). Trinket *obtains* GlowScript
+through that bucket; it does not author it.
+
+**Consequent correction to the version story.** Upstream there is only
+`glow.3.2.min.js`. The `.2` and `.3` suffixes are trinket's own filenames — the
+`Dockerfile` renames the fetched `glow.3.2.min.js` to `glow.3.2.3.min.js`. So
+`glow.3.2.2` vs `glow.3.2.3` are not two releases; they are **two build vintages
+of the same 3.2 line**, the older from the components tarball. vpython-jupyter's
+vendored `glow.min.js` also reports `version:"3.2"`. Everything in play is on the
+3.2 line, which makes alignment a question of *build vintage and a single source
+of truth*, not of version compatibility. §15's finding that `pyodide.js:23` pins
+the older vintage still stands, and reads as a smaller problem than stated.
+
+### The actual lineage — three implementations, one library
+
+| | Implementation | Where Python runs | Where GlowScript runs | Coupling |
+|---|---|---|---|---|
+| 1 | classic `glowscript` GAE Flask app (oldest) | **nowhere** — RapydScript transpiles Python → JS | main thread | same realm; `rate()` is a cooperative yield |
+| 2 | `vpython-jupyter` | **real CPython, in a Jupyter kernel** (separate process) | main thread | **comm channel** — buffered, browser-paced |
+| 3a | `rsWVPRunner` (planned split, part 2) | nowhere — RapydScript, as #1 | iframe | as #1, relocated into an iframe |
+| 3b | `wmWVPRunner` (planned split, part 3) | **CPython in Pyodide/wasm** | main thread | same realm — `from js import sphere, box, rate` |
+
+The planned split of the Flask app is (1) a Flask app serving code from Datastore,
+(2) rsWVPRunner, (3) wmWVPRunner — the last two being the same runner over
+different execution engines.
+
+**Trinket's Pyodide Web VPython is 3b.** That is where our bridge came from, and
+3b's defining property — Python and GlowScript in the *same realm* — is exactly
+what D2 encodes when it says moving VPython off-thread is "a replacement, not a
+port".
+
+So Steve's proposal, stated precisely: **replace wmWVPRunner's thin-façade
+`vpython` package with vpython-jupyter's protocol package.** They are not variants
+of one design; they are opposite strategies. wmWVPRunner's `vpython/` is a façade
+(`core_funcs.py`, `vec_js.py`, `shapes_piodide.py`, `_async_transform.py`) over JS
+objects in the same realm. vpython-jupyter's is the real object model
+(`vpython.py`) with shadow state, feeding the browser a command stream.
+
+### Why this is not merely an alternative — the SAB evidence
+
+**Steve has already built the other worker port.** `wmWVPRunner` contains
+"Option C (WebWorker)": a design spec and plan dated 2026-06-13, 5 phases, 16
+tasks, 14 commits, documented in the webvpython `AGENTS.md`. Its architecture:
+
+- `rate()` posts a message, then **`Atomics.wait`** — blocked until the main
+  thread renders and notifies
+- **every graphics call** does the same: `sphere(...)` posts `call_gfx` and blocks
+  on `Atomics.wait` until an objectId comes back
+- therefore **COOP/COEP headers** on both the Flask host and the Vite runner
+
+Status: code complete, runtime integration broken — the iframe cannot reach the
+dev server, with the COOP/COEP additions among the suspected causes.
+
+That is the cost of moving a *synchronous façade* off-thread: you must simulate
+synchrony, and `SharedArrayBuffer` is the only way to do it. And for trinket that
+path is not expensive but **impossible** — SAB requires cross-origin isolation,
+an iframe is only isolated if the **top-level page** is, and trinket embeds live
+on LMS pages and teachers' blogs we will never control. That is Global Constraint
+1, and Option C is the concrete demonstration of it.
+
+**vpython-jupyter needs none of it**, because it never had synchrony to preserve:
+
+- updates are buffered in `baseObj.updates` = `{cmds, methods, attrs}`
+  (`vpython.py:204`)
+- the **browser drives the flush** — `glowcomm.js` sends a canvas-update event
+  about every 33 ms; `trigger()` packages the buffer and calls `sender(objdata)`
+  (`vpython.py:321-337`, and the design note at `:356-373`)
+- attribute reads are served from Python-side shadow state — no round trip
+- backpressure is `while not baseObj.sent: time.sleep(0.001)` (`:291`) — a *yield
+  point*, harmless in a worker, and already what our cancellation hooks key on
+
+A Web Worker is just one more "separate execution context reached by an
+asynchronous channel" — the situation vpython-jupyter was built for. The port is
+substituting `sender`.
+
+**This is the strongest argument available for the proposal:** of the two worker
+designs, only the vpython-jupyter one can run in a trinket embed at all.
+
+### cyvector is a performance question with a known answer
+
+vpython-jupyter's `_vector_import_helper.py` falls back to pure-Python `vector.py`
+when the Cython `cyvector` is unavailable, so nothing blocks. But vector math is
+the hot path, and `trigger()` converts vectors on every flush — so the fallback
+is a real cost, not a free one.
+
+Steve has built the wasm wheel before, and webvpython's `AGENTS.md` carries the
+exact recipe. It is currently disabled in `wmWVPRunner/vpython/vec_js.py` only
+because the existing wheel is `cp311` / Emscripten 3.1.39 while Pyodide 0.29.4
+needs `cp313` / 3.1.58; the source with its kwargs fix lives in Steve's Pyodide
+fork (`packages/cyvector/cyvector/cyvector.pyx`, `sjs` branch). A rebuilt wheel
+would drop straight into vpython-jupyter through that same import helper — **one
+wheel serving both**.
+
+### How this changes the recommendation
+
+D2 should be reversed, for a sharper reason than §14 gave. It was priced as "the
+bridge is expensive to replace". The real finding is that **the bridge cannot be
+moved off-thread in an embed at any price**, and the replacement is a package that
+already runs the way an embed requires.
+
+The spike in §14/§15 is unchanged but its question sharpens: install `vpython`
+into Pyodide in the worker, swap `sender` for a `postMessage` function, and see
+whether the buffered `trigger()` loop drives a scene. Sequencing is still after
+#125 has landed and run on the trials.
