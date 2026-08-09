@@ -400,6 +400,11 @@ is the shape it is built for, and is far less code than replacing the protocol.
 
 ### The open risk: GlowScript version alignment
 
+> **Superseded by §15.** Written on the assumption that vpython-jupyter is a
+> third-party dependency whose GlowScript we would have to accept. It is Steve's
+> repository, and trinket *builds* the GlowScript both sides should use, so the
+> alignment runs the other way. Left in place as the record of what was assumed.
+
 Trinket loads `glow.3.2.2.min.js` and the webvpython `vpython.zip`;
 vpython-jupyter ships its own `glow.min.js` (~575 KB) plus `gs_version.py`.
 Adopting the package means adopting **its** GlowScript, or proving ours is
@@ -427,3 +432,106 @@ and it is a day's work rather than a project.
 new VPython implementation is the highest-risk change available to this codebase —
 it touches the feature Matter & Interactions courses depend on most — and it
 should not ride along with the runtime change.
+
+---
+
+## 15. Addendum (2026-08-09, later) — vpython-jupyter is ours to change, and the alignment runs the other way
+
+**Status: still a proposal.** Two facts from Steve reframe §14 enough to be worth
+recording separately rather than editing it away:
+
+1. **`vpython-jupyter` is his repository.** It can be changed to make this work —
+   it is not a third-party dependency to be accommodated.
+2. **The ambition is larger than a transport.** vpython-jupyter has been stagnant;
+   trinket is actively maintained. Marrying them gives the package a maintained
+   home, and the same work is what makes vpython-jupyter run in **VS Code and
+   Colab**, which is the outcome Steve is most interested in.
+
+### The version risk inverts: trinket is a GlowScript *publisher*, not a consumer
+
+§14 recorded "adopting the package means adopting **its** GlowScript" as the
+likeliest source of breakage. That is backwards. The supply chain, read off the
+build:
+
+- `Dockerfile` fetches `glow.3.2.min.js`, `RScompiler.3.2.min.js`,
+  `RSrun.3.2.min.js` from `https://storage.googleapis.com/rswvprunner/package`,
+  installs them as `*.3.2.3.min.js`, and **verifies each against a pinned
+  sha256** — an intentional republish upstream fails the build instead of
+  silently shipping.
+- Those artifacts are built from `~/Development/glow-repos/webvpython/rsWVPRunner`
+  and pushed to GCS by `do_build.sh`; `scripts/setup-glowscript.sh` installs
+  either the local build or the GCS copy into a running dev container.
+- vpython-jupyter vendors `vpython/vpython_libraries/glow.min.js`, which reports
+  `glowscript={version:"3.2"}` — the **same 3.2 line**, not a version boundary to
+  cross.
+
+So this is an alignment, not a port: **vpython-jupyter should consume trinket's
+rsWVPRunner build**, vendored at release time under the same sha-pinning
+discipline, and `gs_version.py` keeps working unchanged — it reads the version out
+of whatever `glow.min.js` is present. One GlowScript build, two consumers, one
+place to fix a rendering bug.
+
+### A drift inside trinket, found while checking this
+
+`public/js/embed/pyodide.js:23` hardcodes
+`/components/vpython-glowscript/package/glow.3.2.2.min.js`. The Dockerfile
+provisions **3.2.3** from rsWVPRunner alongside it; 3.2.2 is the older copy that
+"stays in place as a fallback" from the components tarball. The Pyodide Web VPython
+path is therefore running an older GlowScript than the `glowscript` embeds do, and
+it does not pick up an rsWVPRunner redeploy at all.
+
+Worth settling on its own merits, independent of any vpython-jupyter decision: if
+3.2.3 is correct for the Pyodide path, this is a one-line change plus a smoke test;
+if 3.2.2 is deliberate, the reason belongs in a comment next to the pin.
+
+### The marriage: one transport interface, several hosts
+
+vpython-jupyter today has exactly two front-ends, and neither reaches VS Code or
+Colab:
+
+| Front-end | Opens with | Where it works |
+|---|---|---|
+| `vpython_libraries/glowcomm.js` | `define([...])` (requirejs) then `IPython.notebook.kernel.comm_manager.register_target('glow', …)` | classic Notebook only — both globals are classic-only |
+| `labextension/vpython` | a JupyterLab plugin (`src/index.ts`) | JupyterLab (the recent `jupyterlab4` merges) |
+
+VS Code's notebook UI loads neither: it does not expose `IPython.notebook`, and it
+does not load JupyterLab extensions. Colab has its own output-frame model. The
+neutral shape that satisfies all of them — **and** the trinket worker — is the same
+one: **a self-contained HTML+JS front-end that owns the GlowScript canvas and takes
+messages over an injected send/receive pair**, with the host supplying the pipe:
+
+| Host | The pipe |
+|---|---|
+| trinket worker (#108/#125) | `postMessage` on the existing worker channel |
+| classic Notebook / JupyterLab | the existing Jupyter comm (today's two front-ends become thin adapters) |
+| VS Code | the notebook renderer's messaging API |
+| Colab | its output-frame channel |
+
+The Python side already anticipates this: `baseObj.__init__` picks
+`with_notebook` or `no_notebook` at runtime (`vpython.py:265-267`) behind a
+module-global `sender`. Making that seam explicit — a named transport interface
+with the existing two as implementations — is the change that buys all four hosts
+at once. That is the concrete meaning of "marry them": **trinket contributes the
+transport abstraction and the browser front-end, and supplies the GlowScript
+build; vpython-jupyter keeps owning the object protocol.**
+
+This also disposes of §14's "`glowcomm.js` has to be rewritten against our
+channel" as if it were a cost unique to trinket. It is not — it is the piece
+VS Code and Colab need too, so it is shared work rather than fork work.
+
+### What this does not change
+
+The sequencing in §14 stands, and if anything matters more now: **spike first**
+(install `vpython` into Pyodide in the worker, import it, see where it stops), and
+**not until #125 has landed and run on the trials**. A larger prize does not make
+Web VPython less load-bearing for Matter & Interactions courses.
+
+### Open questions for Steve
+
+1. Does rsWVPRunner's `glow.3.2.min.js` satisfy vpython-jupyter's front-end, or
+   has its vendored copy diverged? (The spike answers this incidentally.)
+2. Is the `pyodide.js` 3.2.2 pin deliberate?
+3. Does "married" mean vpython-jupyter stays a separately released PyPI package
+   that trinket depends on, or does the browser half live in this repo? The
+   transport abstraction is the same either way, so this can be decided later —
+   but it decides where the front-end source lives.
