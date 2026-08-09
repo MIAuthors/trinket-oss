@@ -103,6 +103,45 @@
       return /(^|[^.\w])input\s*\(/.test(src || '') || /\bconsole\s*\.\s*input\s*\(/.test(src || '');
     }
 
+    // ---- matplotlib ---------------------------------------------------------
+    //
+    // The main thread uses the 'webagg' backend, which draws into
+    // document.pyodideMplTarget. A worker has no document, so it renders
+    // headlessly with Agg and ships each figure to the page as a PNG.
+    //
+    // The spec's follow-up swaps this payload for backend_webagg_core diffs —
+    // the ipympl architecture — over this SAME `figure` message, so the seam
+    // does not change when interactivity lands.
+    self.__trinket_worker_figure = function(b64) {
+      post({ type: 'figure', id: currentRunId, figureId: 'fig', kind: 'png', data: String(b64) });
+    };
+
+    var MPL_SETUP = [
+      'import matplotlib',
+      "matplotlib.use('Agg')",
+      "matplotlib.rcParams['figure.autolayout'] = True",
+      'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js',
+      'def _trinket_show(*a, **k):',
+      '    for _num in _plt.get_fignums():',
+      '        _buf = _io.BytesIO()',
+      "        _plt.figure(_num).savefig(_buf, format='png')",
+      '        _js.__trinket_worker_figure(_b64.b64encode(_buf.getvalue()).decode())',
+      "    _plt.close('all')",
+      '_plt.show = _trinket_show'
+    ].join('\n');
+
+    // Any figure the program left open but never showed, flushed at the end —
+    // the same courtesy the main thread does with `if _plt.get_fignums()`.
+    var MPL_FLUSH = [
+      'import matplotlib.pyplot as _plt',
+      'if _plt.get_fignums():',
+      '    _plt.show()'
+    ].join('\n');
+
+    function usesMatplotlib(src) {
+      return /(^|\n)\s*(import|from)\s+[^\n#]*\bmatplotlib\b/.test(src || '');
+    }
+
     var run = function(msg) {
       currentRunId = msg.id;
 
@@ -127,8 +166,23 @@
           })
         : Promise.resolve(source);
 
+      var mpl = usesMatplotlib(source);
+
       return prepared
+        .then(function(src) {
+          // Pyodide-bundled packages the program imports (numpy, matplotlib,
+          // pandas, …) must be installed here too — the worker has its own
+          // interpreter, so the main thread's loadPackagesFromImports does not
+          // help it.
+          return pyodide.loadPackagesFromImports(src).then(function() {
+            return mpl ? pyodide.runPythonAsync(MPL_SETUP).then(function() { return src; })
+                       : src;
+          });
+        })
         .then(function(src) { return pyodide.runPythonAsync(src); })
+        .then(function() {
+          return mpl ? pyodide.runPythonAsync(MPL_FLUSH) : null;
+        })
         .then(function() { post(buildRunReply(msg.id, { ok: true })); })
         .catch(function(err) {
           post(buildRunReply(msg.id, { ok: false, traceback: String(err && err.message || err) }));

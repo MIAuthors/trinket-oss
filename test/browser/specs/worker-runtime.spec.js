@@ -122,4 +122,40 @@ test.describe('Worker runtime (#108)', () => {
     }).toPass({ timeout: 120_000 });
   });
 
+
+  test('a matplotlib figure from the worker is displayed', async ({ page }) => {
+    // A worker has no document, so the webagg backend the main thread uses
+    // cannot work. It renders headlessly with Agg and ships a PNG.
+    await editorRun(page, [
+      'import matplotlib.pyplot as plt',
+      'plt.plot([1, 2, 3], [2, 4, 9])',
+      'plt.show()'
+    ].join('\n'));
+
+    await expect(page.locator('#graphic img.worker-figure')).toBeVisible({ timeout: 240_000 });
+    const src = await page.locator('#graphic img.worker-figure').getAttribute('src');
+    expect(src.startsWith('data:image/png;base64,')).toBe(true);
+    expect(src.length).toBeGreaterThan(1000);        // a real plot, not a blank stub
+  });
+
+  test('a figure left open without show() is still flushed', async ({ page }) => {
+    // Students routinely omit plt.show(); the main thread flushes for them, so
+    // the worker must too or the plot silently vanishes.
+    await editorRun(page, [
+      'import matplotlib.pyplot as plt',
+      'plt.plot([1, 2, 3])'
+    ].join('\n'));
+
+    await expect(page.locator('#graphic img.worker-figure')).toBeVisible({ timeout: 240_000 });
+  });
+
+  test('numpy is installed in the worker too', async ({ page }) => {
+    // The worker has its own interpreter, so the main thread's
+    // loadPackagesFromImports does nothing for it.
+    await editorRun(page, 'import numpy as np\nprint(np.arange(3).sum())');
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('3');
+    }).toPass({ timeout: 240_000 });
+  });
+
 });

@@ -60,6 +60,16 @@
         return;
       }
 
+      // A figure belongs to a run, so it is scoped like input-request: a figure
+      // from a worker we already replaced must not paint over the new run's
+      // output. (The plan suggested rendering figures unconditionally; scoping
+      // them is strictly safer and costs nothing.)
+      if (msg.type === 'figure') {
+        if (!current || msg.id !== current.id) return;
+        if (opts.onFigure) opts.onFigure(msg);
+        return;
+      }
+
       // A boot failure carries no run id — it happened before any run existed.
       // The id check below would drop it, leaving the page waiting on a worker
       // that will never become ready. Report it and settle whatever is waiting.

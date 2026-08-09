@@ -1845,6 +1845,16 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     onStdout   : function(text) { writeOut(text); },
+    onFigure : function(msg) {
+      var wrap = document.getElementById('graphic');
+      if (!wrap) return;
+      var img = document.createElement('img');
+      img.className = 'worker-figure';
+      img.style.maxWidth = '100%';
+      img.src = 'data:image/png;base64,' + msg.data;
+      wrap.appendChild(img);
+      showGraphic();          // split the pane, as the main-thread path does
+    },
     onInputRequest : function(prompt) {
       // The same jq-console widget console.input() uses, so a prompt looks
       // identical whichever runtime is executing.
