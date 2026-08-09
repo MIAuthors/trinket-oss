@@ -112,26 +112,161 @@
     // The spec's follow-up swaps this payload for backend_webagg_core diffs —
     // the ipympl architecture — over this SAME `figure` message, so the seam
     // does not change when interactivity lands.
+    // Static PNG, kept as the fallback path (see MPL_FALLBACK below).
     self.__trinket_worker_figure = function(b64) {
       post({ type: 'figure', id: currentRunId, figureId: 'fig', kind: 'png', data: String(b64) });
     };
 
+    // Interactive path. Sub-kinds ride on the spec's `figure` message rather than
+    // inventing new top-level types.
+    var mplAssetsSent = false;
+    self.__trinket_worker_mpl_assets = function(jsSrc, css, imagesJson) {
+      if (mplAssetsSent) return;                 // one copy per worker is plenty
+      mplAssetsSent = true;
+      post({ type: 'figure', id: currentRunId, kind: 'assets',
+             js: String(jsSrc), css: String(css), images: String(imagesJson || '{}') });
+    };
+    self.__trinket_worker_mpl_new = function(figid) {
+      post({ type: 'figure', id: currentRunId, figureId: String(figid), kind: 'new' });
+    };
+    self.__trinket_worker_mpl = function(figid, sub, payload) {
+      post({ type: 'figure', id: currentRunId, figureId: String(figid), kind: String(sub), data: String(payload) });
+    };
+
+    // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
+    // transport-agnostic — upstream webagg carries its messages over a WebSocket
+    // from a Tornado server, ipympl over a Jupyter comm. We carry them over
+    // postMessage, so the page gets matplotlib's real mpl.js frontend and its
+    // whole toolbar (home / pan / zoom / save / format) with no document here.
+    //
+    // mpl.js and mpl.css are read from THIS matplotlib's own web_backend
+    // directory, so the frontend can never skew from the backend driving it.
+    // Pyodide's matplotlib PATCHES backend_webagg_core to do
+    // `from js import alert, document` at module import — it is not the
+    // transport-agnostic upstream module. The DOM is used only by its download
+    // helper (building an <a> to save a file); the protocol machinery
+    // (get_diff_image / handle_json / FigureManagerWebAgg) never touches it.
+    //
+    // Inert stubs therefore make the import succeed with nothing else lost:
+    // saving is handled on the page from the canvas, which is where the real
+    // download has to happen anyway.
+    function installDomStubs() {
+      if (typeof self.document === 'undefined') {
+        self.document = {
+          createElement: function() {
+            return { style: {}, setAttribute: function() {}, click: function() {},
+                     appendChild: function() {}, removeChild: function() {} };
+          },
+          body: { appendChild: function() {}, removeChild: function() {} }
+        };
+      }
+      if (typeof self.alert === 'undefined') {
+        self.alert = function() {};
+      }
+    }
+
     var MPL_SETUP = [
       'import matplotlib',
-      "matplotlib.use('Agg')",
+      "matplotlib.use('Agg')",              // a real canvas is never drawn here
       "matplotlib.rcParams['figure.autolayout'] = True",
-      'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js',
+      'try:',
+      "    matplotlib.rcParams['figure.figsize'] = [__trinket_figw__, __trinket_figh__]",
+      'except NameError:',
+      '    pass',
+      'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
+      'from matplotlib.backends import backend_webagg_core as _wac',
+      '',
+      '_trinket_managers = {}',
+      '',
+      '# Module level ON PURPOSE: inside a class body Python mangles any name',
+      '# starting with two underscores, so `_js.__trinket_worker_mpl` would',
+      '# become `_js._TrinketSocket__trinket_worker_mpl` and fail at runtime.',
+      'def _trinket_mpl_send(figid, sub, payload):',
+      '    _js.__trinket_worker_mpl(figid, sub, payload)',
+      '',
+      'class _TrinketSocket:',
+      '    # matplotlib calls send_json/send_binary; supports_binary=False makes it',
+      '    # hand us a base64 data URI, which mpl.js accepts as text — so no Blob',
+      '    # plumbing is needed across postMessage.',
+      '    supports_binary = False',
+      '    def __init__(self, figid):',
+      '        self.figid = figid',
+      '    def send_json(self, content):',
+      '        _trinket_mpl_send(self.figid, "json", _json.dumps(content))',
+      '    def send_binary(self, blob):',
+      '        _trinket_mpl_send(self.figid, "text",',
+      '                          "data:image/png;base64," + _b64.b64encode(blob).decode())',
+      '',
+      'def _trinket_send_assets():',
+      '    _wb = _os.path.join(_os.path.dirname(matplotlib.__file__), "backends", "web_backend")',
+      '    # get_javascript() is mpl.js PLUS mpl.toolbar_items, mpl.extensions and',
+      '    # the default filetype. Reading mpl.js off disk alone leaves',
+      '    # toolbar_items undefined, and the toolbar renders with no buttons.',
+      '    _js_src = _wac.FigureManagerWebAgg.get_javascript()',
+      '    try:',
+      '        with open(_os.path.join(_wb, "css", "mpl.css")) as _f:',
+      '            _css = _f.read()',
+      '    except OSError:',
+      '        _css = ""',
+      '    # mpl.js asks the EMBEDDER for toolbar icon URLs via',
+      '    # mpl.toolbar_image_callback — upstream webagg has a Tornado server to',
+      '    # serve them. We have none, so the icons ride along as data URIs.',
+      '    _imgs = {}',
+      '    _idir = _os.path.join(_wb, "images")',
+      '    if _os.path.isdir(_idir):',
+      '        for _name in _os.listdir(_idir):',
+      '            if _name.endswith(".png"):',
+      '                with open(_os.path.join(_idir, _name), "rb") as _f:',
+      '                    _imgs[_name[:-4]] = _b64.b64encode(_f.read()).decode()',
+      '    _js.__trinket_worker_mpl_assets(_js_src, _css, _json.dumps(_imgs))',
+      '',
       'def _trinket_show(*a, **k):',
+      '    _trinket_send_assets()',
       '    for _num in _plt.get_fignums():',
-      '        _buf = _io.BytesIO()',
-      "        _plt.figure(_num).savefig(_buf, format='png')",
-      '        _js.__trinket_worker_figure(_b64.b64encode(_buf.getvalue()).decode())',
-      "    _plt.close('all')",
+      '        _fig = _plt.figure(_num)',
+      '        _figid = "fig" + str(_num)',
+      '        if _figid in _trinket_managers:',
+      '            continue',
+      '        _canvas = _wac.FigureCanvasWebAggCore(_fig)',
+      '        _manager = _wac.FigureManagerWebAgg(_canvas, _num)',
+      '        _trinket_managers[_figid] = _manager',
+      '        # Announce the figure BEFORE attaching the socket. add_web_socket',
+      '        # starts sending immediately, and postMessage preserves order — so',
+      '        # attaching first delivers draw messages for a figure the page has',
+      '        # not created yet, and they are dropped.',
+      '        _js.__trinket_worker_mpl_new(_figid)',
+      '        _manager.add_web_socket(_TrinketSocket(_figid))',
+      '        # The figure was already rendered by Agg before this manager',
+      '        # existed, so no draw event will fire on its own and no image',
+      '        # would ever be sent. Force the first frame.',
+      '        _canvas.draw_idle()',
+      '        _manager.refresh_all()',
+      '',
+      'def _trinket_mpl_event(figid, payload):',
+      '    _m = _trinket_managers.get(figid)',
+      '    if _m is None:',
+      '        return',
+      '    _evt = _json.loads(payload)',
+      "    # Pyodide's FigureManagerWebAgg does not implement the binary",
+      "    # negotiation and prints 'Unhandled message type supports_binary' to",
+      '    # stderr — which lands in the student\'s console. Our socket already',
+      '    # declines binary (supports_binary = False), so the message is moot.',
+      "    if _evt.get('type') == 'supports_binary':",
+      '        return',
+      '    _m.handle_json(_evt)',
+      '    # Upstream webagg has a Tornado event loop that pumps refresh_all();',
+      '    # here nothing does, so a handled event (zoom, pan, home) updates the',
+      '    # figure state and then never ships the redrawn frame. Pump it.',
+      '    try:',
+      '        _m.refresh_all()',
+      '    except Exception:',
+      '        pass',
+      '',
       '_plt.show = _trinket_show'
     ].join('\n');
 
     // Any figure the program left open but never showed, flushed at the end —
-    // the same courtesy the main thread does with `if _plt.get_fignums()`.
+    // the same courtesy the main thread does. Students routinely omit show().
     var MPL_FLUSH = [
       'import matplotlib.pyplot as _plt',
       'if _plt.get_fignums():',
@@ -175,6 +310,17 @@
           // interpreter, so the main thread's loadPackagesFromImports does not
           // help it.
           return pyodide.loadPackagesFromImports(src).then(function() {
+            if (mpl) {
+              installDomStubs();
+              // Default figure size chosen to fit the page's graphic pane. Only
+              // the DEFAULT — a program setting its own figsize still wins.
+              var gw = Number(msg.graphicWidth) || 0;
+              if (gw > 200) {
+                var inches = Math.max(2.4, (gw - 16) / 100);
+                pyodide.globals.set('__trinket_figw__', inches);
+                pyodide.globals.set('__trinket_figh__', Math.round(inches * 0.72 * 100) / 100);
+              }
+            }
             return mpl ? pyodide.runPythonAsync(MPL_SETUP).then(function() { return src; })
                        : src;
           });
@@ -193,6 +339,15 @@
       var msg = e.data || {};
       try {
         if (msg.type === 'init') { boot(msg); return; }
+
+        if (msg.type === 'mpl-event') {
+          if (pyodide) {
+            pyodide.globals.set('__mpl_figid__', msg.figureId);
+            pyodide.globals.set('__mpl_payload__', msg.content);
+            try { pyodide.runPython('_trinket_mpl_event(__mpl_figid__, __mpl_payload__)'); } catch (e) {}
+          }
+          return;
+        }
 
         if (msg.type === 'stdin-reply') {
           if (pendingInput) {

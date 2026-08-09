@@ -132,10 +132,37 @@ test.describe('Worker runtime (#108)', () => {
       'plt.show()'
     ].join('\n'));
 
-    await expect(page.locator('#graphic img.worker-figure')).toBeVisible({ timeout: 240_000 });
-    const src = await page.locator('#graphic img.worker-figure').getAttribute('src');
-    expect(src.startsWith('data:image/png;base64,')).toBe(true);
-    expect(src.length).toBeGreaterThan(1000);        // a real plot, not a blank stub
+    // Either shape is acceptable: the interactive mpl.js canvas, or the static
+    // PNG fallback if the frontend could not load. A plot must ALWAYS appear.
+    await expect(page.locator('#graphic .worker-figure')).toBeVisible({ timeout: 240_000 });
+
+    const shape = await page.evaluate(() => {
+      const host = document.querySelector('#graphic .mpl-figure');
+      if (host && host.querySelector('canvas.mpl-canvas')) return 'interactive';
+      return document.querySelector('#graphic img.worker-figure') ? 'png' : 'none';
+    });
+    expect(['interactive', 'png']).toContain(shape);
+
+    if (shape === 'interactive') {
+      // The toolbar is the point of the interactive path (home/back/forward/
+      // pan/zoom/download) — its absence means we silently lost it.
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#graphic .mpl-figure button').length
+      )).toBeGreaterThanOrEqual(5);
+      // The canvas element exists before its first frame arrives over the
+      // channel, so poll for actual ink rather than checking once.
+      await expect(async () => {
+        const ink = await page.evaluate(() => {
+          const c = document.querySelector('#graphic .mpl-figure canvas.mpl-canvas');
+          if (!c || !c.width) return 0;
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          let n = 0;
+          for (let i = 0; i < d.length; i += 4) { if (d[i + 3] > 0 && d[i] < 250) n++; }
+          return n;
+        });
+        expect(ink, 'the plot must actually be drawn').toBeGreaterThan(500);
+      }).toPass({ timeout: 60_000 });
+    }
   });
 
   test('a figure left open without show() is still flushed', async ({ page }) => {
@@ -146,7 +173,7 @@ test.describe('Worker runtime (#108)', () => {
       'plt.plot([1, 2, 3])'
     ].join('\n'));
 
-    await expect(page.locator('#graphic img.worker-figure')).toBeVisible({ timeout: 240_000 });
+    await expect(page.locator('#graphic .worker-figure')).toBeVisible({ timeout: 240_000 });
   });
 
   test('numpy is installed in the worker too', async ({ page }) => {

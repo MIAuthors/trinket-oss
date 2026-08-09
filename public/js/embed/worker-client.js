@@ -118,7 +118,7 @@
     ensureWorker();
 
     return {
-      run: function(source, files) {
+      run: function(source, files, opts2) {
         var w = ensureWorker();
         var id = 'run-' + (++seq);
         return new Promise(function(resolve) {
@@ -128,7 +128,8 @@
             // while Pyodide was still booting.
             if (worker === w && current && current.id === id) {
               w.postMessage({ type: 'run', id: id, source: source, files: files || null,
-                              transformUrl: opts.transformUrl });
+                              transformUrl: opts.transformUrl,
+                              graphicWidth: (opts2 && opts2.graphicWidth) || 0 });
             }
           });
         });
@@ -139,6 +140,13 @@
       stop: function() {
         if (worker) { worker.terminate(); worker = null; }
         settle();
+      },
+
+      // Toolbar clicks and mouse events, back to the figure's manager.
+      sendMplEvent: function(figureId, content) {
+        if (worker) {
+          worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
+        }
       },
 
       isRunning: function() { return !!current; },

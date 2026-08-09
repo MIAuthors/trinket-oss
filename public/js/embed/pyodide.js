@@ -1845,16 +1845,7 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     onStdout   : function(text) { writeOut(text); },
-    onFigure : function(msg) {
-      var wrap = document.getElementById('graphic');
-      if (!wrap) return;
-      var img = document.createElement('img');
-      img.className = 'worker-figure';
-      img.style.maxWidth = '100%';
-      img.src = 'data:image/png;base64,' + msg.data;
-      wrap.appendChild(img);
-      showGraphic();          // split the pane, as the main-thread path does
-    },
+    onFigure : function(msg) { handleWorkerFigure(msg); },
     onInputRequest : function(prompt) {
       // The same jq-console widget console.input() uses, so a prompt looks
       // identical whichever runtime is executing.
@@ -1887,13 +1878,153 @@ var workerRunError = null;   // set by onError so finishRun() can report it
 // the worker can write the secondary .py modules into its own FS exactly as
 // syncFilesToFS() does for the main thread. `serialized` is what finishRun()
 // reports to analytics, matching the main path.
+// #108: matplotlib figures coming from the worker.
+//
+// Two shapes arrive on the same `figure` message:
+//   kind 'png'                  — the static fallback
+//   kind 'assets'/'new'/'json'/'text' — matplotlib's own webagg protocol
+//
+// The interactive path drives matplotlib's real mpl.js, so the figure keeps its
+// toolbar (home / back / forward / pan / zoom / save / format). mpl.js talks to
+// a WebSocket; we hand it an object with the same shape whose send() is a
+// postMessage to the worker. That is exactly what ipympl does with a Jupyter
+// comm, and what JupyterLite therefore does from a worker kernel.
+var mplLoaded  = false;   // mpl.js evaluated into the page
+var mplFigures = {};      // figureId -> { fig, socket }
+
+function ensureMplAssets(msg) {
+  if (mplLoaded) return true;
+  try {
+    if (msg.css) {
+      var style = document.createElement('style');
+      style.textContent = msg.css;
+      document.head.appendChild(style);
+    }
+    // mpl.js is a classic script that defines a global `mpl`.
+    (0, eval)(msg.js);
+    mplLoaded = (typeof window.mpl !== 'undefined' && typeof window.mpl.figure === 'function');
+
+    // mpl.js asks the embedder to resolve toolbar icon URLs. Upstream webagg
+    // has a Tornado server for that; here the icons arrive as data URIs from
+    // the worker's own matplotlib, so they can never mismatch the toolbar.
+    if (mplLoaded) {
+      var images = {};
+      try { images = JSON.parse(msg.images || '{}'); } catch (e) { images = {}; }
+      // Pyodide's mpl.js does:
+      //   mpl.toolbar_image_callback(image).toJs({create_pyproxies:false})
+      //   new Blob([bytes], {type:'image/png'})
+      // i.e. it expects a PyProxy of raw bytes, because upstream the callback is
+      // a Python function. Hand it a plain object with the same .toJs() shape —
+      // no Pyodide on this side of the channel, and none needed.
+      window.mpl.toolbar_image_callback = function(name) {
+        var key = String(name || '').replace(/\.png$/, '');
+        var b64 = images[key] || '';
+        var binary = window.atob(b64);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
+        return { toJs: function() { return bytes; } };
+      };
+    }
+  } catch (e) {
+    mplLoaded = false;
+  }
+  return mplLoaded;
+}
+
+// A WebSocket-shaped object over the worker channel. mpl.js only ever uses
+// binaryType, onopen, onmessage, close and send.
+function makeMplSocket(figureId) {
+  return {
+    binaryType : 'arraybuffer',
+    onopen     : null,
+    onmessage  : null,
+    close      : function() {},
+    send       : function(payload) {
+      // Pyodide's mpl.js hands the socket an OBJECT, not a JSON string —
+      // upstream that socket is a Python object, so no serialisation happens on
+      // the JS side. Normalise here so the worker always parses a string.
+      var content = (typeof payload === 'string') ? payload : JSON.stringify(payload);
+      if (workerClient && workerClient.sendMplEvent) {
+        workerClient.sendMplEvent(figureId, content);
+      }
+    }
+  };
+}
+
+function handleWorkerFigure(msg) {
+  var wrap = document.getElementById('graphic');
+  if (!wrap) return;
+
+  if (msg.kind === 'assets') { ensureMplAssets(msg); return; }
+
+  if (msg.kind === 'new') {
+    // If mpl.js could not be loaded, do nothing here — the worker also emits a
+    // static PNG for this figure, so a plot still appears.
+    if (!mplLoaded || mplFigures[msg.figureId]) return;
+
+    var host = document.createElement('div');
+    host.className = 'worker-figure mpl-figure';
+    wrap.appendChild(host);
+    showGraphic();
+
+    var socket = makeMplSocket(msg.figureId);
+    var fig = new window.mpl.figure(msg.figureId, socket, function(figure, format) {
+      // The toolbar's save button: matplotlib hands back a download URL.
+      var link = document.createElement('a');
+      link.href = figure.canvas.toDataURL('image/' + (format || 'png'));
+      link.download = 'plot.' + (format || 'png');
+      link.click();
+    }, host);
+
+    mplFigures[msg.figureId] = { fig: fig, socket: socket };
+    if (typeof socket.onopen === 'function') { socket.onopen(); }
+
+    return;
+  }
+
+  if (msg.kind === 'json' || msg.kind === 'text') {
+    var entry = mplFigures[msg.figureId];
+    if (entry && typeof entry.socket.onmessage === 'function') {
+      entry.socket.onmessage({ data: msg.data });
+    }
+    return;
+  }
+
+  if (msg.kind === 'png') {
+    // Fallback: only paint the static image if the interactive frontend never
+    // came up, so a working toolbar is not replaced by a flat picture.
+    if (mplLoaded && Object.keys(mplFigures).length) return;
+    var img = document.createElement('img');
+    img.className = 'worker-figure';
+    img.style.maxWidth = '100%';
+    img.src = 'data:image/png;base64,' + msg.data;
+    wrap.appendChild(img);
+    showGraphic();
+  }
+}
+
 function runInWorker(program, files, serialized) {
   workerRunError = null;
+  mplFigures = {};              // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
 
   writeOut('Loading Python (Pyodide)…\n');
 
-  return workerClient.run(program, files).then(function() {
+  // The worker cannot see the page, so it cannot know how wide the graphic pane
+  // is. Pyodide's patched FigureManagerWebAgg ignores mpl.js's `resize` message
+  // (the same gap that makes it ignore `supports_binary`), so the size has to be
+  // set in Python BEFORE the figure is created — hence sending it here.
+  // #graphic is still HIDDEN at this point (showGraphic() runs when the first
+  // figure arrives), so its clientWidth is 0. Measure a visible ancestor.
+  var graphicWidth = 0;
+  ['graphic', 'outputContainer', 'codeOutput'].forEach(function(id) {
+    if (graphicWidth) return;
+    var el = document.getElementById(id);
+    if (el && el.clientWidth) { graphicWidth = el.clientWidth; }
+  });
+  if (!graphicWidth) { graphicWidth = Math.round(window.innerWidth / 2); }
+
+  return workerClient.run(program, files, { graphicWidth: graphicWidth }).then(function() {
     finishRun(serialized, workerRunError);
   });
 }
