@@ -345,6 +345,15 @@
 {% endif %}
 {% endblock %}
 
+{% block run_options %}
+{% if not outputOnly %}
+<ul id="run-options" class="f-dropdown" data-dropdown-content>
+  <li><a class="menu-button" data-action="code.run" data-button="run"><i class="fa fa-play"></i>Run</a></li>
+  <li><a class="menu-button" data-action="code.console" data-button="console"><i class="fa fa-terminal"></i>Console</a></li>
+</ul>
+{% endif %}
+{% endblock %}
+
 {% block settings_modal %}
 {{ settings_block.settings(user.settings.pythonTab, "Python", false, user, trinket, draft) }}
 {% endblock %}
