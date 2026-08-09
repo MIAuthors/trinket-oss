@@ -46,6 +46,63 @@
       });
     };
 
+    // ---- input() without SharedArrayBuffer ---------------------------------
+    //
+    // An embed can never be crossOriginIsolated (an iframe is only isolated if
+    // the TOP page is), so Atomics.wait is unavailable and input() cannot block.
+    // Instead it becomes awaitable: the page answers `input-request` with
+    // `stdin-reply`, and this promise resolves.
+    var pendingInput = null;
+
+    self.__trinket_worker_input = function(prompt) {
+      post({ type: 'input-request', id: currentRunId, prompt: String(prompt || '') });
+      return new Promise(function(resolve) { pendingInput = resolve; });
+    };
+
+    // The prompt is NOT printed from Python. Pyodide's batched stdout only
+    // flushes on a newline, and a prompt has none — so `print(prompt, end="")`
+    // stayed buffered and appeared AFTER the student's answer. The page writes
+    // it instead, from the prompt text carried on the input-request message.
+    var INPUT_SETUP = [
+      'import builtins, js',
+      'async def _trinket_input(prompt=""):',
+      '    return await js.__trinket_worker_input(prompt)',
+      'builtins.input = _trinket_input'
+    ].join('\n');
+
+    // The async transform rewrites blocking-looking calls to `await`. Its await
+    // set is a module constant that deliberately EXCLUDES bare `input`, because
+    // on the main thread input() is synchronous (window.prompt). Here it must be
+    // awaited, so the set is extended — safe because this is the worker's own
+    // interpreter and cannot affect the page's.
+    var transformLoading = null;
+    function ensureTransform(url) {
+      if (transformLoading) return transformLoading;
+      transformLoading = fetch(url)
+        .then(function(r) { return r.text(); })
+        .then(function(src) {
+          pyodide.FS.writeFile('_trinket_async_transform.py', src);
+          return pyodide.runPythonAsync([
+            'import _trinket_async_transform as _t',
+            '_t._BASE_AWAIT_NAMES = _t._BASE_AWAIT_NAMES | {"input"}',
+            'from _trinket_async_transform import transform_source'
+          ].join('\n'));
+        })
+        .catch(function(e) {
+          // Never cache a failed load, or one transient fetch error poisons
+          // every later run for the life of this worker.
+          transformLoading = null;
+          throw e;
+        });
+      return transformLoading;
+    }
+
+    // Only programs that actually read input need rewriting; everything else
+    // runs unmodified, so the transform can't perturb an ordinary program.
+    function needsTransform(src) {
+      return /(^|[^.\w])input\s*\(/.test(src || '') || /\bconsole\s*\.\s*input\s*\(/.test(src || '');
+    }
+
     var run = function(msg) {
       currentRunId = msg.id;
 
@@ -60,7 +117,18 @@
         }
       }
 
-      return pyodide.runPythonAsync(msg.source)
+      var source = msg.source || '';
+      var prepared = needsTransform(source)
+        ? ensureTransform(msg.transformUrl).then(function() {
+            pyodide.globals.set('__user_source__', source);
+            return pyodide.runPythonAsync(INPUT_SETUP).then(function() {
+              return pyodide.runPython('transform_source(__user_source__)');
+            });
+          })
+        : Promise.resolve(source);
+
+      return prepared
+        .then(function(src) { return pyodide.runPythonAsync(src); })
         .then(function() { post(buildRunReply(msg.id, { ok: true })); })
         .catch(function(err) {
           post(buildRunReply(msg.id, { ok: false, traceback: String(err && err.message || err) }));
@@ -71,6 +139,15 @@
       var msg = e.data || {};
       try {
         if (msg.type === 'init') { boot(msg); return; }
+
+        if (msg.type === 'stdin-reply') {
+          if (pendingInput) {
+            var resolve = pendingInput;
+            pendingInput = null;
+            resolve(msg.value);
+          }
+          return;
+        }
 
         if (msg.type === 'run') {
           if (!pyodide) {

@@ -1843,7 +1843,24 @@ function ensureWorkerClient() {
     workerUrl  : '/js/embed/pyodide-worker.js',
     pyodideUrl : PYODIDE_INDEX_URL + 'pyodide.js',
     indexURL   : PYODIDE_INDEX_URL,
+    transformUrl : ASYNC_TRANSFORM_URL,
     onStdout   : function(text) { writeOut(text); },
+    onInputRequest : function(prompt) {
+      // The same jq-console widget console.input() uses, so a prompt looks
+      // identical whichever runtime is executing.
+      return new Promise(function(resolve) {
+        // Write the prompt here, synchronously, rather than printing it from
+        // Python: batched stdout holds a newline-less prompt until the next
+        // newline, which lands after the answer.
+        if (prompt) { writeOut(String(prompt)); }
+        $('#console-output').addClass('console-active');
+        jqconsole.Input(function(line) {
+          $('#console-output').removeClass('console-active');
+          resolve(line);
+        });
+        jqconsole.Focus();
+      });
+    },
     onStderr   : function(text) { writeOut(text); },
     onError    : function(traceback) {
       workerRunError = new Error(traceback);

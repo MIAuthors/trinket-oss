@@ -166,3 +166,60 @@ describe('createWorkerClient', () => {
     expect(client.isRunning()).toBe(true);
   });
 });
+
+describe('input() over the channel', () => {
+  it('asks the page for input and posts the reply back', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    let asked = null;
+    const client = createWorkerClient({
+      workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker,
+      onInputRequest: (prompt) => { asked = prompt; return Promise.resolve('Ada'); }
+    });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('name = input("who? ")');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+
+    made[0].onmessage({ data: { type: 'input-request', id, prompt: 'who? ' } });
+    await tick();
+    await tick();
+
+    expect(asked).toBe('who? ');
+    const reply = made[0].posted.find(m => m.type === 'stdin-reply');
+    expect(reply).toEqual({ type: 'stdin-reply', id, value: 'Ada' });
+  });
+
+  it('does not answer an input request from a stale run', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({
+      workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker,
+      onInputRequest: () => Promise.resolve('x')
+    });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('input()');
+    await tick();
+
+    made[0].onmessage({ data: { type: 'input-request', id: 'stale', prompt: '?' } });
+    await tick();
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'stdin-reply')).toBeUndefined();
+  });
+
+  it('answers with an empty string when the page has no input handler', async () => {
+    // Better than hanging the program forever on a prompt nobody can answer.
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('input()');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+
+    made[0].onmessage({ data: { type: 'input-request', id, prompt: '?' } });
+    await tick();
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'stdin-reply').value).toBe('');
+  });
+});

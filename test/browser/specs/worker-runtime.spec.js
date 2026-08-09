@@ -39,4 +39,26 @@ test.describe('Worker runtime (#108)', () => {
     }).toPass({ timeout: 90_000 });
     expect(await page.evaluate(() => window.__trinketRuntime)).toBe('main');
   });
+
+  test('input() prompts in order and resumes with the answer', async ({ page }) => {
+    // The prompt must appear BEFORE the answer. Printing it from Python left it
+    // in Pyodide's batched stdout — which flushes only on a newline — so it
+    // surfaced after the student had already typed.
+    await editorRun(page, 'name = input("who? ")\nprint("hello", name)');
+
+    await expect(page.locator('#console-output .jqconsole-input')).toBeVisible({ timeout: 120_000 });
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('who?');
+    }).toPass({ timeout: 30_000 });
+
+    await page.locator('textarea:not(.ace_text-input)').pressSequentially('Ada');
+    await page.locator('textarea:not(.ace_text-input)').press('Enter');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain('hello Ada');
+      expect(text.indexOf('who?')).toBeLessThan(text.indexOf('hello Ada'));
+    }).toPass({ timeout: 30_000 });
+  });
+
 });

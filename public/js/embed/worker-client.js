@@ -42,6 +42,24 @@
       if (msg.type === 'stdout') { if (opts.onStdout) opts.onStdout(msg.text); return; }
       if (msg.type === 'stderr') { if (opts.onStderr) opts.onStderr(msg.text); return; }
 
+      // input() cannot block in a worker — there is no SharedArrayBuffer in an
+      // embed, so Atomics.wait is unavailable. The worker suspends on a promise
+      // and we answer it here. Scoped to the current run so a prompt from a
+      // worker we already replaced is ignored rather than answered.
+      if (msg.type === 'input-request') {
+        if (!current || msg.id !== current.id) return;
+        var answer = opts.onInputRequest
+          ? Promise.resolve(opts.onInputRequest(msg.prompt))
+          : Promise.resolve('');          // never hang on a prompt nobody can answer
+        answer.then(function(value) {
+          // A stop may have replaced the worker while the student was typing.
+          if (worker && current && current.id === msg.id) {
+            worker.postMessage({ type: 'stdin-reply', id: msg.id, value: String(value) });
+          }
+        });
+        return;
+      }
+
       // A boot failure carries no run id — it happened before any run existed.
       // The id check below would drop it, leaving the page waiting on a worker
       // that will never become ready. Report it and settle whatever is waiting.
@@ -99,7 +117,8 @@
             // stop() may have replaced the worker, or another run started,
             // while Pyodide was still booting.
             if (worker === w && current && current.id === id) {
-              w.postMessage({ type: 'run', id: id, source: source, files: files || null });
+              w.postMessage({ type: 'run', id: id, source: source, files: files || null,
+                              transformUrl: opts.transformUrl });
             }
           });
         });
