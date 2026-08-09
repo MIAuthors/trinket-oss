@@ -355,3 +355,75 @@ The routing predicate is the only cheaply-testable piece, which is exactly why i
 | Routing misfires — a program silently loses freeze protection | `chooseRuntime()` returns a `reason`, surfaced in `/version`-style diagnostics and asserted in tests |
 | Two runtimes drift apart | shared output formatting; regression specs run against both |
 | Worker adds latency to short programs | measure; if material, keep short programs on the main thread by the same routing mechanism |
+
+---
+
+## 14. Addendum (2026-08-09) — adopt vpython-jupyter wholesale instead of porting our bridge
+
+**Status: proposal, not decided. Nothing here is implemented.** Recorded because it
+changes the economics of D2/D5 substantially, and because the reconnaissance
+below is cheap to lose and expensive to redo.
+
+### The idea
+
+Steve's proposal: rather than incrementally moving today's Pyodide Web VPython
+bridge off-thread, **drop it and adopt the `vpython-jupyter` package as-is**. It
+already implements the whole object protocol — proxy objects, an object registry
+keyed by index, compact per-attribute codes, a browser-driven flush, and
+shadow-state reads. The work becomes "make it run under Pyodide and give it a
+transport", not "reimplement the protocol".
+
+### What the reconnaissance found
+
+Checked against the clone at `~/Development/glow-repos/vpython-jupyter`:
+
+| Concern | Finding |
+|---|---|
+| `cyvector.pyx` is Cython — needs a wasm build | **Not a blocker.** `_vector_import_helper.py` falls back to the pure-Python `vector.py` on `ImportError`. |
+| Requires jupyter / ipykernel | **Not at import.** `ipykernel.comm` is imported lazily inside `GlowWidget.__init__` (`vpython.py:380`); `IPython.display` at :2908. `setup.py` lists them, but the core does not need them to load. |
+| Core module pulls in heavy deps | **No.** `vpython/vpython.py` imports `colorsys`, `math`, `time`, `sys`, `atexit`, `inspect`, `platform` — stdlib only. |
+| Transport is hard-wired | **No — there is already a seam.** `baseObj.__init__` selects one at runtime: `from .with_notebook import _` or `from .no_notebook import _` (`vpython.py:265-267`), and the module-global `sender` is just a send function. |
+
+**That seam is the whole point.** The package already expects more than one
+transport. A third — `trinket_worker`, whose `sender` posts on the #108 channel —
+is the shape it is built for, and is far less code than replacing the protocol.
+
+### What is NOT reusable
+
+- **`no_notebook.py` is out.** It stands up an `http.server` and an `autobahn`
+  websocket server in threads — none of which exists in a worker. It is a
+  reference for the message shapes, not code to run.
+- **`glowcomm.js` is Jupyter-specific.** Its first act is
+  `IPython.notebook.kernel.comm_manager.register_target('glow', …)`. The browser
+  half has to be rewritten against our channel — roughly 986 lines to read, far
+  less to reimplement, since the useful part is the message handling.
+
+### The open risk: GlowScript version alignment
+
+Trinket loads `glow.3.2.2.min.js` and the webvpython `vpython.zip`;
+vpython-jupyter ships its own `glow.min.js` (~575 KB) plus `gs_version.py`.
+Adopting the package means adopting **its** GlowScript, or proving ours is
+compatible with its protocol expectations. This is the most likely source of
+subtle breakage and should be settled before any implementation.
+
+### How this changes D2 and D5
+
+- **D2** ("VPython stays on the main thread") was justified by the cost of
+  replacing our `from js import sphere, box, rate, …` bridge. If the replacement
+  is an existing, maintained package plus one transport, that cost drops sharply
+  and D2 should be revisited.
+- **D5** stands and gets easier: `scene-ops` / `scene-event` are already reserved
+  on the channel, and vpython-jupyter's message shapes can define their payloads
+  rather than us inventing them.
+
+### Recommended next step
+
+A **spike, not an implementation**: install the `vpython` package into Pyodide in
+the worker, import it, and see how far it gets before it needs a transport. That
+single experiment answers the version question and the import question together,
+and it is a day's work rather than a project.
+
+**Sequencing:** after #125 lands and the worker has run on the trials. Adopting a
+new VPython implementation is the highest-risk change available to this codebase —
+it touches the feature Matter & Interactions courses depend on most — and it
+should not ride along with the runtime change.
