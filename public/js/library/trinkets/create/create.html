@@ -18,13 +18,22 @@
   </section>
   <section ng-if="lang == 'python3'">
     <p>
-      This trinket includes everything in
+      This trinket runs real
       <a href="https://www.python.org/" target="_blank">Python 3 <sup><i class="fa fa-external-link"></i></sup></a>
-      as well as scientific libraries like <a href="http://www.numpy.org/" target="_blank">Numpy <sup><i class="fa fa-external-link"></i></sup></a>,
-      <a href="http://www.scipy.org/", target="_blank">SciPy <sup><i class="fa fa-external-link"></i></sup></a>
-      and <a href="http://matplotlib.org/" target="_blank">matplotlib <sup><i class="fa fa-external-link"></i></sup></a>,
-      with more on the way. You can try the examples below or try your own code and then click &nbsp;<i class="fa fa-play"></i> Run. An interactive
-      console option is available too &mdash; just select &nbsp;<i class="fa fa-terminal"></i> Console from the Run menu.
+      in your browser, including scientific libraries like
+      <a href="https://numpy.org/" target="_blank">NumPy <sup><i class="fa fa-external-link"></i></sup></a>,
+      <a href="https://scipy.org/" target="_blank">SciPy <sup><i class="fa fa-external-link"></i></sup></a>
+      and <a href="https://matplotlib.org/" target="_blank">matplotlib <sup><i class="fa fa-external-link"></i></sup></a>.
+      <!-- The examples gallery below only renders when this lang actually has
+           examples (see ng-show on #trinkets-list). Match that condition here so
+           we never point at a gallery that isn't there. -->
+      <span ng-if="examples && iframeUrl">You can try the examples below, or write your own code and then click &nbsp;<i class="fa fa-play"></i> Run.</span>
+      <span ng-if="!(examples && iframeUrl)">Write your own code, then click &nbsp;<i class="fa fa-play"></i> Run.</span>
+    </p>
+    <p>
+      Need to read input while your program runs? Add <code>import console</code>
+      and call <code>console.input("Your name? ")</code> to get a prompt in the
+      output console.
     </p>
   </section>
   <section ng-if="lang == 'java'">
