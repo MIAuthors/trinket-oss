@@ -121,6 +121,50 @@ features:
     # pyodide: true   # …or re-enable a separate Pyodide button
 ```
 
+## Optional: run Python off the main thread (`features.workerRuntime`)
+
+Default **`false`**. When enabled, python3 programs run in a Web Worker, so the
+page cannot freeze and **Stop always works** — including for `while True: pass`,
+which nothing on the main thread can interrupt, because a loop with no pause
+point never lets the page run to notice the click.
+
+```yaml
+features:
+  workerRuntime: true
+```
+
+**Programs that stay on the main thread regardless of this flag:**
+
+- **Web VPython / GlowScript.** Its bridge binds `from js import sphere, box,
+  rate, …` to the browser window, which does not exist in a worker. Unchanged,
+  deliberately: Stop already works there via `rate()`.
+- Programs calling `input()`, `sleep()` or `rate()` inside a **lambda or a
+  comprehension**, where `await` cannot be inserted. They keep working exactly as
+  they do today; they just do not gain the freeze protection.
+
+**Per-trinket override:** `?runtime=main` forces the main thread, `?runtime=worker`
+forces the worker even when the flag is off. Note the embed rewrites its own URL,
+so a query parameter typed into the address bar does **not** survive — for
+day-to-day testing set the flag in `config/local.yaml` instead.
+
+**What changes for a student when this is on**
+
+| | |
+|---|---|
+| `while True: pass` | page stays responsive; Stop halts it |
+| matplotlib | interactive, with the usual toolbar (home / pan / zoom / save) |
+| `input()` | works; the prompt is answered through the console |
+| the interactive console (REPL) | a runaway statement is stoppable |
+
+**Two consequences worth knowing before you enable it:**
+
+1. **Stop discards the interpreter.** That is what makes it unconditional. So
+   after a stop there is no variable snapshot to show, and a stopped REPL loses
+   its session — both are said plainly in the console rather than left to be
+   guessed at.
+2. **Cold start after a stop.** The next run boots a fresh worker, so it is
+   slower than a run that follows a normal finish.
+
 ## Example — prod-only infra in `config/local-production.yaml`
 
 ```yaml

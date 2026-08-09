@@ -40,6 +40,7 @@
         assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
         variableExplorer  : {{ 'true' if config.features.variableExplorer else 'false' }},
         stepDebugger      : {{ 'true' if config.features.stepDebugger else 'false' }},
+        workerRuntime     : {{ 'true' if config.features.workerRuntime else 'false' }},
         logo              : '{{ config.app.logo }}'
       }
     };

@@ -1,5 +1,11 @@
 const { test, expect } = require('@playwright/test');
 
+// RUNTIME PINNED. These tests were written against the in-window Pyodide and
+// assert its behaviour (cooperative stop, synchronous console.input(), the REPL
+// on the main thread). A dev box may enable features.workerRuntime in its
+// untracked local.yaml, which would silently route them off-thread and change
+// what they are testing. #108's own behaviour is covered by worker-runtime.spec.js.
+
 // Issue #107: a one-line mistake produced twelve lines of output, nine of them
 // Pyodide's own machinery, printed BEFORE the student's actual error. Reported by
 // a faculty member testing with students — it reliably reads as "did I break the
@@ -10,7 +16,7 @@ const { test, expect } = require('@playwright/test');
 // a handwritten sample would only test the sample.
 test.describe('Python traceback readability (#107)', () => {
   async function runCode(page, code) {
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor').first()).toBeVisible();
     await page.evaluate((src) => {
       document.querySelector('.ace_editor').env.editor.setValue(src, 1);

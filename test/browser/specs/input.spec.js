@@ -1,5 +1,11 @@
 const { test, expect } = require('@playwright/test');
 
+// RUNTIME PINNED. These tests were written against the in-window Pyodide and
+// assert its behaviour (cooperative stop, synchronous console.input(), the REPL
+// on the main thread). A dev box may enable features.workerRuntime in its
+// untracked local.yaml, which would silently route them off-thread and change
+// what they are testing. #108's own behaviour is covered by worker-runtime.spec.js.
+
 // input() used to raise `OSError: [Errno 29] I/O error` in Pyodide because the
 // runner configured stdout/stderr but never stdin — breaking every intro-course
 // trinket that reads input (reported by a Billerica HS teacher). The fix
@@ -11,7 +17,7 @@ test.describe('Pyodide input()', () => {
     // Answer every prompt() dialog with a known value.
     page.on('dialog', (dialog) => dialog.accept('Ada'));
 
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor')).toBeVisible();
 
     await page.evaluate(() => {
@@ -60,7 +66,7 @@ test.describe('Pyodide input()', () => {
     });
     page.on('dialog', (dialog) => dialog.accept('Ada'));
 
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor')).toBeVisible();
     await page.evaluate(() => {
       document.querySelector('.ace_editor').env.editor.setValue(
@@ -86,7 +92,7 @@ test.describe('Pyodide console.input()', () => {
   }
 
   test('await console.input() reads inline from the console', async ({ page }) => {
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor')).toBeVisible();
     await page.evaluate(() => {
       document.querySelector('.ace_editor').env.editor.setValue(
@@ -108,7 +114,7 @@ test.describe('Pyodide console.input()', () => {
   });
 
   test('console.input() works WITHOUT await (source is transformed)', async ({ page }) => {
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor')).toBeVisible();
     await page.evaluate(() => {
       document.querySelector('.ace_editor').env.editor.setValue(
@@ -128,7 +134,7 @@ test.describe('Pyodide console.input()', () => {
   });
 
   test('a program that does not import console is unaffected', async ({ page }) => {
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
     await expect(page.locator('.ace_editor')).toBeVisible();
     await page.evaluate(() => {
       document.querySelector('.ace_editor').env.editor.setValue(

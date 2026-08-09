@@ -1,5 +1,11 @@
 const { test, expect } = require('@playwright/test');
 
+// RUNTIME PINNED. These tests were written against the in-window Pyodide and
+// assert its behaviour (cooperative stop, synchronous console.input(), the REPL
+// on the main thread). A dev box may enable features.workerRuntime in its
+// untracked local.yaml, which would silently route them off-thread and change
+// what they are testing. #108's own behaviour is covered by worker-runtime.spec.js.
+
 // Issue #66: an embed with ?outputOnly=true but NO autorun rendered completely
 // blank. outputOnly hides the editor, and the non-autorun path hid the output
 // pane as well, so nothing was on screen — and the console is created lazily on
@@ -26,7 +32,7 @@ test.describe('outputOnly without autorun (#66)', () => {
   }
 
   test('shows the output pane instead of a blank frame', async ({ page }) => {
-    await page.goto('/embed/python3?outputOnly=true');
+    await page.goto('/embed/python3?outputOnly=true&runtime=main');
 
     await expect(async () => {
       const p = await panes(page);
@@ -36,7 +42,7 @@ test.describe('outputOnly without autorun (#66)', () => {
   });
 
   test('still hides the editor (outputOnly is honoured)', async ({ page }) => {
-    await page.goto('/embed/python3?outputOnly=true');
+    await page.goto('/embed/python3?outputOnly=true&runtime=main');
 
     await expect(async () => {
       const p = await panes(page);
@@ -47,7 +53,7 @@ test.describe('outputOnly without autorun (#66)', () => {
   test('does NOT auto-run — the author left autorun off', async ({ page }) => {
     // The pane appears, but empty: fixing the blank frame must not smuggle in an
     // autorun the embed author didn't ask for.
-    await page.goto('/embed/python3?outputOnly=true');
+    await page.goto('/embed/python3?outputOnly=true&runtime=main');
 
     await expect(async () => {
       const p = await panes(page);
@@ -68,7 +74,7 @@ test.describe('outputOnly without autorun (#66)', () => {
     //
     // Checked against unmodified main first: an execution-based version of this
     // test failed there identically, i.e. it was a bad test, not a regression.
-    await page.goto('/embed/python3?outputOnly=true&start=result');
+    await page.goto('/embed/python3?outputOnly=true&start=result&runtime=main');
 
     await expect(async () => {
       const p = await panes(page);
@@ -78,7 +84,7 @@ test.describe('outputOnly without autorun (#66)', () => {
   });
 
   test('REGRESSION: an ordinary embed still opens on the editor', async ({ page }) => {
-    await page.goto('/embed/python3');
+    await page.goto('/embed/python3?runtime=main');
 
     await expect(async () => {
       const p = await panes(page);

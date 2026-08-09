@@ -66,6 +66,10 @@ var jqconsole;
 var mainFile = 'main.py';
 var template = TrinketIO.import('utils.template');
 var ActivityLog = TrinketIO.import('embed.analytics.activity');
+var runtimeRouter   = TrinketIO.import('embed.runtimeRouter');
+var workerClientApi = TrinketIO.import('embed.workerClient');
+var replContinuation = TrinketIO.import('embed.replContinuation');
+var workerClient    = null;   // created lazily; null means the main-thread path
 var disableAceEditor = window.userSettings && window.userSettings.disableAceEditor || false;
 
 // Pyodide is loaded lazily on the first run so the ~10MB download doesn't block
@@ -212,19 +216,30 @@ function ensurePyodideConsole() {
 // Everything we put in the console is Python text, and Python text is full of
 // angle brackets: a traceback names its scope `<module>` and its console frame
 // `<console>`, and repr() renders an object as `<Foo object at 0x…>`. Parsed as
-// HTML those become unknown tags and DISAPPEAR — a REPL traceback rendered as
-// `File "", line 1, in ` with both names silently eaten, and an object's repr
-// vanished completely. It is also an injection hole: an exception message or a
-// repr containing markup is executed by the page, and both can carry
-// student-controlled text.
+// HTML those become unknown tags and DISAPPEAR — which is why a REPL traceback
+// rendered as `File "", line 1, in ` with both names silently eaten, and why the
+// dangling `, in` this file documents was never Python's doing at all.
 //
-// Escape here and keep the `false` (jqconsole's own escaping would also swallow
-// the ANSI codes the run path emits) — the convention python.js already uses.
+// It is also an injection hole: an exception message or a repr that contains
+// markup is executed by the page, and both can carry student-controlled text.
+//
+// The fix is the convention python.js already uses — escape here, keep the
+// `false` (jqconsole's own escaping would also swallow the ANSI codes the run
+// path emits).
 function escapeConsoleHtml(text) {
   var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
   return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
 }
 
+// Write an error raised at the REPL prompt, through the SAME traceback filter
+// the Run button uses (#107). Without this the REPL reported the raw Pyodide
+// traceback — a dozen frames of console.py, codeop.py and _base.py above the one
+// line that matters — which is precisely the noise #107 exists to remove. The
+// frames are, if anything, worse here: at a prompt every frame above the user's
+// single line is interpreter plumbing.
+//
+// `<stdin>` matches what CPython names the console frame, so a filtered REPL
+// traceback reads exactly like the one a student sees in a terminal.
 // The DOM half of switching to the output pane, WITHOUT running anything.
 // showResult() does this and then calls runCode(); the REPL needs the switch but
 // must NOT run the program — runCode() resets the console, which would wipe the
@@ -243,12 +258,43 @@ function showOutputPane() {
   hideVariables();     // a run always returns focus to the Result pane
 }
 
+function writeReplError(err) {
+  var msg = String(err && err.message || err);
+  jqconsole.Write(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
+}
+
+// Does the REPL run in the worker? A REPL statement has no source to inspect up
+// front, so the decision is made once from config and the query string rather
+// than per statement.
+function replUsesWorker() {
+  try {
+    return runtimeRouter.chooseRuntime('', {
+      usesVPython   : false,
+      workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+      queryRuntime  : (api._queryString || {}).runtime
+    }).runtime === 'worker';
+  } catch (e) { return false; }
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
   replActive = true;
 
   jqconsole.Prompt(true, function(input) {
+    // Worker-backed REPL: the namespace lives in the worker, so a runaway
+    // statement is killable. Output and errors arrive on the same callbacks the
+    // Run path uses, so formatting is shared.
+    if (replUsesWorker()) {
+      if (/^\s*$/.test(input)) { startReplPrompt(); return; }
+      $('.stop-it').removeClass('hide');
+      ensureWorkerClient().pushRepl(input).then(function() {
+        $('.stop-it').addClass('hide');
+        startReplPrompt();
+      });
+      return;
+    }
+
     // Blank line: just re-prompt (matches python.js and the CPython REPL).
     if (/^\s*$/.test(input)) { startReplPrompt(); return; }
 
@@ -257,7 +303,7 @@ function startReplPrompt() {
     try {
       result = console_.push(input);
     } catch (e) {
-      jqconsole.Write(escapeConsoleHtml(String(e && e.message || e)) + '\n', 'jqconsole-error', false);
+      writeReplError(e);
       startReplPrompt();
       return;
     }
@@ -271,7 +317,7 @@ function startReplPrompt() {
         }
       })
       .catch(function(err) {
-        jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
+        writeReplError(err);
       })
       .then(function() { startReplPrompt(); });
 
@@ -286,6 +332,13 @@ function startReplPrompt() {
     // is what the CPython REPL uses, returns None while input is incomplete, and
     // has no side effects (pushing the line into the console buffer would consume
     // it).
+    // With the interpreter in the worker there is no local Python to ask, and
+    // jq-console needs this answer synchronously — use the pure approximation.
+    if (replUsesWorker()) {
+      if (replContinuation.isComplete(input)) return false;      // submit
+      return replContinuation.indentLevel(input);
+    }
+
     try {
       var complete = pyodide.runPython(
         'import codeop\n' +
@@ -337,6 +390,21 @@ function startRepl() {
 
   initConsoleOutput();
 
+  // In worker mode the interpreter is not on this thread. Do NOT call
+  // ensurePyodide() below: that would boot a SECOND Pyodide on the main thread
+  // purely to read sys.version for the banner, doubling start-up and memory for
+  // an interpreter that never runs anything. The worker reports its version in
+  // its ready message.
+  if (replUsesWorker()) {
+    $('#console-output').addClass('console-mode');
+    var client = ensureWorkerClient();
+    return client.ready().then(function(info) {
+      jqconsole.Write('Python ' + (info.pythonVersion || '') +
+                      ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
+      startReplPrompt();
+    });
+  }
+
   // The console palette is a MODE, not a default. Base `.jqconsole-output` is
   // WHITE, for the dark console a running program draws into; the light REPL
   // palette lives behind `.console-mode` (static/scss/embed/_python.scss). The
@@ -344,12 +412,13 @@ function startRepl() {
   // clears it again. This REPL only ever cleared it, so its output was white on
   // the near-white (#f9f9f9) REPL background — legible only by selecting it.
   $('#console-output').addClass('console-mode');
+
   return ensurePyodide().then(function() {
     jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
                     ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
     startReplPrompt();
   }).catch(function(err) {
-    jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
+    writeReplError(err);
   });
 }
 
@@ -572,7 +641,8 @@ function isCancelError(err) {
 // level Python leaves the scope name empty, and the line arrives with its
 // trailing whitespace already stripped — so the text is `, in` with nothing
 // after it. Requiring a literal `, in ` (with the space) made that line fail to
-// match, and an unmatched line is passed through verbatim.
+// match, and an unmatched line is passed through verbatim, which is exactly the
+// `File "", line 1, in` the filter is supposed to repair. Tolerate both forms.
 var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:,\s*in\s*(.*?))?\s*$/;
 // Pyodide's own frames: the stdlib zip, the _pyodide package, its asm module.
 var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap/;
@@ -588,9 +658,10 @@ function formatPythonTraceback(msg, mainName) {
   if (!msg) return msg;
 
   // `_IncompleteInputError` is Pyodide's internal name for input that ends
-  // mid-statement. CPython raises a plain SyntaxError there, and the leading
-  // underscore advertises an implementation detail no student should have to
-  // recognise — the same reason the frames below get dropped.
+  // mid-statement (`print("helo` at the prompt). CPython raises a plain
+  // SyntaxError there, and the leading underscore advertises an implementation
+  // detail no student should have to recognise — the same reason the frames
+  // below get dropped. Rename it; the message text is already accurate.
   msg = String(msg).replace(/(^|\n)_IncompleteInputError:/g, '$1SyntaxError:');
 
   if (msg.indexOf('File "') === -1) return msg;
@@ -1824,6 +1895,265 @@ function hideVariables() {
   $('#variablesTab').removeClass('active');
 }
 
+// #108: run this program in the Web Worker.
+//
+// Output and tracebacks go through the SAME helpers the main-thread path uses,
+// so #107's frame filtering and the console escaping apply unchanged and the two
+// runtimes cannot drift apart in what a student sees.
+//
+// Completion goes through finishRun() for the same reason: it owns the `running`
+// flag, the "complete" postMessage the embedding page listens for, and the
+// queued-rerun handling. Duplicating a subset of that here is how the two paths
+// would quietly diverge.
+function ensureWorkerClient() {
+  if (workerClient) return workerClient;
+
+  workerClient = workerClientApi.createWorkerClient({
+    workerUrl  : '/js/embed/pyodide-worker.js',
+    pyodideUrl : PYODIDE_INDEX_URL + 'pyodide.js',
+    indexURL   : PYODIDE_INDEX_URL,
+    transformUrl : ASYNC_TRANSFORM_URL,
+    varsHelper   : VARS_HELPER,
+    onStdout   : function(text) { writeOut(text); },
+    onFigure : function(msg) { handleWorkerFigure(msg); },
+    onInputRequest : function(prompt) {
+      // The same jq-console widget console.input() uses, so a prompt looks
+      // identical whichever runtime is executing.
+      return new Promise(function(resolve) {
+        // Write the prompt here, synchronously, rather than printing it from
+        // Python: batched stdout holds a newline-less prompt until the next
+        // newline, which lands after the answer.
+        if (prompt) { writeOut(String(prompt)); }
+        $('#console-output').addClass('console-active');
+        jqconsole.Input(function(line) {
+          $('#console-output').removeClass('console-active');
+          resolve(line);
+        });
+        jqconsole.Focus();
+      });
+    },
+    onStderr   : function(text) { writeOut(text); },
+    onError    : function(traceback) {
+      workerRunError = new Error(traceback);
+      // At the prompt the frame is the console, not a file — CPython names it
+      // <stdin>, and calling it main.py would point a student at a line of a
+      // file they never wrote.
+      var frameName = replActive ? '<stdin>' : mainFile;
+      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, frameName)) + '\n',
+                      'jqconsole-error', false);
+    }
+  });
+  return workerClient;
+}
+
+var workerRunError = null;   // set by onError so finishRun() can report it
+
+// `program` is the main file's source; `files` is the whole editor file map, so
+// the worker can write the secondary .py modules into its own FS exactly as
+// syncFilesToFS() does for the main thread. `serialized` is what finishRun()
+// reports to analytics, matching the main path.
+// #108: matplotlib figures coming from the worker.
+//
+// Two shapes arrive on the same `figure` message:
+//   kind 'png'                  — the static fallback
+//   kind 'assets'/'new'/'json'/'text' — matplotlib's own webagg protocol
+//
+// The interactive path drives matplotlib's real mpl.js, so the figure keeps its
+// toolbar (home / back / forward / pan / zoom / save / format). mpl.js talks to
+// a WebSocket; we hand it an object with the same shape whose send() is a
+// postMessage to the worker. That is exactly what ipympl does with a Jupyter
+// comm, and what JupyterLite therefore does from a worker kernel.
+var mplLoaded  = false;   // mpl.js evaluated into the page
+var mplFigures = {};      // figureId -> { fig, socket }
+
+function ensureMplAssets(msg) {
+  if (mplLoaded) return true;
+  try {
+    if (msg.css) {
+      var style = document.createElement('style');
+      style.textContent = msg.css;
+      document.head.appendChild(style);
+    }
+    // mpl.js is a classic script that defines a global `mpl`.
+    (0, eval)(msg.js);
+    mplLoaded = (typeof window.mpl !== 'undefined' && typeof window.mpl.figure === 'function');
+
+    // mpl.js asks the embedder to resolve toolbar icon URLs. Upstream webagg
+    // has a Tornado server for that; here the icons arrive as data URIs from
+    // the worker's own matplotlib, so they can never mismatch the toolbar.
+    if (mplLoaded) {
+      var images = {};
+      try { images = JSON.parse(msg.images || '{}'); } catch (e) { images = {}; }
+      // Pyodide's mpl.js does:
+      //   mpl.toolbar_image_callback(image).toJs({create_pyproxies:false})
+      //   new Blob([bytes], {type:'image/png'})
+      // i.e. it expects a PyProxy of raw bytes, because upstream the callback is
+      // a Python function. Hand it a plain object with the same .toJs() shape —
+      // no Pyodide on this side of the channel, and none needed.
+      window.mpl.toolbar_image_callback = function(name) {
+        var key = String(name || '').replace(/\.png$/, '');
+        var b64 = images[key] || '';
+        var binary = window.atob(b64);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
+        return { toJs: function() { return bytes; } };
+      };
+    }
+  } catch (e) {
+    mplLoaded = false;
+  }
+  return mplLoaded;
+}
+
+// A WebSocket-shaped object over the worker channel. mpl.js only ever uses
+// binaryType, onopen, onmessage, close and send.
+function makeMplSocket(figureId) {
+  return {
+    binaryType : 'arraybuffer',
+    onopen     : null,
+    onmessage  : null,
+    close      : function() {},
+    send       : function(payload) {
+      // Pyodide's mpl.js hands the socket an OBJECT, not a JSON string —
+      // upstream that socket is a Python object, so no serialisation happens on
+      // the JS side. Normalise here so the worker always parses a string.
+      var content = (typeof payload === 'string') ? payload : JSON.stringify(payload);
+      if (workerClient && workerClient.sendMplEvent) {
+        workerClient.sendMplEvent(figureId, content);
+      }
+    }
+  };
+}
+
+// Pyodide's matplotlib wheel ships web_backend/js and /css but NO images
+// directory, so every mpl.toolbar_image_callback lookup returns zero bytes and
+// each toolbar button renders as a broken image with its alt text. Trinket
+// already loads Font Awesome for its own toolbar, so use that: same icons the
+// rest of the UI uses, nothing extra to ship, and no dependency on assets the
+// wheel does not contain.
+var MPL_TOOLBAR_ICONS = {
+  home         : 'fa-home',
+  back         : 'fa-arrow-left',
+  forward      : 'fa-arrow-right',
+  move         : 'fa-arrows',
+  zoom_to_rect : 'fa-search-plus',
+  filesave     : 'fa-floppy-o',
+  download     : 'fa-download'
+};
+
+function applyMplToolbarIcons(fig) {
+  if (!fig || !fig.buttons || !window.mpl || !window.mpl.toolbar_items) return;
+  window.mpl.toolbar_items.forEach(function(item) {
+    var name  = item[0];          // 'Home', 'Pan', …  keys of fig.buttons
+    var image = item[2];          // 'home', 'move', … the missing icon name
+    if (!name || !image) return;
+    var button = fig.buttons[name];
+    if (!button) return;
+
+    var cls = MPL_TOOLBAR_ICONS[image];
+    if (!cls) return;
+
+    var img = button.querySelector('img');
+    var icon = document.createElement('i');
+    icon.className = 'fa ' + cls;
+    icon.setAttribute('aria-hidden', 'true');
+    if (img) {
+      button.title = button.title || img.alt || name;   // keep the tooltip
+      button.replaceChild(icon, img);
+    } else {
+      button.appendChild(icon);
+    }
+  });
+}
+
+function handleWorkerFigure(msg) {
+  var wrap = document.getElementById('graphic');
+  if (!wrap) return;
+
+  if (msg.kind === 'assets') { ensureMplAssets(msg); return; }
+
+  if (msg.kind === 'new') {
+    // If mpl.js could not be loaded, do nothing here — the worker also emits a
+    // static PNG for this figure, so a plot still appears.
+    if (!mplLoaded || mplFigures[msg.figureId]) return;
+
+    var host = document.createElement('div');
+    host.className = 'worker-figure mpl-figure';
+    wrap.appendChild(host);
+    showGraphic();
+
+    var socket = makeMplSocket(msg.figureId);
+    var fig = new window.mpl.figure(msg.figureId, socket, function(figure, format) {
+      // The toolbar's save button: matplotlib hands back a download URL.
+      var link = document.createElement('a');
+      link.href = figure.canvas.toDataURL('image/' + (format || 'png'));
+      link.download = 'plot.' + (format || 'png');
+      link.click();
+    }, host);
+
+    mplFigures[msg.figureId] = { fig: fig, socket: socket };
+    applyMplToolbarIcons(fig);
+    if (typeof socket.onopen === 'function') { socket.onopen(); }
+
+    return;
+  }
+
+  if (msg.kind === 'json' || msg.kind === 'text') {
+    var entry = mplFigures[msg.figureId];
+    if (entry && typeof entry.socket.onmessage === 'function') {
+      entry.socket.onmessage({ data: msg.data });
+    }
+    return;
+  }
+
+  if (msg.kind === 'png') {
+    // Fallback: only paint the static image if the interactive frontend never
+    // came up, so a working toolbar is not replaced by a flat picture.
+    if (mplLoaded && Object.keys(mplFigures).length) return;
+    var img = document.createElement('img');
+    img.className = 'worker-figure';
+    img.style.maxWidth = '100%';
+    img.src = 'data:image/png;base64,' + msg.data;
+    wrap.appendChild(img);
+    showGraphic();
+  }
+}
+
+function runInWorker(program, files, serialized) {
+  workerRunError = null;
+  mplFigures = {};              // figures belong to a run; mpl.js itself persists
+  ensureWorkerClient();
+
+  writeOut('Loading Python (Pyodide)…\n');
+
+  // The worker cannot see the page, so it cannot know how wide the graphic pane
+  // is. Pyodide's patched FigureManagerWebAgg ignores mpl.js's `resize` message
+  // (the same gap that makes it ignore `supports_binary`), so the size has to be
+  // set in Python BEFORE the figure is created — hence sending it here.
+  // #graphic is still HIDDEN at this point (showGraphic() runs when the first
+  // figure arrives), so its clientWidth is 0. Measure a visible ancestor.
+  var graphicWidth = 0;
+  ['graphic', 'outputContainer', 'codeOutput'].forEach(function(id) {
+    if (graphicWidth) return;
+    var el = document.getElementById(id);
+    if (el && el.clientWidth) { graphicWidth = el.clientWidth; }
+  });
+  if (!graphicWidth) { graphicWidth = Math.round(window.innerWidth / 2); }
+
+  return workerClient.run(program, files, { graphicWidth: graphicWidth }).then(function() {
+    finishRun(serialized, workerRunError);
+
+    // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here
+    // because this page's Pyodide never ran the program. Ask the worker instead
+    // and render when it answers — it resolves after finishRun, so it wins.
+    if (variableExplorerEnabled()) {
+      workerClient.snapshot().then(function(vars) {
+        try { renderVariables(vars); } catch (e) {}
+      });
+    }
+  });
+}
+
 function finishRun(serializedCode, err) {
   $('.stop-it').addClass('hide');
   running = false;
@@ -1898,6 +2228,30 @@ function startRun() {
   $('#graphic-wrap').addClass('hide');
   $('#output-dragbar').addClass('hide');
   $('#console-wrap').css('height', '100%');
+
+  // #108: choose a runtime for THIS program. VPython and programs the async
+  // transform cannot rewrite stay on the main thread; everything else runs in
+  // the worker, where Stop is worker.terminate() and cannot be blocked.
+  //
+  // Route on the PROGRAM TEXT, not on serializedCode: api.getValue() returns the
+  // serialized file list (a JSON string), so usesVPython() asked about it never
+  // matches and every VPython program would be sent off-thread, where its
+  // `from js import sphere, …` bridge cannot exist.
+  var workerFiles   = editor.getAllFiles();
+  var workerProgram = workerFiles[mainFile] || '';
+
+  var decision = runtimeRouter.chooseRuntime(workerProgram, {
+    usesVPython   : usesVPython(workerProgram),
+    workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+    queryRuntime  : (api._queryString || {}).runtime
+  });
+  window.__trinketRuntime       = decision.runtime;   // read by the browser specs
+  window.__trinketRuntimeReason = decision.reason;
+
+  if (decision.runtime === 'worker') {
+    running = true;
+    return runInWorker(workerProgram, workerFiles, serializedCode);
+  }
 
   if (!pyodideReady) {
     writeOut('Loading Python (Pyodide)…\n');
@@ -1989,7 +2343,36 @@ function startRun() {
 }
 
 function stopCode() {
-  if (!running) return;
+  // `running` is set by startRun() for a program. A REPL statement never sets
+  // it, but a worker-backed statement IS executing and must be stoppable — that
+  // is the whole point of moving the REPL off-thread.
+  if (!running && !(workerClient && workerClient.isRunning())) return;
+
+  // A worker-routed run is stopped by terminating the worker. Unconditional, and
+  // the only thing that can stop `while True: pass` — so none of the cooperative
+  // machinery below applies, and there is no "cannot be stopped" case to warn
+  // about.
+  if (workerClient && workerClient.isRunning()) {
+    rerunQueued = false;             // Stop means stop, not restart
+    workerClient.stop();
+
+    // Terminating discards the interpreter, so there is no post-run namespace.
+    // With the explorer on, an empty table would read as "your program defined
+    // nothing" — say why instead, in the console the student is already reading.
+    // (#debug-note belongs to the step debugger, which may not be enabled.)
+    if (replActive) {
+      // Terminating discards the interpreter, so the console session's variables
+      // are gone. Say so rather than letting a student wonder why `x` vanished.
+      writeOut('\n[stopped — console session reset]\n');
+      startReplPrompt();
+    } else if (variableExplorerEnabled()) {
+      writeOut('\n[stopped — variables unavailable, the interpreter was discarded]\n');
+      try { renderVariables([]); } catch (e) {}
+    } else {
+      writeOut('\n[stopped]\n');
+    }
+    return;                          // the run promise settles and calls finishRun()
+  }
 
   // Cooperative cancellation: request it, and the program unwinds at its next
   // yield point — rate() for VPython (installRateCancellation) or time.sleep()
