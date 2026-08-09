@@ -319,7 +319,22 @@ function startReplPrompt() {
 }
 
 // Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
+//
+// Re-entrant by accident until now. reset() calls this whenever trinket content
+// arrives, and an authenticated session loads its draft AFTER the first prompt
+// is already armed — so a second call ran initConsoleOutput(), which resets
+// jq-console, wiping the transcript and the student's session, and then armed a
+// second prompt on top of the first. Nothing about the REPL had changed; only
+// the console it was drawing into was thrown away underneath it.
+//
+// The namespace itself survives (ensurePyodideConsole is memoised), so what a
+// student loses is everything they can see plus the input they had typed.
 function startRepl() {
+  if (replActive) {
+    // Already running: leave the live session alone.
+    return Promise.resolve();
+  }
+
   initConsoleOutput();
 
   // The console palette is a MODE, not a default. Base `.jqconsole-output` is
