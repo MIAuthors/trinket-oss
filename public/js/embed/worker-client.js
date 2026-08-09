@@ -17,7 +17,9 @@
     if (!WorkerCtor) throw new Error('Web Workers are not available');
 
     var worker = null;
-    var current = null;   // { id, resolve } for the in-flight run
+    var current = null;        // { id, resolve } for the in-flight run
+    var ready = false;         // has THIS worker finished booting Pyodide?
+    var readyWaiters = [];     // resolvers waiting on that boot
 
     function settle() {
       var run = current;
@@ -29,9 +31,25 @@
       var msg = (e && e.data) || {};
 
       // Lifecycle and streaming messages are not tied to a specific run.
-      if (msg.type === 'ready')  { if (opts.onReady)  opts.onReady(msg);       return; }
+      if (msg.type === 'ready') {
+        ready = true;
+        var waiters = readyWaiters;
+        readyWaiters = [];
+        waiters.forEach(function(resolve) { resolve(); });
+        if (opts.onReady) opts.onReady(msg);
+        return;
+      }
       if (msg.type === 'stdout') { if (opts.onStdout) opts.onStdout(msg.text); return; }
       if (msg.type === 'stderr') { if (opts.onStderr) opts.onStderr(msg.text); return; }
+
+      // A boot failure carries no run id — it happened before any run existed.
+      // The id check below would drop it, leaving the page waiting on a worker
+      // that will never become ready. Report it and settle whatever is waiting.
+      if (msg.type === 'error' && (msg.id === null || msg.id === undefined)) {
+        if (opts.onError) opts.onError(msg.traceback);
+        settle();
+        return;
+      }
 
       // Everything below completes a run. A reply from a worker we already
       // replaced carries a stale id and must NOT settle the current run —
@@ -49,6 +67,8 @@
 
     function ensureWorker() {
       if (worker) return worker;
+      ready = false;
+      readyWaiters = [];
       worker = new WorkerCtor(opts.workerUrl);
       worker.onmessage = onMessage;
       worker.postMessage({
@@ -60,15 +80,28 @@
       return worker;
     }
 
+    // Booting Pyodide in the worker takes seconds. A `run` posted before that
+    // finishes is answered "Python is not ready yet", so runs wait here instead.
+    function whenReady() {
+      if (ready) return Promise.resolve();
+      return new Promise(function(resolve) { readyWaiters.push(resolve); });
+    }
+
     ensureWorker();
 
     return {
-      run: function(source) {
+      run: function(source, files) {
         var w = ensureWorker();
         var id = 'run-' + (++seq);
         return new Promise(function(resolve) {
           current = { id: id, resolve: resolve };
-          w.postMessage({ type: 'run', id: id, source: source });
+          whenReady().then(function() {
+            // stop() may have replaced the worker, or another run started,
+            // while Pyodide was still booting.
+            if (worker === w && current && current.id === id) {
+              w.postMessage({ type: 'run', id: id, source: source, files: files || null });
+            }
+          });
         });
       },
 

@@ -48,6 +48,18 @@
 
     var run = function(msg) {
       currentRunId = msg.id;
+
+      // Secondary .py modules must exist in the worker's own filesystem before
+      // the program imports them — the same job syncFilesToFS() does on the
+      // main thread. The main file is passed as `source` and is not written.
+      if (msg.files) {
+        for (var name in msg.files) {
+          if (!Object.prototype.hasOwnProperty.call(msg.files, name)) continue;
+          if (!/\.py$/.test(name)) continue;
+          try { pyodide.FS.writeFile(name, msg.files[name]); } catch (e) {}
+        }
+      }
+
       return pyodide.runPythonAsync(msg.source)
         .then(function() { post(buildRunReply(msg.id, { ok: true })); })
         .catch(function(err) {

@@ -66,6 +66,9 @@ var jqconsole;
 var mainFile = 'main.py';
 var template = TrinketIO.import('utils.template');
 var ActivityLog = TrinketIO.import('embed.analytics.activity');
+var runtimeRouter   = TrinketIO.import('embed.runtimeRouter');
+var workerClientApi = TrinketIO.import('embed.workerClient');
+var workerClient    = null;   // created lazily; null means the main-thread path
 var disableAceEditor = window.userSettings && window.userSettings.disableAceEditor || false;
 
 // Pyodide is loaded lazily on the first run so the ~10MB download doesn't block
@@ -1823,6 +1826,51 @@ function hideVariables() {
   $('#variablesTab').removeClass('active');
 }
 
+// #108: run this program in the Web Worker.
+//
+// Output and tracebacks go through the SAME helpers the main-thread path uses,
+// so #107's frame filtering and the console escaping apply unchanged and the two
+// runtimes cannot drift apart in what a student sees.
+//
+// Completion goes through finishRun() for the same reason: it owns the `running`
+// flag, the "complete" postMessage the embedding page listens for, and the
+// queued-rerun handling. Duplicating a subset of that here is how the two paths
+// would quietly diverge.
+function ensureWorkerClient() {
+  if (workerClient) return workerClient;
+
+  workerClient = workerClientApi.createWorkerClient({
+    workerUrl  : '/js/embed/pyodide-worker.js',
+    pyodideUrl : PYODIDE_INDEX_URL + 'pyodide.js',
+    indexURL   : PYODIDE_INDEX_URL,
+    onStdout   : function(text) { writeOut(text); },
+    onStderr   : function(text) { writeOut(text); },
+    onError    : function(traceback) {
+      workerRunError = new Error(traceback);
+      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, mainFile)) + '\n',
+                      'jqconsole-error', false);
+    }
+  });
+  return workerClient;
+}
+
+var workerRunError = null;   // set by onError so finishRun() can report it
+
+// `program` is the main file's source; `files` is the whole editor file map, so
+// the worker can write the secondary .py modules into its own FS exactly as
+// syncFilesToFS() does for the main thread. `serialized` is what finishRun()
+// reports to analytics, matching the main path.
+function runInWorker(program, files, serialized) {
+  workerRunError = null;
+  ensureWorkerClient();
+
+  writeOut('Loading Python (Pyodide)…\n');
+
+  return workerClient.run(program, files).then(function() {
+    finishRun(serialized, workerRunError);
+  });
+}
+
 function finishRun(serializedCode, err) {
   $('.stop-it').addClass('hide');
   running = false;
@@ -1897,6 +1945,30 @@ function startRun() {
   $('#graphic-wrap').addClass('hide');
   $('#output-dragbar').addClass('hide');
   $('#console-wrap').css('height', '100%');
+
+  // #108: choose a runtime for THIS program. VPython and programs the async
+  // transform cannot rewrite stay on the main thread; everything else runs in
+  // the worker, where Stop is worker.terminate() and cannot be blocked.
+  //
+  // Route on the PROGRAM TEXT, not on serializedCode: api.getValue() returns the
+  // serialized file list (a JSON string), so usesVPython() asked about it never
+  // matches and every VPython program would be sent off-thread, where its
+  // `from js import sphere, …` bridge cannot exist.
+  var workerFiles   = editor.getAllFiles();
+  var workerProgram = workerFiles[mainFile] || '';
+
+  var decision = runtimeRouter.chooseRuntime(workerProgram, {
+    usesVPython   : usesVPython(workerProgram),
+    workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+    queryRuntime  : (api._queryString || {}).runtime
+  });
+  window.__trinketRuntime       = decision.runtime;   // read by the browser specs
+  window.__trinketRuntimeReason = decision.reason;
+
+  if (decision.runtime === 'worker') {
+    running = true;
+    return runInWorker(workerProgram, workerFiles, serializedCode);
+  }
 
   if (!pyodideReady) {
     writeOut('Loading Python (Pyodide)…\n');
@@ -1989,6 +2061,17 @@ function startRun() {
 
 function stopCode() {
   if (!running) return;
+
+  // A worker-routed run is stopped by terminating the worker. Unconditional, and
+  // the only thing that can stop `while True: pass` — so none of the cooperative
+  // machinery below applies, and there is no "cannot be stopped" case to warn
+  // about.
+  if (workerClient && workerClient.isRunning()) {
+    rerunQueued = false;             // Stop means stop, not restart
+    workerClient.stop();
+    writeOut('\n[stopped]\n');
+    return;                          // the run promise settles and calls finishRun()
+  }
 
   // Cooperative cancellation: request it, and the program unwinds at its next
   // yield point — rate() for VPython (installRateCancellation) or time.sleep()
