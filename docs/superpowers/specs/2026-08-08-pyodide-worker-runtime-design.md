@@ -66,7 +66,7 @@ Settled during design; recorded with rationale so the plan doesn't relitigate th
 | D1 | Off-main-thread execution, not just better cancellation | The goal is "the page never freezes", not only "Stop works". An AST-injected cancellation check would fix Stop while leaving the tab stuttering. |
 | D2 | VPython stays on the main thread in v1 | Its bridge binds `from js import sphere, box, rate, …` synchronously to the window realm. Moving it is a *replacement*, not a port. |
 | D3 | Programs the transform can't handle fall back to the main thread | Preserves today's behaviour instead of failing a program that works now. |
-| D4 | matplotlib uses `backend_webagg_core` over `postMessage` | The `ipympl` architecture, which is how JupyterLite and VS Code get interactive figures from an out-of-process kernel. Keeps pan/zoom. |
+| D4 | matplotlib uses `backend_webagg_core` over `postMessage` | The `ipympl` architecture, which is how JupyterLite and VS Code get interactive figures from an out-of-process kernel. Keeps pan/zoom. **Implemented and verified — but see §8 for what this section got wrong about Pyodide.** |
 | D5 | Interactive 3D in the worker is the committed destination; the channel is shaped for it now | Reserving the message types costs nothing today and keeps the later bridge additive rather than a transport rewrite. |
 | D6 | Variable explorer and step debugger run in the worker too, not routed away | Both already serialise to JSON and are only read when Python is idle, so they port as a transport change with no logic change. An earlier draft routed them to the main thread, which would have disabled worker coverage site-wide for any deploy that enabled the explorer. |
 
@@ -179,22 +179,66 @@ This removes the REPL's one documented limitation: an infinite loop typed at the
 
 ## 8. matplotlib
 
-`backend_webagg_core` is pure Python and transport-agnostic — upstream webagg carries its messages over a WebSocket from a Tornado server, `ipympl` carries them over a Jupyter comm. We carry them over `postMessage`:
+**Status: implemented and verified** (interactive figures, full toolbar).
+
+`backend_webagg_core` emits frames and consumes events; matplotlib's own
+`mpl.js` renders them on the page; `postMessage` replaces the WebSocket:
 
 ```
 worker                                   page
 ------                                   ----
 backend_webagg_core   ──{figure diff}──▶  mpl.js → canvas
-handle_json(event)    ◀──{mpl-event}───   mouse / zoom / resize
+handle_json(event)    ◀──{mpl-event}───   mouse / zoom / toolbar
 ```
 
-`mpl.js` ships with matplotlib and is **version-coupled** to it, so it is served from the Pyodide-installed matplotlib rather than vendored independently, and the versions are asserted at load.
+### What this section originally got wrong
 
-**Fallback:** if `mpl.js` fails to load or the webagg handshake fails, the worker switches that figure to `Agg` and sends `kind: 'png'`. A plot always appears; it just loses interactivity. This keeps a broken frontend from turning into a blank output pane.
+The design asserted that `backend_webagg_core` is transport-agnostic. That is
+true upstream and **false in Pyodide**, whose matplotlib patches it. Recorded
+here because every one of these cost a debugging round, and anyone revisiting
+this will hit them again:
 
----
+1. **It imports the DOM at module load** — `from js import alert, document`. The
+   DOM is used only by its download helper, so inert stubs in the worker satisfy
+   the import and lose nothing; saving happens page-side from the canvas.
+2. **`mpl.toolbar_items` and `mpl.extensions` are not in `mpl.js`.** They are
+   appended by `FigureManagerWebAgg.get_javascript()`. Reading `mpl.js` off disk
+   gives a toolbar with **no buttons**.
+3. **Toolbar icons come from the embedder.** Pyodide's `mpl.js` calls
+   `mpl.toolbar_image_callback(name).toJs({create_pyproxies:false})` and expects
+   a PyProxy of bytes. The icons ship from the wheel as base64; a plain object
+   with a `.toJs()` satisfies it.
+4. **Its `mpl.js` hands the socket an object**, not a JSON string.
+5. **Nothing pumps the event loop.** Upstream Tornado drives `refresh_all()`;
+   in a worker nothing does, so both the first frame and every post-event redraw
+   must be pumped explicitly. Without this the figure renders and then never
+   responds — the failure looks like a dead bridge but is a missing pump.
 
----
+### Ordering
+
+The figure is announced to the page **before** `add_web_socket`. That call starts
+sending immediately and `postMessage` preserves order, so attaching first
+delivers frames for a figure the page has not yet created, and they are dropped.
+
+### Sizing
+
+The worker cannot see the page. Pyodide's manager ignores `mpl.js`'s `resize`
+message (the same gap as `supports_binary`), so the default figure size is set in
+Python from a pane width sent with the run. Note the graphic pane is still hidden
+at that moment, so the width must be measured from a visible ancestor.
+
+### Fallback
+
+If `mpl.js` fails to load, the worker sends a static PNG on the same `figure`
+message and the page renders an `<img>`. A plot always appears.
+
+### Testing note
+
+Automated synthetic `MouseEvent`s put correctly-mapped coordinates on the wire
+but do **not** trigger a redraw — `mpl.js` appears to require trusted events. The
+render, sizing, toolbar and canvas ink are asserted in the browser spec;
+zoom-to-rectangle is verified by hand. Do not read the absent assertion as an
+absent feature.
 
 ## 8a. Variable explorer and step debugger over the channel
 
@@ -307,7 +351,7 @@ The routing predicate is the only cheaply-testable piece, which is exactly why i
 | Risk | Mitigation |
 |---|---|
 | Pyodide boot cost on every Stop | pre-warm a replacement worker during idle |
-| `mpl.js` / matplotlib version skew | serve `mpl.js` from the installed matplotlib; assert versions; PNG fallback |
+| ~~`mpl.js` / matplotlib version skew~~ **resolved** | `mpl.js` ships *inside* the Pyodide matplotlib wheel, so it is read from the very interpreter running the code. Skew is structurally impossible; no version assertion needed. |
 | Routing misfires — a program silently loses freeze protection | `chooseRuntime()` returns a `reason`, surfaced in `/version`-style diagnostics and asserted in tests |
 | Two runtimes drift apart | shared output formatting; regression specs run against both |
 | Worker adds latency to short programs | measure; if material, keep short programs on the main thread by the same routing mechanism |
