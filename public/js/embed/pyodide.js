@@ -164,6 +164,195 @@ window.__trinket_console_input = function(prompt) {
   });
 };
 
+// ---------------------------------------------------------------------------
+// SPIKE (issue #109): interactive REPL on Pyodide.
+//
+// The "Interactive console" the Share dialog used to advertise was the
+// server-backed `console` trinket type, which is gone. Pyodide ships its own
+// REPL engine (pyodide.console.PyodideConsole) that handles the hard part —
+// deciding whether a line completes a statement — so the work here is only
+// wiring it to jq-console, which is already bundled and already drives program
+// output and input().
+//
+// The loop deliberately mirrors python.js's Skulpt REPL (startPrompt): a
+// jqconsole.Prompt whose second callback reports how far to indent a
+// continuation line, then re-prompt after each evaluation.
+//
+// TWO EXISTING SYSTEMS THIS MUST NOT DISTURB — both are safe by construction:
+//
+//  1. VPython rate() cancellation. The wrapper around window.rate() and the
+//     cancelRequested/rerunQueued state belong to runProgram; a REPL evaluation
+//     never enters that path, never sets runningIsVpython, and never installs or
+//     removes the rate wrapper. (A VPython animation typed AT the prompt is out
+//     of scope for the spike — it would run with the unwrapped rate().)
+//
+//  2. console.input(). It calls jqconsole.Input(), which cannot coexist with an
+//     ACTIVE jqconsole.Prompt. It doesn't have to: exactly as in python.js, the
+//     prompt is consumed before evaluation begins and is only re-armed after the
+//     evaluation settles — so during evaluation jqconsole is free, and
+//     `console.input()` typed at the REPL works unchanged. `await` at the prompt
+//     works too, because PyodideConsole evaluates asynchronously.
+// ---------------------------------------------------------------------------
+var pyodideConsole = null;   // the PyodideConsole instance, created on first use
+var replActive     = false;  // a REPL prompt is armed or evaluating
+
+// Build the PyodideConsole. Its globals are the SAME namespace the Run button
+// uses, so a REPL session can inspect what a program just defined — the main
+// reason a REPL is useful in a classroom.
+function ensurePyodideConsole() {
+  if (pyodideConsole) return pyodideConsole;
+  pyodideConsole = pyodide.runPython(
+    'from pyodide.console import PyodideConsole\n' +
+    'PyodideConsole(globals())\n'
+  );
+  return pyodideConsole;
+}
+
+// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
+// Everything we put in the console is Python text, and Python text is full of
+// angle brackets: a traceback names its scope `<module>` and its console frame
+// `<console>`, and repr() renders an object as `<Foo object at 0x…>`. Parsed as
+// HTML those become unknown tags and DISAPPEAR — a REPL traceback rendered as
+// `File "", line 1, in ` with both names silently eaten, and an object's repr
+// vanished completely. It is also an injection hole: an exception message or a
+// repr containing markup is executed by the page, and both can carry
+// student-controlled text.
+//
+// Escape here and keep the `false` (jqconsole's own escaping would also swallow
+// the ANSI codes the run path emits) — the convention python.js already uses.
+function escapeConsoleHtml(text) {
+  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
+// The DOM half of switching to the output pane, WITHOUT running anything.
+// showResult() does this and then calls runCode(); the REPL needs the switch but
+// must NOT run the program — runCode() resets the console, which would wipe the
+// REPL's transcript and namespace every time Console was selected.
+function showOutputPane() {
+  $('#codeOutput').removeClass('hide');
+  $('#editor').addClass('hide');
+
+  api.closeOverlay('#modules');
+
+  $('#instructionsContainer').addClass('hide');
+  $('#outputContainer').removeClass('hide');
+
+  $('#codeOutputTab').addClass('active');
+  $('#instructionsTab').removeClass('active');
+  hideVariables();     // a run always returns focus to the Result pane
+}
+
+// One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
+function startReplPrompt() {
+  if (!jqconsole) return;
+  replActive = true;
+
+  jqconsole.Prompt(true, function(input) {
+    // Blank line: just re-prompt (matches python.js and the CPython REPL).
+    if (/^\s*$/.test(input)) { startReplPrompt(); return; }
+
+    var console_ = ensurePyodideConsole();
+    var result;
+    try {
+      result = console_.push(input);
+    } catch (e) {
+      jqconsole.Write(escapeConsoleHtml(String(e && e.message || e)) + '\n', 'jqconsole-error', false);
+      startReplPrompt();
+      return;
+    }
+
+    // push() returns a Future; awaiting it runs the statement. Errors arrive as
+    // a rejection carrying the formatted traceback, which is what we display.
+    Promise.resolve(result)
+      .then(function(value) {
+        if (value !== undefined && value !== null) {
+          jqconsole.Write(escapeConsoleHtml(pyodide.runPython('repr')(value)) + '\n', 'jqconsole-output', false);
+        }
+      })
+      .catch(function(err) {
+        jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
+      })
+      .then(function() { startReplPrompt(); });
+
+  }, function(input) {
+    // Continuation callback. jq-console's contract (see python.js's Skulpt REPL,
+    // which defaults `multilineReturn = false`): return FALSE to submit the
+    // statement, or a NUMBER to keep reading with that indent. Returning 0 does
+    // NOT mean "execute" — it means "continue, indent 0", which is how the first
+    // version of this spike left every expression sitting at a `...` prompt.
+    //
+    // Ask Python itself whether the statement is finished: codeop.compile_command
+    // is what the CPython REPL uses, returns None while input is incomplete, and
+    // has no side effects (pushing the line into the console buffer would consume
+    // it).
+    try {
+      var complete = pyodide.runPython(
+        'import codeop\n' +
+        'def __trinket_is_complete(src):\n' +
+        '    try:\n' +
+        '        return codeop.compile_command(src, "<console>", "single") is not None\n' +
+        '    except (SyntaxError, OverflowError, ValueError):\n' +
+        '        return True\n' +   // let evaluation report the real error
+        '__trinket_is_complete\n'
+      )(input);
+      if (complete) return false;   // submit
+    } catch (e) {
+      return false;                 // submit; let evaluation surface the error
+    }
+
+    var lines = input.split('\n');
+    var last  = lines[lines.length - 1] || '';
+
+    // CPython's REPL rule: inside a block, a BLANK line ends it. Without this the
+    // block never terminates — codeop keeps reporting "incomplete" for a suite
+    // that could still be extended, so the prompt sits at `...` forever.
+    if (lines.length > 1 && /^\s*$/.test(last)) return false;
+
+    // The number is an indent LEVEL (jq-console multiplies it), NOT a character
+    // count. Returning the measured character width made each continuation line
+    // deeper than the last — 4, then 8, then 26 spaces. python.js only ever
+    // returns 0/1/small negatives for the same reason: 1 to open a suite after a
+    // colon, 0 to hold the current indent.
+    return /:\s*$/.test(last) ? 1 : 0;
+  });
+}
+
+// Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
+//
+// Re-entrant by accident until now. reset() calls this whenever trinket content
+// arrives, and an authenticated session loads its draft AFTER the first prompt
+// is already armed — so a second call ran initConsoleOutput(), which resets
+// jq-console, wiping the transcript and the student's session, and then armed a
+// second prompt on top of the first. Nothing about the REPL had changed; only
+// the console it was drawing into was thrown away underneath it.
+//
+// The namespace itself survives (ensurePyodideConsole is memoised), so what a
+// student loses is everything they can see plus the input they had typed.
+function startRepl() {
+  if (replActive) {
+    // Already running: leave the live session alone.
+    return Promise.resolve();
+  }
+
+  initConsoleOutput();
+
+  // The console palette is a MODE, not a default. Base `.jqconsole-output` is
+  // WHITE, for the dark console a running program draws into; the light REPL
+  // palette lives behind `.console-mode` (static/scss/embed/_python.scss). The
+  // Skulpt REPL sets that class on the way in (python.js) and the run path
+  // clears it again. This REPL only ever cleared it, so its output was white on
+  // the near-white (#f9f9f9) REPL background — legible only by selecting it.
+  $('#console-output').addClass('console-mode');
+  return ensurePyodide().then(function() {
+    jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
+                    ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
+    startReplPrompt();
+  }).catch(function(err) {
+    jqconsole.Write(escapeConsoleHtml(String(err && err.message || err)) + '\n', 'jqconsole-error', false);
+  });
+}
+
 function ensurePyodide() {
   if (pyodideLoading) return pyodideLoading;
 
@@ -390,20 +579,10 @@ var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importl
 // Names Python uses when code has no real file — all mean "the user's program".
 var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
 
-// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
-// Everything we put in the console is Python text, and Python text is full of
-// angle brackets: a traceback names its scope `<module>`, and repr() renders an
-// object as `<Foo object at 0x…>`. Parsed as HTML those become unknown tags and
-// DISAPPEAR — which is why a traceback rendered as `File "", line 1, in ` with
-// the names silently eaten. It is also an injection hole: an exception message
-// containing markup is executed by the page.
-//
-// Escape here and keep the `false` (jqconsole's own escaping would also swallow
-// the ANSI codes the run path emits) — the convention python.js already uses.
-function escapeConsoleHtml(text) {
-  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
-}
+// escapeConsoleHtml is defined once, above, next to the other console helpers —
+// #114 and #117 each introduced an identical copy, and two definitions of the
+// same name in one file is a defect waiting to happen: the later declaration
+// silently wins, so a future edit to the first would have no effect at all.
 
 function formatPythonTraceback(msg, mainName) {
   if (!msg) return msg;
@@ -1999,7 +2178,7 @@ window.TrinketAPI = {
     $(document).on('trinket.code.edit',    $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',     $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop',    $.proxy(this.stopExecution, this));
-    $(document).on('trinket.code.console', $.proxy(this.showResult, this));
+    $(document).on('trinket.code.console', $.proxy(this.consoleResult, this));
 
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
     $(document).on('trinket.instructions.view', $.proxy(api.showInstructions, api));
@@ -2139,6 +2318,27 @@ window.TrinketAPI = {
     api.closeOverlay('#modules');
     api.focus();
   },
+  // The Console entry in the run-options dropdown. Previously `trinket.code.console`
+  // was bound straight to showResult, which RUNS the program — so the menu entry
+  // (once it existed) would have silently done the wrong thing rather than opening
+  // the REPL.
+  //
+  // Order matters: showResult() clears api.runMode, so runMode is set after it,
+  // not before.
+  consoleResult : function(event) {
+    if (runOption !== 'console' && event && $(event.target).data('button') === 'console') {
+      api.changeRunOption('console');
+    }
+
+    showOutputPane();
+    api.runMode = 'console';
+    api.triggerRunModeChange();
+
+    // Re-selecting Console while a prompt is already armed would print a second
+    // banner and arm a second prompt on top of the first.
+    if (!replActive) { startRepl(); }
+  },
+
   showResult : function(event) {
     if (runOption !== 'run' && event && $(event.target).data('button') === 'run') {
       api.changeRunOption('run');
@@ -2147,17 +2347,7 @@ window.TrinketAPI = {
     api.triggerRunModeChange();
     api.hasRun = true;
 
-    $('#codeOutput').removeClass('hide');
-    $('#editor').addClass('hide');
-
-    api.closeOverlay('#modules');
-
-    $('#instructionsContainer').addClass('hide');
-    $('#outputContainer').removeClass('hide');
-
-    $('#codeOutputTab').addClass('active');
-    $('#instructionsTab').removeClass('active');
-    hideVariables();     // a run always returns focus to the Result pane
+    showOutputPane();
     exitReplay(true);    // a fresh run invalidates any step-through recording
                          // (quiet: runCode resets the console right after)
 
@@ -2171,9 +2361,6 @@ window.TrinketAPI = {
     stopCode();
   },
   showTestResult : function() {},
-  consoleResult : function(event) {
-    this.showResult(event);
-  },
   toggleModules : function() {},
   hideAll : function() {},
   onOpenOverlay : function() {
@@ -2188,6 +2375,25 @@ window.TrinketAPI = {
   reset : function(trinket, initial) {
     editor.reset(trinket.code);
     editor.assets(trinket.assets ? trinket.assets.slice() : []);
+
+    // #109: open the interactive REPL instead of the run-a-program flow.
+    //
+    // Accept BOTH spellings, because the two entry points disagree:
+    //   * runOption=console — what the Share/Embed dialog emits ("Interactive
+    //     console only"); the server keeps it as runOption and leaves runMode
+    //     empty, since its runMode fallback only fires when runOption is unset.
+    //   * runMode=console  — what markdown ```python3.console``` blocks emit,
+    //     and what a previously-shared console link carries.
+    // Keying on only one of them would leave the dialog's option dead — the very
+    // complaint this issue is about.
+    //
+    // Gated strictly on console mode, so every ordinary trinket takes the
+    // unchanged path below.
+    if (api.runMode === 'console' || runOption === 'console') {
+      this.showResult();
+      startRepl();
+      return;
+    }
 
     if (trinket.code && (start === 'result') && autoRun !== false) {
       this.showResult();
@@ -2239,9 +2445,9 @@ window.TrinketAPI = {
     };
   },
   changeRunOption : function(option) {
-    var icon_classes = { run : 'fa fa-play', stop : 'fa fa-stop' };
-    var titles = { run : 'View the result.', stop : 'Stop program.' };
-    var labels = { run : 'Run', stop : 'Stop' };
+    var icon_classes = { run : 'fa fa-play', stop : 'fa fa-stop', console : 'fa fa-terminal' };
+    var titles = { run : 'View the result.', stop : 'Stop program.', console : 'Run code interactively.' };
+    var labels = { run : 'Run', stop : 'Stop', console : 'Console' };
     $('.run-it').data('action', 'code.' + option);
     $('.run-it').attr('title', titles[option]);
     $('.run-it').find('label').text(labels[option]);
