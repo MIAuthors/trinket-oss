@@ -50,6 +50,7 @@ try {
 }
 const mailer         = require('./lib/util/mailer');
 const viewEngine     = require('./lib/util/nunjucks');
+const routeParser    = require('./lib/util/routeParser');
 const dbBackend    = (config.db && config.db.backend) || 'mongoose';
 const sessionCacheBackend = (config.app.plugins.session.cache && config.app.plugins.session.cache.backend) || dbBackend;
 const CatboxEngine = sessionCacheBackend === 'memory'
@@ -216,6 +217,36 @@ const init = async () => {
                         (!acceptHeader.includes('application/json') && !isApiRequest);
 
       if (!isApiRequest && wantsHtml) {
+        // A route that declares `fail: { html: ... }` means that page to be its
+        // failure surface — including when a PRE-handler rejects. Previously
+        // `fail.html` was consulted only by request.fail() (a controller choosing
+        // to fail), so `isAdmin` throwing Boom.forbidden fell through to the
+        // generic "Something went wrong" page: on /admin that reads as a broken
+        // site rather than "you need to sign in" (issue #74). Checked before the
+        // generic pages below so the route's own choice wins.
+        const failHtml = request.route && request.route.settings
+          && request.route.settings.app && request.route.settings.app.failHtml;
+        if (failHtml && statusCode !== 401) {
+          const failContext = {};
+          try {
+            routeParser.addUserContext(failContext, request);
+
+            // A route's fail page (typically login.html) assumes the visitor is
+            // NOT signed in. Handing a login form to someone who already is
+            // hides the actual problem — "this account lacks permission" — which
+            // is how the original report described /admin. So: authenticated and
+            // forbidden gets a real 403 page; everyone else gets the route's
+            // declared fail page.
+            if (statusCode === 403 && request.user) {
+              return h.view('403.html', failContext).code(403);
+            }
+            return h.view(failHtml, failContext).code(statusCode);
+          } catch (e) {
+            // Never let the failure page become its own failure — fall through
+            // to the generic handling below.
+          }
+        }
+
         if (statusCode === 401) {
           // Redirect to login for unauthorized page requests
           return h.redirect('/login').takeover();
