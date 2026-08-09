@@ -91,4 +91,25 @@ test.describe('Python traceback readability (#107)', () => {
       expect(text).not.toContain('_pyodide');
     }).toPass({ timeout: 90_000 });
   });
+
+
+  test('angle-bracketed names survive rendering, and markup is not executed', async ({ page }) => {
+    // The console wrote unescaped HTML, so every <...> in Python text was parsed
+    // as a tag and vanished — which is the real reason `, in <module>` showed up
+    // as a dangling `, in`. The same write is an injection hole: markup inside an
+    // exception message was executed by the page rather than shown.
+    await runCode(page, 'raise ValueError(\'<img src=x onerror="window.__pwned=1">\')');
+
+    await expect(async () => {
+      const text = await output(page);
+      expect(text, 'the message must be shown literally').toContain('<img src=x onerror="window.__pwned=1">');
+      expect(text, 'the scope name must not be eaten by the HTML parser').toContain('in <module>');
+    }).toPass({ timeout: 90_000 });
+
+    expect(await page.evaluate(() => window.__pwned), 'markup must not execute').toBeUndefined();
+    expect(await page.evaluate(() =>
+      document.querySelectorAll('#outputContainer img:not(#powered-by-trinket)').length
+    )).toBe(0);
+  });
+
 });
