@@ -223,3 +223,43 @@ describe('input() over the channel', () => {
     expect(made[0].posted.find(m => m.type === 'stdin-reply').value).toBe('');
   });
 });
+
+describe('variable snapshot over the channel', () => {
+  it('requests a snapshot and resolves with the parsed array', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+
+    const p = client.snapshot();
+    await tick();
+    const req = made[0].posted.find(m => m.type === 'snapshot');
+    expect(req).toBeTruthy();
+
+    made[0].onmessage({ data: { type: 'snapshot-result', id: req.id, json: '[{"name":"x","value":"42"}]' } });
+    await expect(p).resolves.toEqual([{ name: 'x', value: '42' }]);
+  });
+
+  it('resolves to an empty array when the worker reports a failure', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    const p = client.snapshot();
+    await tick();
+    const req = made[0].posted.find(m => m.type === 'snapshot');
+    made[0].onmessage({ data: { type: 'snapshot-result', id: req.id, json: null } });
+    await expect(p).resolves.toEqual([]);
+  });
+
+  it('resolves to an empty array if the worker is gone (stopped)', async () => {
+    // Terminating discards the namespace, so a snapshot request after a stop can
+    // never be answered. It must not hang the caller.
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.stop();
+    await expect(client.snapshot()).resolves.toEqual([]);
+  });
+});

@@ -32,8 +32,11 @@ test.describe('Worker runtime (#108)', () => {
     }).toPass({ timeout: 90_000 });
   });
 
-  test('REGRESSION: with the flag off, everything stays on the main thread', async ({ page }) => {
-    await editorRun(page, 'print("main thread")', '/embed/python3');
+  test('?runtime=main forces the main thread (escape hatch)', async ({ page }) => {
+    // Deliberately explicit rather than relying on the config default: a dev box
+    // may enable features.workerRuntime in its untracked local.yaml, and this
+    // test must assert the escape hatch, not the machine's configuration.
+    await editorRun(page, 'print("main thread")', '/embed/python3?runtime=main');
     await expect(async () => {
       expect(await consoleText(page)).toContain('main thread');
     }).toPass({ timeout: 90_000 });
@@ -85,7 +88,9 @@ test.describe('Worker runtime (#108)', () => {
     await page.locator('.stop-it').first().click();
 
     await expect(async () => {
-      expect(await consoleText(page)).toContain('[stopped]');
+      // '[stopped]' plainly, or '[stopped — variables unavailable…]' when the
+      // explorer is on and the discarded namespace needs explaining.
+      expect(await consoleText(page)).toMatch(/\[stopped/);
     }).toPass({ timeout: 30_000 });
     // No "cannot be stopped" apology: terminate() is unconditional.
     expect(await consoleText(page)).not.toContain('cannot be');
@@ -183,6 +188,75 @@ test.describe('Worker runtime (#108)', () => {
     await expect(async () => {
       expect(await consoleText(page)).toContain('3');
     }).toPass({ timeout: 240_000 });
+  });
+
+
+  // --- variable explorer over the channel (spec 8a) --------------------------
+  // These only assert when the explorer is enabled; on a stack with it off they
+  // skip, because the panel does not exist to inspect.
+
+  test('the Variables panel is populated from the worker', async ({ page }) => {
+    await page.goto('/embed/python3?runtime=worker');
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
+    const enabled = await page.evaluate(() =>
+      !!(window.trinket && window.trinket.config && window.trinket.config.variableExplorer));
+    test.skip(!enabled, 'variableExplorer is disabled on this stack');
+
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('x = 42\nname = "Ada"', 1);
+    });
+    await page.locator('.run-it').first().click();
+
+    await expect(async () => {
+      const rows = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('#variables-table tbody tr'))
+          .map(tr => tr.textContent.replace(/\s+/g, ' ').trim()));
+      expect(rows.join(' | ')).toContain('x');
+      expect(rows.join(' | ')).toContain('42');
+    }).toPass({ timeout: 120_000 });
+  });
+
+  test('after a stop the panel says variables are unavailable', async ({ page }) => {
+    // Terminating the worker discards the namespace, so there is no post-run
+    // snapshot. The panel must say so rather than look authoritatively empty.
+    await page.goto('/embed/python3?runtime=worker');
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
+    const enabled = await page.evaluate(() =>
+      !!(window.trinket && window.trinket.config && window.trinket.config.variableExplorer));
+    test.skip(!enabled, 'variableExplorer is disabled on this stack');
+
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('y = 1\nwhile True:\n    pass', 1);
+    });
+    await page.locator('.run-it').first().click();
+    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 120_000 });
+    await page.locator('.stop-it').first().click();
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('variables unavailable');
+    }).toPass({ timeout: 30_000 });
+  });
+
+
+  test('the figure toolbar has real icons, not broken images', async ({ page }) => {
+    // Pyodide's matplotlib wheel ships web_backend/js and /css but NO images
+    // directory, so mpl.js's icon lookups all return zero bytes and every button
+    // renders as a broken image with its alt text. Counting buttons does not
+    // catch that — the buttons are there, the icons are not.
+    await editorRun(page, 'import matplotlib.pyplot as plt\nplt.plot([1,2,3])\nplt.show()');
+
+    await expect(page.locator('#graphic .mpl-figure button i.fa').first())
+      .toBeVisible({ timeout: 240_000 });
+
+    expect(await page.evaluate(() =>
+      document.querySelectorAll('#graphic .mpl-figure button img').length
+    ), 'no <img> icons should remain').toBe(0);
+
+    const icons = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#graphic .mpl-figure button i')).map(i => i.className));
+    expect(icons.length).toBeGreaterThanOrEqual(5);
+    expect(icons.join(' ')).toContain('fa-home');
+    expect(icons.join(' ')).toContain('fa-search-plus');
   });
 
 });

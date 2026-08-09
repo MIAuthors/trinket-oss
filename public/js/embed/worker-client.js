@@ -19,6 +19,7 @@
     var worker = null;
     var current = null;        // { id, resolve } for the in-flight run
     var ready = false;         // has THIS worker finished booting Pyodide?
+    var pending = {};          // id -> resolve, for request/response messages
     var readyWaiters = [];     // resolvers waiting on that boot
 
     function settle() {
@@ -70,6 +71,18 @@
         return;
       }
 
+      // Request/response replies (the variable explorer). Not tied to a run:
+      // they are asked for AFTER a run finishes, when the worker is idle.
+      if (msg.type === 'snapshot-result') {
+        var done = pending[msg.id];
+        if (!done) return;
+        delete pending[msg.id];
+        var parsed = [];
+        try { parsed = msg.json ? JSON.parse(msg.json) : []; } catch (e) { parsed = []; }
+        done(parsed);
+        return;
+      }
+
       // A boot failure carries no run id — it happened before any run existed.
       // The id check below would drop it, leaving the page waiting on a worker
       // that will never become ready. Report it and settle whatever is waiting.
@@ -103,7 +116,10 @@
         type: 'init',
         v: PROTOCOL_VERSION,
         pyodideUrl: opts.pyodideUrl,
-        indexURL: opts.indexURL
+        indexURL: opts.indexURL,
+        // The page owns the variable-explorer helper source; the worker runs it
+        // verbatim so the two runtimes cannot show different variables.
+        varsHelper: opts.varsHelper || ''
       });
       return worker;
     }
@@ -140,6 +156,22 @@
       stop: function() {
         if (worker) { worker.terminate(); worker = null; }
         settle();
+      },
+
+      // Post-run namespace snapshot for the Variables panel. VARS_HELPER already
+      // produces JSON and the page already parses it, so this is a transport
+      // change with no logic change — nothing live crosses the channel.
+      snapshot: function() {
+        // A stop terminates the worker and discards the namespace, so there is
+        // nothing to snapshot and nothing will ever reply. Resolve empty rather
+        // than leaving the caller waiting.
+        if (!worker) return Promise.resolve([]);
+        var w = worker;
+        var id = 'snap-' + (++seq);
+        return new Promise(function(resolve) {
+          pending[id] = resolve;
+          w.postMessage({ type: 'snapshot', id: id });
+        });
       },
 
       // Toolbar clicks and mouse events, back to the figure's manager.

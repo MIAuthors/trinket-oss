@@ -1844,6 +1844,7 @@ function ensureWorkerClient() {
     pyodideUrl : PYODIDE_INDEX_URL + 'pyodide.js',
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
+    varsHelper   : VARS_HELPER,
     onStdout   : function(text) { writeOut(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
     onInputRequest : function(prompt) {
@@ -1951,6 +1952,47 @@ function makeMplSocket(figureId) {
   };
 }
 
+// Pyodide's matplotlib wheel ships web_backend/js and /css but NO images
+// directory, so every mpl.toolbar_image_callback lookup returns zero bytes and
+// each toolbar button renders as a broken image with its alt text. Trinket
+// already loads Font Awesome for its own toolbar, so use that: same icons the
+// rest of the UI uses, nothing extra to ship, and no dependency on assets the
+// wheel does not contain.
+var MPL_TOOLBAR_ICONS = {
+  home         : 'fa-home',
+  back         : 'fa-arrow-left',
+  forward      : 'fa-arrow-right',
+  move         : 'fa-arrows',
+  zoom_to_rect : 'fa-search-plus',
+  filesave     : 'fa-floppy-o',
+  download     : 'fa-download'
+};
+
+function applyMplToolbarIcons(fig) {
+  if (!fig || !fig.buttons || !window.mpl || !window.mpl.toolbar_items) return;
+  window.mpl.toolbar_items.forEach(function(item) {
+    var name  = item[0];          // 'Home', 'Pan', …  keys of fig.buttons
+    var image = item[2];          // 'home', 'move', … the missing icon name
+    if (!name || !image) return;
+    var button = fig.buttons[name];
+    if (!button) return;
+
+    var cls = MPL_TOOLBAR_ICONS[image];
+    if (!cls) return;
+
+    var img = button.querySelector('img');
+    var icon = document.createElement('i');
+    icon.className = 'fa ' + cls;
+    icon.setAttribute('aria-hidden', 'true');
+    if (img) {
+      button.title = button.title || img.alt || name;   // keep the tooltip
+      button.replaceChild(icon, img);
+    } else {
+      button.appendChild(icon);
+    }
+  });
+}
+
 function handleWorkerFigure(msg) {
   var wrap = document.getElementById('graphic');
   if (!wrap) return;
@@ -1977,6 +2019,7 @@ function handleWorkerFigure(msg) {
     }, host);
 
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
+    applyMplToolbarIcons(fig);
     if (typeof socket.onopen === 'function') { socket.onopen(); }
 
     return;
@@ -2026,6 +2069,15 @@ function runInWorker(program, files, serialized) {
 
   return workerClient.run(program, files, { graphicWidth: graphicWidth }).then(function() {
     finishRun(serialized, workerRunError);
+
+    // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here
+    // because this page's Pyodide never ran the program. Ask the worker instead
+    // and render when it answers — it resolves after finishRun, so it wins.
+    if (variableExplorerEnabled()) {
+      workerClient.snapshot().then(function(vars) {
+        try { renderVariables(vars); } catch (e) {}
+      });
+    }
   });
 }
 
@@ -2227,7 +2279,17 @@ function stopCode() {
   if (workerClient && workerClient.isRunning()) {
     rerunQueued = false;             // Stop means stop, not restart
     workerClient.stop();
-    writeOut('\n[stopped]\n');
+
+    // Terminating discards the interpreter, so there is no post-run namespace.
+    // With the explorer on, an empty table would read as "your program defined
+    // nothing" — say why instead, in the console the student is already reading.
+    // (#debug-note belongs to the step debugger, which may not be enabled.)
+    if (variableExplorerEnabled()) {
+      writeOut('\n[stopped — variables unavailable, the interpreter was discarded]\n');
+      try { renderVariables([]); } catch (e) {}
+    } else {
+      writeOut('\n[stopped]\n');
+    }
     return;                          // the run promise settles and calls finishRun()
   }
 

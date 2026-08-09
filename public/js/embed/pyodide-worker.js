@@ -29,6 +29,7 @@
   if (typeof self !== 'undefined' && typeof self.importScripts === 'function') {
     var pyodide = null;
     var currentRunId = null;
+    var varsHelper = '';
 
     var post = function(msg) { self.postMessage(msg); };
 
@@ -40,6 +41,9 @@
         // not emitted one character at a time.
         pyodide.setStdout({ batched: function(s) { post({ type: 'stdout', text: s + '\n' }); } });
         pyodide.setStderr({ batched: function(s) { post({ type: 'stderr', text: s + '\n' }); } });
+        // The page owns VARS_HELPER; it is sent here so the two runtimes cannot
+        // drift into showing different variables for the same program.
+        varsHelper = msg.varsHelper || '';
         post({ type: 'ready', v: PROTOCOL_VERSION, pyodideVersion: pyodide.version });
       }).catch(function(err) {
         post({ type: 'error', id: null, traceback: 'Failed to start Python: ' + String(err && err.message || err) });
@@ -84,7 +88,10 @@
           pyodide.FS.writeFile('_trinket_async_transform.py', src);
           return pyodide.runPythonAsync([
             'import _trinket_async_transform as _t',
+            '# Bare input() must be awaited HERE (the worker cannot block) though',
+            '# not on the main thread, where it is window.prompt and synchronous.',
             '_t._BASE_AWAIT_NAMES = _t._BASE_AWAIT_NAMES | {"input"}',
+            '_t._TRINKET_ORIG_MODULE_ATTRS = dict(_t._MODULE_AWAIT_ATTRS)',
             'from _trinket_async_transform import transform_source'
           ].join('\n'));
         })
@@ -292,8 +299,19 @@
       }
 
       var source = msg.source || '';
+      // Shadow guard, matching the main thread's userShadowsConsole(): if the
+      // trinket ships its OWN console.py, `console.input()` is the student's
+      // function, not ours. Awaiting it would be a hard error, so the namespaced
+      // rule is dropped for this run. Bare input() is still the builtin and is
+      // still awaited — the worker cannot block on it either way.
+      var shadowsConsole = !!(msg.files &&
+        Object.prototype.hasOwnProperty.call(msg.files, 'console.py'));
+
       var prepared = needsTransform(source)
         ? ensureTransform(msg.transformUrl).then(function() {
+            pyodide.runPython(shadowsConsole
+              ? '_t._MODULE_AWAIT_ATTRS = {}'
+              : '_t._MODULE_AWAIT_ATTRS = dict(_t._TRINKET_ORIG_MODULE_ATTRS)');
             pyodide.globals.set('__user_source__', source);
             return pyodide.runPythonAsync(INPUT_SETUP).then(function() {
               return pyodide.runPython('transform_source(__user_source__)');
@@ -339,6 +357,23 @@
       var msg = e.data || {};
       try {
         if (msg.type === 'init') { boot(msg); return; }
+
+        if (msg.type === 'snapshot') {
+          var json = null;
+          if (pyodide && varsHelper) {
+            var ns = null;
+            try {
+              ns = pyodide.toPy({ user_ns: pyodide.globals });
+              json = pyodide.runPython(varsHelper, { globals: ns });
+            } catch (e) {
+              json = null;                 // an explorer failure must never break a run
+            } finally {
+              if (ns && typeof ns.destroy === 'function') { try { ns.destroy(); } catch (e) {} }
+            }
+          }
+          post({ type: 'snapshot-result', id: msg.id, json: json });
+          return;
+        }
 
         if (msg.type === 'mpl-event') {
           if (pyodide) {
