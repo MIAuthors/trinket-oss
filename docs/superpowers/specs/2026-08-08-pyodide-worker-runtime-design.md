@@ -64,13 +64,18 @@ Settled during design; recorded with rationale so the plan doesn't relitigate th
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Off-main-thread execution, not just better cancellation | The goal is "the page never freezes", not only "Stop works". An AST-injected cancellation check would fix Stop while leaving the tab stuttering. |
-| D2 | VPython stays on the main thread in v1 | Its bridge binds `from js import sphere, box, rate, …` synchronously to the window realm. Moving it is a *replacement*, not a port. |
+| D2 | VPython stays on the main thread in v1 | Its bridge binds `from js import sphere, box, rate, …` synchronously to the window realm. Moving it is a *replacement*, not a port. **Still holds for v1, but the rationale is superseded — see §14-16: the replacement is an existing package, and the current bridge cannot be moved off-thread in an embed at any price.** |
 | D3 | Programs the transform can't handle fall back to the main thread | Preserves today's behaviour instead of failing a program that works now. |
 | D4 | matplotlib uses `backend_webagg_core` over `postMessage` | The `ipympl` architecture, which is how JupyterLite and VS Code get interactive figures from an out-of-process kernel. Keeps pan/zoom. **Implemented and verified — but see §8 for what this section got wrong about Pyodide.** |
 | D5 | Interactive 3D in the worker is the committed destination; the channel is shaped for it now | Reserving the message types costs nothing today and keeps the later bridge additive rather than a transport rewrite. |
 | D6 | Variable explorer and step debugger run in the worker too, not routed away | Both already serialise to JSON and are only read when Python is idle, so they port as a transport change with no logic change. An earlier draft routed them to the main thread, which would have disabled worker coverage site-wide for any deploy that enabled the explorer. |
 
 **Explicitly not decided here:** how the VPython bridge itself is replaced. That is its own spec — see [Non-goals](#10-non-goals-and-what-comes-next).
+
+> **Read §14, §15 and §16 before acting on D2 or D5.** Those sections record the
+> proposal to adopt `vpython-jupyter` instead of replacing the bridge ourselves,
+> the correction to the GlowScript lineage, and the evidence that decides it. They
+> change the *reasoning* behind D2 and D5, not the v1 scope.
 
 ---
 
