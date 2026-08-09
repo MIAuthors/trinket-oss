@@ -68,6 +68,7 @@ Settled during design; recorded with rationale so the plan doesn't relitigate th
 | D3 | Programs the transform can't handle fall back to the main thread | Preserves today's behaviour instead of failing a program that works now. |
 | D4 | matplotlib uses `backend_webagg_core` over `postMessage` | The `ipympl` architecture, which is how JupyterLite and VS Code get interactive figures from an out-of-process kernel. Keeps pan/zoom. |
 | D5 | Interactive 3D in the worker is the committed destination; the channel is shaped for it now | Reserving the message types costs nothing today and keeps the later bridge additive rather than a transport rewrite. |
+| D6 | Variable explorer and step debugger run in the worker too, not routed away | Both already serialise to JSON and are only read when Python is idle, so they port as a transport change with no logic change. An earlier draft routed them to the main thread, which would have disabled worker coverage site-wide for any deploy that enabled the explorer. |
 
 **Explicitly not decided here:** how the VPython bridge itself is replaced. That is its own spec — see [Non-goals](#10-non-goals-and-what-comes-next).
 
@@ -85,9 +86,11 @@ The unit of decision is a **program**, not the site. Before running, `runtime-ro
               ┌─────────────────┴───────────────┐
               ▼                                 ▼
    today's in-window Pyodide          pyodide-worker.js
-   (VPython bridge, webagg,           (no DOM; messages only)
-    variable explorer)                 Stop = terminate()
-    Stop = cooperative
+   (VPython bridge, webagg)           (no DOM; messages only)
+    Stop = cooperative                 Stop = terminate()
+
+   variable explorer + step debugger work in BOTH:
+   their payloads are already JSON (see 8a)
 ```
 
 ### Routing rules
@@ -98,13 +101,8 @@ Applied in order; the first match wins.
 |---|---|---|
 | `usesVPython(source)` — already implemented in `public/js/embed/pyodide.js` | `main` | D2 |
 | `input()` / `rate()` / `sleep()` inside a `lambda` or comprehension | `main` | `await` cannot be inserted there (documented in `_async_transform.py`) |
-| `config.features.variableExplorer` or `stepDebugger` enabled | `main` | both read `pyodide.globals` directly — see the caveat below |
 | `?runtime=main` | `main` | escape hatch |
 | otherwise | `worker` | the common case |
-
-**Caveat on the explorer rule, stated plainly:** `variableExplorer` and `stepDebugger` are *site* config, not per-program. So a deploy that turns either on gets **no worker coverage at all** — every program routes to the main thread and the freeze problem returns site-wide. Both default to `false` today, so this is latent rather than active, but it is a real limit and the plan must not paper over it.
-
-It is also fixable, and the fix is not large: the explorer needs a serialised snapshot of the namespace, and the step debugger's recorder already produces a plain list of step dicts. Both are ordinary data that can cross the channel as a `snapshot` message. That upgrade is deliberately **not** in v1 — it is the first follow-up, and it is what removes this rule rather than living with it. Until then, a deploy must choose between the explorer and the worker, and this trade is documented in the deploy overlay guide.
 
 `chooseRuntime()` is a **pure function of (source, config, query)** returning `'main' | 'worker'` plus a `reason` string for diagnostics. Pure means it is unit-testable in node with no browser and no Pyodide — the only part of this project that can be tested cheaply, so it carries the routing logic rather than letting it smear into `pyodide.js`.
 
@@ -196,6 +194,61 @@ handle_json(event)    ◀──{mpl-event}───   mouse / zoom / resize
 
 ---
 
+---
+
+## 8a. Variable explorer and step debugger over the channel
+
+An earlier draft routed these to the main thread. That was wrong, and it mattered:
+both flags are *site* config, so the rule would have disabled worker coverage
+entirely for any deploy that enabled the explorer. Reading the implementation
+shows neither feature needs the main thread.
+
+**Both are already JSON at the boundary.** `VARS_HELPER` and `RECORD_HELPER` each
+end in `json.dumps(...)`, and the JS side does a single `JSON.parse` — a comment
+at `pyodide.js:551` says so outright ("the JS side does a single JSON.parse and
+never juggles PyProxy lifetimes"). Nothing live crosses the boundary today, so
+nothing live needs to cross the channel.
+
+**Both are needed only when Python is idle**, which is what makes this work:
+
+| Feature | When it reads state | Payload |
+|---|---|---|
+| Variable explorer | **post-run only** — one call site, on success and on error | array of `{name, kind, type, value, …}` |
+| Step debugger | **once, after the run** — the recorder returns the whole run | `{error, truncated, armed, skipped, output, steps, snaps}` |
+| Lazy tree expansion | on click, after the run | one expanded node |
+
+The worker's message loop is blocked *while Python runs*, exactly as the main
+thread is today — but neither feature asks for anything during a run, so the
+block is irrelevant. Live mid-run inspection is not a feature today and is not
+added here.
+
+### Added messages
+
+| Direction | Type | Payload |
+|---|---|---|
+| page → worker | `snapshot` | `{ id }` — request the post-run namespace |
+| page → worker | `record` | `{ id, source }` — run under the step recorder |
+| page → worker | `expand` | `{ id, path }` — expand one tree node |
+| worker → page | `snapshot-result` / `record-result` / `expand-result` | `{ id, json }` |
+
+The worker runs the **same** `VARS_HELPER` / `RECORD_HELPER` source, unmodified.
+`renderVariables()` and the replay UI on the page are unchanged — they already
+consume parsed JSON and cannot tell which runtime produced it. This is the
+cheapest kind of port: a transport change with no logic change on either side.
+
+### The one real behavioural difference
+
+Stopping a worker program **terminates it**, so there is no post-run snapshot —
+the Variables panel has nothing to show, and an already-rendered tree can no
+longer expand, because the namespace it described is gone.
+
+Today, stopping a program raises inside Python, the run completes as an error,
+and the post-run snapshot still happens. So this is a genuine regression in one
+narrow case, and it is the direct price of unconditional Stop. The page marks the
+panel stale ("variables unavailable — the program was stopped") rather than
+showing a silently empty or stale-but-unlabelled table.
+
+
 ## 9. Errors, tracebacks, and output
 
 The worker sends the **raw** traceback string. All formatting stays on the page, reusing what already exists:
@@ -212,7 +265,6 @@ The worker's frames differ from the in-window ones (no `pyodide.asm`, different 
 **Not in this project:**
 
 - Replacing the VPython bridge. Today's `from js import …` bridge stays. Interactive 3D in the worker is the committed destination (D5), but it needs the vpython-jupyter-style protocol — proxy objects, compact per-attribute diffs keyed by object index, a browser-driven flush, and shadow state for reads (`obj._value = evt['value']`) — and that is a spec of its own. This design only guarantees the channel won't need rebuilding for it.
-- Running the variable explorer or step debugger in the worker. Both are opt-in and default off; programs that need them are routed to the main thread.
 - Turtle graphics, `micropip`, and other DOM-touching packages — routed to the main thread by the same mechanism if they prove to need it.
 
 **Why 3D is tractable later, recorded so it isn't re-argued:** GlowScript renders WebGL in the browser and owns camera interaction, so dragging a scene stays smooth *even while Python computes* — better than today, where a busy program freezes the scene. Only program-driven changes and bound handlers need a round trip, and `postMessage` is cheaper than the localhost WebSocket vpython-jupyter already ships interactively.
