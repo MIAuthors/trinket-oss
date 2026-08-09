@@ -61,4 +61,65 @@ test.describe('Worker runtime (#108)', () => {
     }).toPass({ timeout: 30_000 });
   });
 
+
+  // --- the headline claims of #108 -----------------------------------------
+  // Neither can be proved by a unit test: both are about whether the UI thread
+  // is blocked, which only a real browser can answer.
+
+  test('THE POINT: the page stays responsive during `while True: pass`', async ({ page }) => {
+    await editorRun(page, 'while True:\n    pass');
+    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 120_000 });
+
+    // Let the loop get properly under way, then prove the main thread still
+    // runs JavaScript. On the main-thread runtime this evaluate() never returns.
+    await page.waitForTimeout(3000);
+    const alive = await page.evaluate(() => { document.title = 'alive'; return document.title; });
+    expect(alive).toBe('alive');
+  });
+
+  test('THE POINT: Stop kills `while True: pass`', async ({ page }) => {
+    await editorRun(page, 'while True:\n    pass');
+    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 120_000 });
+    await page.waitForTimeout(2000);
+
+    await page.locator('.stop-it').first().click();
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('[stopped]');
+    }).toPass({ timeout: 30_000 });
+    // No "cannot be stopped" apology: terminate() is unconditional.
+    expect(await consoleText(page)).not.toContain('cannot be');
+    await expect(page.locator('.stop-it')).toBeHidden({ timeout: 30_000 });
+  });
+
+  test('a program still runs after a stop (replacement worker)', async ({ page }) => {
+    await editorRun(page, 'while True:\n    pass');
+    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 120_000 });
+    await page.locator('.stop-it').first().click();
+    await expect(page.locator('.stop-it')).toBeHidden({ timeout: 30_000 });
+
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('print("second run")', 1);
+    });
+    await page.locator('.run-it').first().click();
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('second run');
+    }).toPass({ timeout: 120_000 });
+  });
+
+  test('a traceback from the worker is filtered like the main thread (#107)', async ({ page }) => {
+    // The worker sends the RAW traceback; the page applies formatPythonTraceback
+    // and escapeConsoleHtml. If the worker's frames differ from the in-window
+    // ones, this is where it shows.
+    await editorRun(page, 'print(int("hi"))');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain('ValueError');
+      expect(text).toContain('invalid literal for int()');
+      expect(text).not.toMatch(/_pyodide|python\d*\.zip|_base\.py|CodeRunner|eval_code_async/);
+    }).toPass({ timeout: 120_000 });
+  });
+
 });
