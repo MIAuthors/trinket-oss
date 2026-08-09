@@ -19,6 +19,7 @@
     var worker = null;
     var current = null;        // { id, resolve } for the in-flight run
     var ready = false;         // has THIS worker finished booting Pyodide?
+    var readyInfo = null;      // the ready message (carries pyodideVersion)
     var pending = {};          // id -> resolve, for request/response messages
     var readyWaiters = [];     // resolvers waiting on that boot
 
@@ -34,6 +35,7 @@
       // Lifecycle and streaming messages are not tied to a specific run.
       if (msg.type === 'ready') {
         ready = true;
+        readyInfo = msg;
         var waiters = readyWaiters;
         readyWaiters = [];
         waiters.forEach(function(resolve) { resolve(); });
@@ -158,6 +160,21 @@
         settle();
       },
 
+      // One REPL statement. Same channel and same correlation as run(), so
+      // stop() and the id matching apply unchanged; only the mode differs.
+      pushRepl: function(source) {
+        var w = ensureWorker();
+        var id = 'repl-' + (++seq);
+        return new Promise(function(resolve) {
+          current = { id: id, resolve: resolve };
+          whenReady().then(function() {
+            if (worker === w && current && current.id === id) {
+              w.postMessage({ type: 'run', id: id, mode: 'repl', source: source });
+            }
+          });
+        });
+      },
+
       // Post-run namespace snapshot for the Variables panel. VARS_HELPER already
       // produces JSON and the page already parses it, so this is a transport
       // change with no logic change — nothing live crosses the channel.
@@ -180,6 +197,11 @@
           worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
         }
       },
+
+      // Resolves when the worker's Pyodide has booted, with the ready message.
+      // Lets the page show a banner without booting a SECOND interpreter on the
+      // main thread just to read sys.version.
+      ready: function() { return whenReady().then(function() { return readyInfo || {}; }); },
 
       isRunning: function() { return !!current; },
 

@@ -68,6 +68,7 @@ var template = TrinketIO.import('utils.template');
 var ActivityLog = TrinketIO.import('embed.analytics.activity');
 var runtimeRouter   = TrinketIO.import('embed.runtimeRouter');
 var workerClientApi = TrinketIO.import('embed.workerClient');
+var replContinuation = TrinketIO.import('embed.replContinuation');
 var workerClient    = null;   // created lazily; null means the main-thread path
 var disableAceEditor = window.userSettings && window.userSettings.disableAceEditor || false;
 
@@ -262,12 +263,38 @@ function writeReplError(err) {
   jqconsole.Write(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
 }
 
+// Does the REPL run in the worker? A REPL statement has no source to inspect up
+// front, so the decision is made once from config and the query string rather
+// than per statement.
+function replUsesWorker() {
+  try {
+    return runtimeRouter.chooseRuntime('', {
+      usesVPython   : false,
+      workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+      queryRuntime  : (api._queryString || {}).runtime
+    }).runtime === 'worker';
+  } catch (e) { return false; }
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
   replActive = true;
 
   jqconsole.Prompt(true, function(input) {
+    // Worker-backed REPL: the namespace lives in the worker, so a runaway
+    // statement is killable. Output and errors arrive on the same callbacks the
+    // Run path uses, so formatting is shared.
+    if (replUsesWorker()) {
+      if (/^\s*$/.test(input)) { startReplPrompt(); return; }
+      $('.stop-it').removeClass('hide');
+      ensureWorkerClient().pushRepl(input).then(function() {
+        $('.stop-it').addClass('hide');
+        startReplPrompt();
+      });
+      return;
+    }
+
     // Blank line: just re-prompt (matches python.js and the CPython REPL).
     if (/^\s*$/.test(input)) { startReplPrompt(); return; }
 
@@ -305,6 +332,13 @@ function startReplPrompt() {
     // is what the CPython REPL uses, returns None while input is incomplete, and
     // has no side effects (pushing the line into the console buffer would consume
     // it).
+    // With the interpreter in the worker there is no local Python to ask, and
+    // jq-console needs this answer synchronously — use the pure approximation.
+    if (replUsesWorker()) {
+      if (replContinuation.isComplete(input)) return false;      // submit
+      return replContinuation.indentLevel(input);
+    }
+
     try {
       var complete = pyodide.runPython(
         'import codeop\n' +
@@ -340,6 +374,21 @@ function startReplPrompt() {
 // Enter REPL mode: boot Pyodide, print a banner, arm the prompt.
 function startRepl() {
   initConsoleOutput();
+
+  // In worker mode the interpreter is not on this thread. Do NOT call
+  // ensurePyodide() below: that would boot a SECOND Pyodide on the main thread
+  // purely to read sys.version for the banner, doubling start-up and memory for
+  // an interpreter that never runs anything. The worker reports its version in
+  // its ready message.
+  if (replUsesWorker()) {
+    $('#console-output').addClass('console-mode');
+    var client = ensureWorkerClient();
+    return client.ready().then(function(info) {
+      jqconsole.Write('Python ' + (info.pythonVersion || '') +
+                      ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
+      startReplPrompt();
+    });
+  }
 
   // The console palette is a MODE, not a default. Base `.jqconsole-output` is
   // WHITE, for the dark console a running program draws into; the light REPL
@@ -1866,7 +1915,11 @@ function ensureWorkerClient() {
     onStderr   : function(text) { writeOut(text); },
     onError    : function(traceback) {
       workerRunError = new Error(traceback);
-      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, mainFile)) + '\n',
+      // At the prompt the frame is the console, not a file — CPython names it
+      // <stdin>, and calling it main.py would point a student at a line of a
+      // file they never wrote.
+      var frameName = replActive ? '<stdin>' : mainFile;
+      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, frameName)) + '\n',
                       'jqconsole-error', false);
     }
   });
@@ -2270,7 +2323,10 @@ function startRun() {
 }
 
 function stopCode() {
-  if (!running) return;
+  // `running` is set by startRun() for a program. A REPL statement never sets
+  // it, but a worker-backed statement IS executing and must be stoppable — that
+  // is the whole point of moving the REPL off-thread.
+  if (!running && !(workerClient && workerClient.isRunning())) return;
 
   // A worker-routed run is stopped by terminating the worker. Unconditional, and
   // the only thing that can stop `while True: pass` — so none of the cooperative
@@ -2284,7 +2340,12 @@ function stopCode() {
     // With the explorer on, an empty table would read as "your program defined
     // nothing" — say why instead, in the console the student is already reading.
     // (#debug-note belongs to the step debugger, which may not be enabled.)
-    if (variableExplorerEnabled()) {
+    if (replActive) {
+      // Terminating discards the interpreter, so the console session's variables
+      // are gone. Say so rather than letting a student wonder why `x` vanished.
+      writeOut('\n[stopped — console session reset]\n');
+      startReplPrompt();
+    } else if (variableExplorerEnabled()) {
       writeOut('\n[stopped — variables unavailable, the interpreter was discarded]\n');
       try { renderVariables([]); } catch (e) {}
     } else {

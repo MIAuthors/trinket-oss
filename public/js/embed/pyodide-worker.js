@@ -44,7 +44,20 @@
         // The page owns VARS_HELPER; it is sent here so the two runtimes cannot
         // drift into showing different variables for the same program.
         varsHelper = msg.varsHelper || '';
-        post({ type: 'ready', v: PROTOCOL_VERSION, pyodideVersion: pyodide.version });
+
+        // Both versions: the REPL banner names the PYTHON version ("Python
+        // 3.13.2"), which is not pyodide.version ("0.28.1").
+        var pythonVersion = '';
+        try {
+          pythonVersion = pyodide.runPython('import sys; sys.version.split()[0]');
+        } catch (e) { pythonVersion = ''; }
+
+        post({
+          type: 'ready',
+          v: PROTOCOL_VERSION,
+          pyodideVersion: pyodide.version,
+          pythonVersion: pythonVersion
+        });
       }).catch(function(err) {
         post({ type: 'error', id: null, traceback: 'Failed to start Python: ' + String(err && err.message || err) });
       });
@@ -284,6 +297,56 @@
       return /(^|\n)\s*(import|from)\s+[^\n#]*\bmatplotlib\b/.test(src || '');
     }
 
+    // ---- the REPL, in the worker -------------------------------------------
+    //
+    // The console's namespace lives here, so a runaway statement typed at the
+    // prompt is killable by terminate() — the REPL's one documented limitation.
+    // The cost is stated plainly to the student on stop: terminating discards
+    // the interpreter, so the session's variables go with it.
+    var replConsole = null;
+
+    function ensureReplConsole() {
+      if (!replConsole) {
+        replConsole = pyodide.runPython(
+          'from pyodide.console import PyodideConsole\n' +
+          'PyodideConsole(globals())\n'
+        );
+      }
+      return replConsole;
+    }
+
+    function pushRepl(msg) {
+      currentRunId = msg.id;
+      var console_;
+      try {
+        console_ = ensureReplConsole();
+      } catch (err) {
+        post({ type: 'error', id: msg.id, traceback: String(err && err.message || err) });
+        return;
+      }
+
+      var result;
+      try {
+        result = console_.push(msg.source);
+      } catch (err) {
+        post({ type: 'error', id: msg.id, traceback: String(err && err.message || err) });
+        return;
+      }
+
+      Promise.resolve(result)
+        .then(function(value) {
+          if (value !== undefined && value !== null) {
+            // repr on the page would need the value itself; do it here and send
+            // text, so nothing live has to cross the channel.
+            post({ type: 'stdout', text: pyodide.runPython('repr')(value) + '\n' });
+          }
+          post({ type: 'done', id: msg.id });
+        })
+        .catch(function(err) {
+          post({ type: 'error', id: msg.id, traceback: String(err && err.message || err) });
+        });
+    }
+
     var run = function(msg) {
       currentRunId = msg.id;
 
@@ -398,7 +461,7 @@
             post({ type: 'error', id: msg.id, traceback: 'Python is not ready yet.' });
             return;
           }
-          run(msg);
+          if (msg.mode === 'repl') { pushRepl(msg); } else { run(msg); }
           return;
         }
 
