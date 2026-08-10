@@ -2114,8 +2114,16 @@ window.__vpythonScene = { generation: 0, handled: 0, dropped: 0, frontend: null 
 function startVPythonPacer() {
   if (vpythonPacer) return;
   vpythonPacer = setInterval(function() {
-    if (workerClient) { workerClient.sendSceneEvent('[{"trigger":1}]'); }
-    else { stopVPythonPacer(); }
+    if (!workerClient) { stopVPythonPacer(); return; }
+    // The page owns WHEN a tick happens; the front-end owns WHAT is in it —
+    // mouse position, camera state the student orbited to, and any events
+    // queued since the last tick (Task 9). fe.tick() sends through the same
+    // `send` this shim gave it, so the wire is unchanged for a still scene: a
+    // bare {event:'update_canvas', trigger:1}. Before the front-end exists (the
+    // first ticks of a cold run, while glow is still loading) the page sends
+    // that handshake itself so the transport's request/reply rhythm never stops.
+    if (vpythonFrontend) vpythonFrontend.tick();
+    else workerClient.sendSceneEvent('[{"trigger":1}]');
   }, SCENE_PACE_MS);
 }
 
@@ -2198,8 +2206,8 @@ function ensureVPythonFrontend() {
 
     vpythonFrontend = window.createGlowFrontend({
       container: holder,
-      // Outbound events (picks, compound geometry, and from Task 9 on, mouse
-      // and key events) ride the same channel the pacing trigger does.
+      // Outbound events — mouse and key events, camera state, picks, compound
+      // geometry — ride the same channel the pacing trigger does.
       send: function(events) {
         if (workerClient) { workerClient.sendSceneEvent(JSON.stringify(events)); }
       }

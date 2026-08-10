@@ -428,4 +428,82 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });
+
+  // --- Task 9: mouse events -------------------------------------------------
+  // Everything above is one-way: Python builds objects, the page draws them.
+  // This is the return path — the browser's mouse reaching a Python callback.
+  //
+  // The program deliberately ENDS. That is the hard case, and the normal one:
+  // `scene.bind(...)` then fall off the bottom of the file is what every
+  // interactive VPython example looks like, and by the time the student clicks,
+  // the run-scoped pacing clock (Task 7) has long since wound down. Nothing is
+  // polling; the click itself has to carry the message. If the front-end only
+  // queued events for a tick that never comes, this test hangs.
+  const CLICK_PROGRAM = 'from vpython import *\n' +
+                        's = sphere()\n' +
+                        'def hit(evt):\n' +
+                        '    print("CLICKED", evt.pos)\n' +
+                        'scene.bind("click", hit)\n';
+
+  test('a scene.bind click handler fires in the worker', async ({ page }) => {
+    test.setTimeout(300_000);   // cold Pyodide boot + 3.5 MB wheel install
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    // The same worker tap the specs above use, so "the clock has stopped" can be
+    // asserted on the WIRE before the click rather than assumed from a sleep.
+    await page.addInitScript(() => {
+      const RealWorker = window.Worker;
+      window.__sceneOps = [];
+      window.Worker = function (url, options) {
+        const w = new RealWorker(url, options);
+        w.addEventListener('message', (e) => {
+          if (e && e.data && e.data.type === 'scene-ops') window.__sceneOps.push(1);
+        });
+        return w;
+      };
+      window.Worker.prototype = RealWorker.prototype;
+    });
+
+    await skipUnlessWorkerVPython(page);
+    await runProgram(page, CLICK_PROGRAM);
+
+    // GLOW IS LAZY: a canvas with no objects renders no <canvas> element, so the
+    // element appearing is the signal that the sphere really reached the scene.
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+    expect(await page.evaluate(() =>
+      window.__vpythonScene.frontend._objs().filter(Boolean).length)).toBeGreaterThan(1);
+
+    // The run has settled and the pacer has drained: the stream is quiet. This
+    // is what makes the click below a real test of event-driven flushing — with
+    // a clock still running, a merely-queued event would go out anyway.
+    await expect(async () => {
+      const before = await page.evaluate(() => window.__sceneOps.length);
+      await page.waitForTimeout(1000);
+      expect(await page.evaluate(() => window.__sceneOps.length),
+        'the pacing clock never wound down; this spec would not test what it claims')
+        .toBe(before);
+    }).toPass({ timeout: 60_000 });
+
+    // .last(), not .first(): glow stacks a 2D overlay canvas (labels, captions)
+    // on top of the WebGL one and binds the mouse handlers through it, so the
+    // first canvas in the DOM is the one a real click never reaches.
+    await page.locator('#vpython-scene canvas').last().click({ position: { x: 100, y: 100 } });
+
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelector('#console-output')?.innerText || '')).toContain('CLICKED');
+    }).toPass({ timeout: 30_000 });
+
+    // ...and the callback got a real event object, not an empty one: evt.pos
+    // came back through list_to_vec as a vector, which prints as <x, y, z>.
+    const out = await page.evaluate(() =>
+      document.querySelector('#console-output')?.innerText || '');
+    expect(out, 'the handler fired but evt.pos was not a vector').toMatch(/CLICKED\s+<[-\d.]+,/);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+  });
 });
