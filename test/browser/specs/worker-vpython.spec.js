@@ -1146,5 +1146,15 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     expect(await consoleText(),
       'Stop told the student their console session was reset — it was not')
       .not.toContain(CONSOLE_RESET);
+
+    // ...and the student can still TYPE. Absence of a false line is only half
+    // the contract: resetOutput() kills the armed prompt at the start of every
+    // run, and this Stop is the only thing that brings one back. Without it the
+    // console is dead for the rest of the session — the Console menu entry is
+    // `if (!replActive) startRepl()` and `replActive` is never cleared, so
+    // re-selecting it does nothing and only a reload recovers.
+    await expect(page.locator('.jqconsole-prompt').first(),
+      'Stop left the surviving page REPL with no prompt — the console is now dead')
+      .toBeVisible({ timeout: 60_000 });
   });
 });

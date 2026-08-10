@@ -2718,24 +2718,34 @@ function stopCode() {
     // With the explorer on, an empty table would read as "your program defined
     // nothing" — say why instead, in the console the student is already reading.
     // (#debug-note belongs to the step debugger, which may not be enabled.)
-    // replUsesWorker() and not `replActive` alone: a prompt being up does NOT
-    // mean the session lives in the worker we just killed. The REPL follows
-    // `workerRuntime`, while a VPython run reaches this branch under
-    // `workerVPython` — so in the workerVPython-only config the console session
-    // is in the page's own pyodide, untouched by terminate(). Claiming it was
-    // reset would be false, and re-arming would print a second banner over a
-    // prompt that was never consumed.
+    // The MESSAGE is gated on replUsesWorker(), not on `replActive` alone: a
+    // prompt being up does NOT mean the session lives in the worker we just
+    // killed. The REPL follows `workerRuntime`, while a VPython run reaches this
+    // branch under `workerVPython` — so in the workerVPython-only config the
+    // console session is in the page's own pyodide, untouched by terminate(),
+    // and telling the student it was reset would be false.
     if (replActive && replUsesWorker()) {
       // Terminating discards the interpreter, so the console session's variables
       // are gone. Say so rather than letting a student wonder why `x` vanished.
       writeOut('\n[stopped — console session reset]\n');
-      startReplPrompt();
     } else if (variableExplorerEnabled()) {
       writeOut('\n[stopped — variables unavailable, the interpreter was discarded]\n');
       try { renderVariables([]); } catch (e) {}
     } else {
       writeOut('\n[stopped]\n');
     }
+
+    // The PROMPT comes back regardless of which of those was printed, and this
+    // is deliberately NOT gated the way the message is. resetOutput() calls
+    // jqconsole.Reset() at the start of every run, which kills the armed prompt,
+    // and this is the only site that re-arms one afterwards (a normal completion
+    // has no re-arm at all). Gating it would leave a page-hosted REPL — the case
+    // where the session genuinely survived — with no prompt and no way back:
+    // the Console menu entry is `if (!replActive) startRepl()` and `replActive`
+    // is never cleared anywhere, so re-selecting Console is a no-op and only a
+    // reload recovers. Re-arming is most honest exactly where the message is
+    // wrong: the session really is still there.
+    if (replActive) startReplPrompt();
     return;                          // the run promise settles and calls finishRun()
   }
 
