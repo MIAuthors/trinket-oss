@@ -23,6 +23,10 @@ var PYODIDE_INDEX_URL = window.__PYODIDE_INDEX_URL__ || 'https://cdn.jsdelivr.ne
 // 3.2.3 = the rsWVPRunner GCS build the Dockerfile provisions; 3.2.2 was the stale components-tarball fallback (spec 2026-08-10, decision V3).
 var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.3.min.js';
 var VPYTHON_ZIP_URL = '/js/embed/wvpython/vpython.zip';
+// The vpython-jupyter wheel the WORKER path installs (spec 2026-08-10) — a
+// different package from the main-thread bridge zip above. Kept in step with
+// scripts/sync-vpython-worker.sh, which puts the file in that directory.
+var VPYTHON_WHEEL_NAME = 'vpython-7.6.5-py3-none-any.whl';
 
 // Python code injected before user code runs each time a matplotlib program
 // executes.  Pyodide 0.28+ ships a Pyodide-patched WebAgg backend that reads
@@ -2178,7 +2182,9 @@ function runInWorker(program, files, serialized, decision) {
 
   return workerClient.run(program, files, {
     graphicWidth: graphicWidth,
-    vpython: !!(decision && decision.vpython)
+    vpython: !!(decision && decision.vpython),
+    wheelUrl: '/components/vpython-worker/' + VPYTHON_WHEEL_NAME,
+    sceneGeneration: 0   // Task 7 owns the live counter
   }).then(function() {
     finishRun(serialized, workerRunError);
 

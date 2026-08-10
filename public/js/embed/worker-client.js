@@ -73,12 +73,12 @@
         return;
       }
 
-      // SPIKE (vpython-jupyter adoption): scene updates from the vpython
-      // transport. NOT scoped to `current` like figures — deliberately: a
-      // vpython scene outlives its run (the program ends, the scene stays live
-      // and browser-paced), so ops legitimately arrive after settle() nulls
-      // `current`. Lifecycle (what happens on re-run/stop) is a design question
-      // for the real implementation, recorded here rather than guessed at.
+      // Scene updates from the vpython transport. NOT scoped to `current` like
+      // figures — deliberately: a vpython scene outlives its run (the program
+      // ends, the scene stays live and browser-paced), so ops legitimately
+      // arrive after settle() nulls `current`. Staleness is handled by the
+      // `generation` tag the kernel stamps on every package instead: the page
+      // bumps the generation on re-run and drops ops from an older scene.
       if (msg.type === 'scene-ops') {
         if (opts.onSceneOps) opts.onSceneOps(msg);
         return;
@@ -156,9 +156,19 @@
             // stop() may have replaced the worker, or another run started,
             // while Pyodide was still booting.
             if (worker === w && current && current.id === id) {
-              w.postMessage({ type: 'run', id: id, source: source, files: files || null,
-                              transformUrl: opts.transformUrl,
-                              graphicWidth: (opts2 && opts2.graphicWidth) || 0 });
+              var runMsg = { type: 'run', id: id, source: source, files: files || null,
+                             transformUrl: opts.transformUrl,
+                             graphicWidth: (opts2 && opts2.graphicWidth) || 0 };
+              // The worker VPython path (spec 2026-08-10) needs the wheel to
+              // install and the scene generation to tag its ops with. Added
+              // ONLY for a vpython run, so an ordinary python3 run message is
+              // byte-for-byte what it always was.
+              if (opts2 && opts2.vpython) {
+                runMsg.vpython = true;
+                runMsg.wheelUrl = opts2.wheelUrl;
+                runMsg.sceneGeneration = opts2.sceneGeneration | 0;
+              }
+              w.postMessage(runMsg);
             }
           });
         });

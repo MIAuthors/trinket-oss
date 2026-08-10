@@ -153,14 +153,45 @@
       post({ type: 'figure', id: currentRunId, figureId: String(figid), kind: String(sub), data: String(payload) });
     };
 
-    // SPIKE (vpython-jupyter adoption, §14-16): the outbound half of the pipe
-    // vpython's trinket_worker transport expects. The transport JSON-encodes
-    // every update package ({cmds, methods, attrs} — glowcomm's wire format)
-    // and calls this; it rides out on the protocol's RESERVED `scene-ops` type.
-    // `ops` is carried as the raw JSON string for now — the page is the first
-    // consumer and decides its parsed shape when real rendering lands.
+    // ---- vpython (spec 2026-08-10) ------------------------------------------
+    //
+    // vpython runs execute against the vpython-jupyter wheel (spec 2026-08-10).
+    // Idempotent per worker: micropip is a no-op if already installed.
+    //
+    // deps=False is REQUIRED: the wheel declares the jupyter-stack dependencies
+    // vpython needs on a notebook (ipykernel, jupyter-server-proxy, …) and
+    // micropip cannot resolve them here. The worker path uses none of them —
+    // the transport talks over postMessage, not a comm.
+    var vpythonReady = null;
+    function ensureVPython(wheelUrl) {
+      if (vpythonReady) return vpythonReady;
+      vpythonReady = pyodide.loadPackage(['numpy', 'micropip']).then(function() {
+        pyodide.globals.set('__vpy_wheel__', wheelUrl);
+        return pyodide.runPythonAsync(
+          'import micropip\n' +
+          'await micropip.install(__vpy_wheel__, deps=False)\n'
+        );
+      }).catch(function(e) {
+        // Never cache a failed install, or one transient fetch error poisons
+        // every later vpython run for the life of this worker.
+        vpythonReady = null;
+        throw e;
+      });
+      return vpythonReady;
+    }
+
+    // The scene a program draws into. The page bumps this on every re-run (a
+    // fresh scene) while the worker's Python namespace persists, so ops from a
+    // program whose scene has been torn down are identifiable as stale.
+    var sceneGeneration = 0;
+
+    // The outbound half of the pipe vpython's trinket_worker transport expects.
+    // The transport JSON-encodes every update package ({cmds, methods, attrs} —
+    // glowcomm's wire format) and calls this; it rides out on the protocol's
+    // RESERVED `scene-ops` type. `ops` is carried as the raw JSON string: the
+    // page parses it once, into the object the front-end factory takes.
     self.__trinket_vpython_send = function(jsonStr) {
-      post({ type: 'scene-ops', id: currentRunId, ops: String(jsonStr) });
+      post({ type: 'scene-ops', id: currentRunId, generation: sceneGeneration, ops: String(jsonStr) });
     };
 
     // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
@@ -380,7 +411,12 @@
       var shadowsConsole = !!(msg.files &&
         Object.prototype.hasOwnProperty.call(msg.files, 'console.py'));
 
-      var prepared = needsTransform(source)
+      // A vpython run draws into the scene the page has just created; ops are
+      // tagged with its generation so the page can drop any that arrive from a
+      // scene it has already torn down. Absent (any non-vpython run) means 0.
+      if (msg.vpython) { sceneGeneration = msg.sceneGeneration | 0; }
+
+      var prepare = function() { return needsTransform(source)
         ? ensureTransform(msg.transformUrl).then(function() {
             pyodide.runPython(shadowsConsole
               ? '_t._MODULE_AWAIT_ATTRS = {}'
@@ -390,11 +426,15 @@
               return pyodide.runPython('transform_source(__user_source__)');
             });
           })
-        : Promise.resolve(source);
+        : Promise.resolve(source); };
 
       var mpl = usesMatplotlib(source);
 
-      return prepared
+      // The wheel install comes FIRST and the source preparation is built after
+      // it resolves, so micropip's runPythonAsync never interleaves with the
+      // transform's.
+      return (msg.vpython ? ensureVPython(msg.wheelUrl) : Promise.resolve())
+        .then(prepare)
         .then(function(src) {
           // Pyodide-bundled packages the program imports (numpy, matplotlib,
           // pandas, …) must be installed here too — the worker has its own

@@ -167,6 +167,67 @@ describe('createWorkerClient', () => {
   });
 });
 
+describe('worker VPython run extras', () => {
+  // The kernel installs the vpython wheel only for runs that ask for it, and
+  // tags scene-ops with the generation it was told. Both ride on the run
+  // message, so the client has to forward them — python3 runs must stay clean.
+  it('forwards vpython/wheelUrl/sceneGeneration onto the run message', async () => {
+    const { client, made } = await bootedClient();
+    client.run('from vpython import *', null, {
+      vpython: true,
+      wheelUrl: '/components/vpython-worker/vpython-7.6.5-py3-none-any.whl',
+      sceneGeneration: 3
+    });
+    await tick();
+    const runMsg = made[0].posted.find(m => m.type === 'run');
+    expect(runMsg.vpython).toBe(true);
+    expect(runMsg.wheelUrl).toBe('/components/vpython-worker/vpython-7.6.5-py3-none-any.whl');
+    expect(runMsg.sceneGeneration).toBe(3);
+  });
+
+  it('omits the vpython extras entirely on an ordinary run', async () => {
+    const { client, made } = await bootedClient();
+    client.run('print(1)', null, { graphicWidth: 400 });
+    await tick();
+    const runMsg = made[0].posted.find(m => m.type === 'run');
+    expect('vpython' in runMsg).toBe(false);
+    expect('wheelUrl' in runMsg).toBe(false);
+    expect('sceneGeneration' in runMsg).toBe(false);
+    expect(runMsg.graphicWidth).toBe(400);   // existing options still work
+  });
+
+  it('omits them when vpython is present but false (the router said main/python3)', async () => {
+    const { client, made } = await bootedClient();
+    client.run('print(1)', null, { vpython: false, wheelUrl: '/w.whl' });
+    await tick();
+    const runMsg = made[0].posted.find(m => m.type === 'run');
+    expect('vpython' in runMsg).toBe(false);
+    expect('wheelUrl' in runMsg).toBe(false);
+  });
+
+  it('defaults sceneGeneration to 0 when the page does not pass one', async () => {
+    const { client, made } = await bootedClient();
+    client.run('from vpython import *', null, { vpython: true, wheelUrl: '/w.whl' });
+    await tick();
+    const runMsg = made[0].posted.find(m => m.type === 'run');
+    expect(runMsg.sceneGeneration).toBe(0);
+  });
+
+  it('routes scene-ops to onSceneOps even after the run has settled', async () => {
+    // A vpython scene outlives its run, so ops arrive with no `current`.
+    const seen = [];
+    const { client, made } = await bootedClient({ onSceneOps: (m) => seen.push(m) });
+    const p = client.run('from vpython import *', null, { vpython: true, wheelUrl: '/w.whl' });
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+    made[0].onmessage({ data: { type: 'done', id } });
+    await p;
+    made[0].onmessage({ data: { type: 'scene-ops', id, generation: 1, ops: '{"cmds":[]}' } });
+    expect(seen.length).toBe(1);
+    expect(seen[0].generation).toBe(1);
+  });
+});
+
 describe('input() over the channel', () => {
   it('asks the page for input and posts the reply back', async () => {
     const { FakeWorker, made } = fakeWorkerFactory();
