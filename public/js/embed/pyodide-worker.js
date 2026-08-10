@@ -223,13 +223,23 @@
     // program whose scene has been torn down are identifiable as stale.
     var sceneGeneration = 0;
 
+    // True while a `scene-event` message is being dispatched into the transport.
+    // The dispatch is synchronous (trinket_worker._dispatch ends with a
+    // baseObj.trigger()), so any send that happens with this set is the REPLY
+    // half of the page's request — and any send that happens with it clear came
+    // from the program itself, i.e. rate()'s own flush. The page needs that
+    // distinction to tell "the worker is animating on its own clock" from "the
+    // worker only speaks when spoken to"; see the pacer in pyodide.js.
+    var inSceneDispatch = false;
+
     // The outbound half of the pipe vpython's trinket_worker transport expects.
     // The transport JSON-encodes every update package ({cmds, methods, attrs} —
     // glowcomm's wire format) and calls this; it rides out on the protocol's
     // RESERVED `scene-ops` type. `ops` is carried as the raw JSON string: the
     // page parses it once, into the object the front-end factory takes.
     self.__trinket_vpython_send = function(jsonStr) {
-      post({ type: 'scene-ops', id: currentRunId, generation: sceneGeneration, ops: String(jsonStr) });
+      post({ type: 'scene-ops', id: currentRunId, generation: sceneGeneration,
+             solicited: inSceneDispatch, ops: String(jsonStr) });
     };
 
     // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
@@ -552,8 +562,12 @@
         // dropping the message is correct: it is pacing, not data.
         if (msg.type === 'scene-event') {
           if (typeof self.__trinket_vpython_dispatch === 'function') {
+            // `finally`, not just the happy path: a dispatch that throws must not
+            // leave every later rate() flush mislabelled as solicited forever.
+            inSceneDispatch = true;
             try { self.__trinket_vpython_dispatch(String(msg.events || '[]')); }
             catch (e) { post({ type: 'stderr', id: currentRunId, text: '[vpython dispatch] ' + String(e && e.message || e) + '\n' }); }
+            finally { inSceneDispatch = false; }
           }
           return;
         }

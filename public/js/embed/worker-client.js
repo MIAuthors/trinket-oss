@@ -181,6 +181,23 @@
         settle();
       },
 
+      // Throw the interpreter away WITHOUT it being a Stop: the next run() boots
+      // a fresh one, with a fresh Python namespace.
+      //
+      // Same mechanism as stop() and named differently on purpose — the caller's
+      // intent is "start clean", not "kill what is running", and the two are read
+      // in very different places. The worker VPython path (spec 2026-08-10) is
+      // the one caller: a re-run has to reset the Python namespace TOGETHER with
+      // the page's scene, because vpython's `scene = canvas()` runs once at
+      // `import vpython` and would otherwise keep pointing the student's objects
+      // at a canvas the page has already torn down (see the V7 amendment in the
+      // design spec). Ordinary python3 runs never call this and keep their
+      // accumulating namespace.
+      discardWorker: function() {
+        if (worker) { worker.terminate(); worker = null; }
+        settle();
+      },
+
       // One REPL statement. Same channel and same correlation as run(), so
       // stop() and the id matching apply unchanged; only the mode differs.
       pushRepl: function(source) {

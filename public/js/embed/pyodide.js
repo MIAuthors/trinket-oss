@@ -2091,6 +2091,7 @@ var vpythonGeneration      = 0;     // bumped by resetVPythonScene, every run
 var vpythonPacer           = null;  // the trigger loop
 var vpythonDrainTimer      = null;  // its post-run wind-down
 var vpythonSceneFailed     = false; // report a broken scene once, not 30×/second
+var vpythonUnsolicited     = 0;     // packages the program pushed since the last tick
 
 // Read by the browser specs, like window.__trinketRuntime: the live generation,
 // how many packages were rendered vs. dropped as stale, and the front-end itself
@@ -2111,10 +2112,32 @@ window.__vpythonScene = { generation: 0, handled: 0, dropped: 0, frontend: null 
 // camera is glow's own work on this thread, and trinket_worker._dispatch answers
 // every event we send with a flush — so a live scene needs a ping only when there
 // is actually something to say, which is exactly when we are already sending.
+// TWO CLOCKS. There are two things that can make the worker flush: this pacer,
+// and rate() inside the student's own loop (trinket_worker._async_rate triggers
+// a render up to rate_control.MAX_RENDERS=60 times a second). While an animation
+// is running the second one is doing the whole job, and the handshake this timer
+// sends is pure packet overhead on the hottest path in the system — measured at
+// 91 host messages against 254 packages over three seconds, i.e. ~36% of the
+// traffic buying nothing.
+//
+// It is NOT redundant the rest of the time: a static scene, and every event
+// after a program has ended, arrive only because this clock asked. So the pacer
+// asks only while nothing is flushing on its own, and while the program IS
+// flushing it does the half of a tick that is still needed — send the browser's
+// queued events and any camera/mouse change, and otherwise stay quiet.
+//
+// "Flushing on its own" is not guessed from message rates: the kernel marks
+// every package `solicited`, false when the send did not happen inside a
+// scene-event dispatch (pyodide-worker.js). Without that flag the signal would
+// be circular — the transport answers EVERY trigger we send with a flush, so
+// inbound traffic alone can never distinguish a busy program from our own echo.
 function startVPythonPacer() {
   if (vpythonPacer) return;
+  vpythonUnsolicited = 0;
   vpythonPacer = setInterval(function() {
     if (!workerClient) { stopVPythonPacer(); return; }
+    var selfFlushing = vpythonUnsolicited > 0;
+    vpythonUnsolicited = 0;
     // The page owns WHEN a tick happens; the front-end owns WHAT is in it —
     // mouse position, camera state the student orbited to, and any events
     // queued since the last tick (Task 9). fe.tick() sends through the same
@@ -2122,8 +2145,12 @@ function startVPythonPacer() {
     // bare {event:'update_canvas', trigger:1}. Before the front-end exists (the
     // first ticks of a cold run, while glow is still loading) the page sends
     // that handshake itself so the transport's request/reply rhythm never stops.
-    if (vpythonFrontend) vpythonFrontend.tick();
-    else workerClient.sendSceneEvent('[{"trigger":1}]');
+    if (vpythonFrontend) {
+      if (selfFlushing) vpythonFrontend.poll();
+      else vpythonFrontend.tick();
+    } else if (!selfFlushing) {
+      workerClient.sendSceneEvent('[{"trigger":1}]');
+    }
   }, SCENE_PACE_MS);
 }
 
@@ -2234,6 +2261,12 @@ function handleWorkerSceneOps(msg) {
     return;
   }
 
+  // The program flushed this one itself (rate()), rather than it being the reply
+  // to a trigger we sent. That is what tells the pacer to get out of the way —
+  // see startVPythonPacer. `=== false` and not `!msg.solicited`: an absent flag
+  // must mean "keep pacing", the behaviour that was here before the flag was.
+  if (msg.solicited === false) { vpythonUnsolicited++; }
+
   var gen = vpythonGeneration;
   ensureVPythonFrontend().then(function(fe) {
     // A reset raced the library load. (`fe` is null for the same reason — see
@@ -2339,6 +2372,22 @@ function runInWorker(program, files, serialized, decision) {
   workerRunError = null;
   mplFigures = {};              // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
+
+  // A VPython re-run starts from a FRESH INTERPRETER. This diverges from decision
+  // V7 ("Python state persists across runs") for vpython runs only, and it has to:
+  // vpython builds `scene = canvas()` once, at `import vpython`, so on a warm
+  // worker the second run's objects attach to the canvas the FIRST run created —
+  // which the page tore down when it bumped the generation. The student's sphere
+  // then belongs to a canvas nothing on the page knows about, and run 2 draws
+  // nothing at all (measured before this line existed: generation 2, 53 packages
+  // handled, zero objects). Discarding the worker resets the scene, the Python
+  // namespace and the page's registry together — the same three things Stop
+  // already resets, which is why a stopped-then-re-run program has always worked.
+  //
+  // The cost is a cold start per run: Pyodide boots and the 3.5 MB wheel installs
+  // again (~6 s on this stack, browser-cached). Accepted — see the spec.
+  // python3 runs are untouched and keep accumulating their namespace.
+  if (decision && decision.vpython) { workerClient.discardWorker(); }
 
   writeOut('Loading Python (Pyodide)…\n');
 

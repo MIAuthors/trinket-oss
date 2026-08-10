@@ -9,6 +9,67 @@ const { test, expect } = require('@playwright/test');
 const MSG0 = {"cmds": [{"cmd": "canvas", "idx": 0}, {"lights": "empty_list", "idx": 0}, {"cmd": "distant_light", "idx": 2, "direction": [0.22, 0.44, 0.88], "color": [0.8, 0.8, 0.8], "canvas": 0}, {"cmd": "distant_light", "idx": 3, "direction": [-0.88, -0.22, -0.44], "color": [0.3, 0.3, 0.3], "canvas": 0}]};
 const MSG1 = {"cmds": [{"cmd": "sphere", "idx": 4, "color": [1.0, 0.0, 0.0], "size": [3.0, 3.0, 3.0], "canvas": 0}], "attrs": ["a4a1,2,3"]};
 
+// --- running a program on the real path -------------------------------------
+// Every spec below the canary does the same three things: check the opt-in flag
+// is actually on in this dev stack, put the program in the editor, hit Run.
+// runVPython() is that, and it is where a change to how a program is started
+// belongs — not in six copies.
+
+// The path is opt-in and OFF by default, so a dev stack without it in
+// config/local.yaml would fail these for a configuration reason rather than a
+// code reason. Probe the flag the page actually received and say what to do.
+async function skipUnlessWorkerVPython(page) {
+  await page.goto('/embed/python3');
+  const on = await page.evaluate(() =>
+    !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython));
+  test.skip(!on, 'SKIP: features.workerVPython is off in this dev stack. ' +
+    'Add `workerVPython: true` under `features:` in config/local.yaml and ' +
+    '`docker restart trinket-gcr`, then re-run.');
+}
+
+// Load the page, gate on the flag, type the program, Run. Returns once the click
+// has landed — WAITING for the scene is each spec's own business, because what
+// counts as "up" differs (a 3D canvas, a graph canvas, a console message).
+//
+// Any tap a spec installs with page.addInitScript() must be installed BEFORE
+// this is called: the goto inside it is the navigation the taps attach to.
+async function runVPython(page, src) {
+  await skipUnlessWorkerVPython(page);
+  await expect(page.locator('.ace_editor').first()).toBeVisible();
+  await page.evaluate((code) => {
+    document.querySelector('.ace_editor').env.editor.setValue(code, 1);
+  }, src);
+  await page.locator('.run-it').first().click();
+}
+
+// The tap every real-path spec installs: the worker channel, seen from outside
+// the page's own code. Counts scene-ops in, records scene-events out.
+async function tapWorkerChannel(page) {
+  await page.addInitScript(() => {
+    const RealWorker = window.Worker;
+    window.__sceneOps = [];        // one entry per inbound package (the generation)
+    window.__sceneEvents = [];     // the raw JSON of every outbound scene-event
+    window.__workers = [];
+    window.Worker = function (url, options) {
+      const w = new RealWorker(url, options);
+      window.__workers.push(w);
+      const realPost = w.postMessage.bind(w);
+      w.postMessage = function (m) {
+        if (m && m.type === 'scene-event') window.__sceneEvents.push(String(m.events));
+        return realPost(m);
+      };
+      w.addEventListener('message', (e) => {
+        const d = e && e.data;
+        if (d && d.type === 'scene-ops') window.__sceneOps.push(d.generation);
+      });
+      return w;
+    };
+    window.Worker.prototype = RealWorker.prototype;
+  });
+}
+
+const STATIC_SPHERE = 'from vpython import *\nball = sphere(color=color.red)\n';
+
 test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   test('CANARY: captured sphere stream renders on trinket glow 3.2.3', async ({ page }) => {
     const logs = [];
@@ -124,28 +185,6 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   // made the kernel apply the async transform to vpython runs; these static
   // programs go through that same transform now, and must still pass).
 
-  const STATIC_SPHERE = 'from vpython import *\nball = sphere(color=color.red)\n';
-
-  // The path is opt-in and OFF by default, so a dev stack without it in
-  // config/local.yaml would fail these for a configuration reason rather than a
-  // code reason. Probe the flag the page actually received and say what to do.
-  async function skipUnlessWorkerVPython(page) {
-    await page.goto('/embed/python3');
-    const on = await page.evaluate(() =>
-      !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython));
-    test.skip(!on, 'SKIP: features.workerVPython is off in this dev stack. ' +
-      'Add `workerVPython: true` under `features:` in config/local.yaml and ' +
-      '`docker restart trinket-gcr`, then re-run.');
-  }
-
-  async function runProgram(page, src) {
-    await expect(page.locator('.ace_editor').first()).toBeVisible();
-    await page.evaluate((code) => {
-      document.querySelector('.ace_editor').env.editor.setValue(code, 1);
-    }, src);
-    await page.locator('.run-it').first().click();
-  }
-
   test('a real program renders a sphere via the worker', async ({ page }) => {
     // Well past the file's 90 s default: a cold Pyodide boot plus a 3.5 MB wheel
     // install is the slow part, and the toPass budget below has to fit inside it.
@@ -153,8 +192,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
 
-    await skipUnlessWorkerVPython(page);
-    await runProgram(page, STATIC_SPHERE);
+    await runVPython(page, STATIC_SPHERE);
 
     await expect(async () => {
       expect(await page.evaluate(() => window.__trinketRuntime)).toBe('worker');
@@ -182,28 +220,14 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   });
 
   test('scene ops carry the live generation, and a stale scene is dropped', async ({ page }) => {
-    test.setTimeout(300_000);   // two full runs, plus a quiet-stream measurement
+    // Two full runs — and since Task 11 each is its own cold Pyodide boot plus
+    // wheel install — plus a quiet-stream measurement between them.
+    test.setTimeout(420_000);
     // Task 5 stamps `generation` on every scene-ops package and Task 7 owns the
     // counter it stamps; until now neither had a test. Tap the worker channel
     // from OUTSIDE the page code so the assertion sees the real wire messages.
-    await page.addInitScript(() => {
-      const RealWorker = window.Worker;
-      window.__sceneOps = [];
-      window.__workers = [];
-      window.Worker = function (url, options) {
-        const w = new RealWorker(url, options);
-        window.__workers.push(w);
-        w.addEventListener('message', (e) => {
-          const d = e && e.data;
-          if (d && d.type === 'scene-ops') window.__sceneOps.push(d.generation);
-        });
-        return w;
-      };
-      window.Worker.prototype = RealWorker.prototype;
-    });
-
-    await skipUnlessWorkerVPython(page);
-    await runProgram(page, STATIC_SPHERE);
+    await tapWorkerChannel(page);
+    await runVPython(page, STATIC_SPHERE);
 
     await expect(async () => {
       const n = await page.evaluate(() =>
@@ -239,7 +263,11 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     // is live and moves `handled` between two separate round trips.
     const probe = await page.evaluate(() => {
       const before = window.__vpythonScene.dropped;
-      window.__workers[0].dispatchEvent(new MessageEvent('message', { data: {
+      // The LAST worker, not the first: a vpython run discards the interpreter
+      // and boots a fresh one (Task 11), so the worker whose onmessage the page
+      // is listening to is the most recent one made.
+      const live = window.__workers[window.__workers.length - 1];
+      live.dispatchEvent(new MessageEvent('message', { data: {
         type: 'scene-ops', id: 'stale-run', generation: 999,
         ops: JSON.stringify({ cmds: [{ cmd: 'box', idx: 77, canvas: 0 }] }),
       }}));
@@ -251,8 +279,10 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       window.__vpythonScene.frontend._objs()[77] === undefined)).toBe(true);
 
     // Re-run: the scene is thrown away and the next generation is what the
-    // kernel stamps from then on (the worker's Python namespace survives, which
-    // is exactly why the tag has to move).
+    // kernel stamps from then on. (The generation tag still earns its keep even
+    // though a vpython re-run now also discards the interpreter — the OLD
+    // worker's last packages can still be sitting in the page's message queue
+    // when the new scene comes up, and terminate() does not un-post them.)
     await page.evaluate(() => { window.__sceneOps.length = 0; });
     await page.locator('.run-it').first().click();
     await expect(async () => {
@@ -260,7 +290,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         window.__sceneOps.filter((g) => g !== 999));
       expect(after.length).toBeGreaterThan(0);
       expect(Math.max(...after)).toBe(2);
-    }).toPass({ timeout: 120_000 });
+    }).toPass({ timeout: 180_000 });
     expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(2);
   });
 
@@ -303,8 +333,9 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     // Two taps, installed before any page script runs.
     //
-    // (a) The worker channel, so claim 3 can be checked on the WIRE: after Stop
-    //     no further scene-ops may arrive.
+    // (a) The worker channel (the shared tap), so claim 3 can be checked on the
+    //     WIRE: after Stop no further scene-ops may arrive. It also records what
+    //     the page SENDS, which is what the two-clocks assertion below reads.
     // (b) The PACING CLOCK ITSELF, counting how many times its interval
     //     callback fires. (a) alone cannot see a leaked clock: sendSceneEvent
     //     no-ops once the worker is gone, so a clock left running emits nothing
@@ -314,18 +345,8 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     //     self-validating: the run asserts the counter moved, so if that
     //     constant ever changes this fails loudly instead of silently reading 0
     //     forever.
+    await tapWorkerChannel(page);
     await page.addInitScript(() => {
-      const RealWorker = window.Worker;
-      window.__sceneOps = [];
-      window.Worker = function (url, options) {
-        const w = new RealWorker(url, options);
-        w.addEventListener('message', (e) => {
-          if (e && e.data && e.data.type === 'scene-ops') window.__sceneOps.push(1);
-        });
-        return w;
-      };
-      window.Worker.prototype = RealWorker.prototype;
-
       const SCENE_PACE_MS = 33;
       const realSetInterval = window.setInterval;
       window.__pacerTicks = 0;
@@ -340,8 +361,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       };
     });
 
-    await skipUnlessWorkerVPython(page);
-    await runProgram(page, ANIMATION);
+    await runVPython(page, ANIMATION);
 
     // The scene comes up. GLOW IS LAZY, so the <canvas> element appearing is
     // the signal that objects actually reached the front-end.
@@ -379,20 +399,67 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     await page.evaluate(() => document.title);
     expect(Date.now() - t0, 'the page blocked while the animation ran').toBeLessThan(2000);
 
-    // Claim 3: Stop — and it has to be a stop, not a coincidence. A THIRD
-    // sample first: |x1-x0| alone is satisfied by an animation that ran a
-    // handful of frames and then wedged, and a scene that froze BEFORE the
-    // click passes the freeze check further down for free. Requiring motion
-    // between x1 and x2 means the loop is demonstrably still running at the
-    // moment we stop it.
+    // Baseline for the two-clocks measurement, taken at the start of the x1..x2
+    // window below.
+    const clocks0 = await page.evaluate(() =>
+      ({ sends: window.__sceneEvents.length, ops: window.__sceneOps.length }));
+
+    // Claim 3: Stop — and it has to be a stop, not a coincidence. Two more
+    // samples first, because |x1-x0| alone is satisfied by an animation that ran
+    // a handful of frames and then wedged, and a scene that froze BEFORE the
+    // click passes the freeze check further down for free.
+    //
+    // x2 narrows the window to the last 1.5 s; the sample taken INSIDE the click
+    // evaluate (atStop.x, below) is the one that actually closes it, because it
+    // is read in the same synchronous turn as the Stop. The three together say:
+    // the loop was still running at the instant we stopped it.
+    //
+    // The 0.05 threshold is deliberately far below the ~0.9 units 1.5 s of
+    // rate(60) at 0.01/frame produces — it is a "not noise" bound, not a
+    // throughput one. What keeps a barely-alive animation from passing is that
+    // the SAME bound has to be cleared in each successive window, including the
+    // one ending at the click.
     await page.waitForTimeout(1500);
     const x2 = await movingX(page);
     expect(Math.abs(x2 - x1),
       'the animation stalled before Stop — the freeze check below would prove nothing')
       .toBeGreaterThan(0.05);
 
+    // THE TWO CLOCKS (Task 11). The pacer and the student's rate() loop can both
+    // make the worker flush, and while the loop is running the pacer's handshake
+    // is redundant: rate() triggers a render up to MAX_RENDERS a second from
+    // inside the program. Measured before the pacer learned to back off: 91 host
+    // messages against 254 packages over three seconds — a third of the traffic
+    // on the hottest path in the system, buying nothing.
+    //
+    // Measured over the 1.5 s window just used for x1..x2, so this costs no extra
+    // wall clock. `sends` is what the PAGE put on the wire; `ops` is what came
+    // back.
+    const clocks = await page.evaluate(() =>
+      ({ sends: window.__sceneEvents.length, ops: window.__sceneOps.length }));
+    const paceWindow = Math.floor(1500 / 33);        // ticks the pacer got in that window
+    console.log('TWO CLOCKS over ~1.5 s of animation: sends=' +
+      (clocks.sends - clocks0.sends) + ' ops=' + (clocks.ops - clocks0.ops) +
+      ' (pacer ticks available: ' + paceWindow + ')');
+    // The loop really is flushing on its own — otherwise "the pacer stayed
+    // quiet" would just mean the scene was dead.
+    expect(clocks.ops - clocks0.ops,
+      'the program was not flushing on its own; the next assertion would be vacuous')
+      .toBeGreaterThan(paceWindow);
+    // ...and the pacer got out of its way. Before the fix this was one send per
+    // tick (~45); a handful may still go out for a camera the test never moves.
+    expect(clocks.sends - clocks0.sends,
+      'the pacer is still sending a handshake per tick while rate() drives the loop')
+      .toBeLessThan(paceWindow / 4);
+
     // The button is still up, because the program never ends.
     await expect(page.locator('.stop-it')).toBeVisible();
+
+    // A known gap before the click, so the "still moving as the button went
+    // down" assertion has a window to measure rather than however many
+    // milliseconds the round trips above happened to take. 0.5 s of rate(60) at
+    // 0.01/frame is ~0.3 units, six times the 0.05 noise bound.
+    await page.waitForTimeout(500);
 
     // Clicked from page context rather than with the locator so the counters
     // are read in the SAME synchronous turn as the click. This matters: a
@@ -401,13 +468,28 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     // trip after the click would already contain the leaked ticks and the leak
     // would be invisible. Reading them the instant stopCode() returns makes the
     // difference exact — 0 further ticks if it cancelled, ~15 if it did not.
+    // The sphere's position is read in that same turn, BEFORE the click: a
+    // sample at the click instant. Every other sample is one round trip old, so
+    // an animation that wedged after x2 was taken would still satisfy the
+    // freeze check below for free.
     const atStop = await page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs().filter(Boolean);
+      const s = objs.find((o) => o && o.pos && typeof o.pos.x === 'number');
+      const x = s ? s.pos.x : null;
       document.querySelector('.stop-it').click();
-      return { ticks: window.__pacerTicks, ops: window.__sceneOps.length };
+      return { x: x, ticks: window.__pacerTicks, ops: window.__sceneOps.length };
     });
     expect(atStop.ops,
       'the scene-ops tap never saw a package — the comparison below would be 0 vs 0')
       .toBeGreaterThan(0);
+    // Still moving as the button went down — not merely "moved at some point
+    // during the run".
+    console.log('MOTION x0=' + x0 + ' x1=' + x1 + ' x2=' + x2 + ' atStop=' + atStop.x);
+    expect(Math.abs(atStop.x - x1),
+      'the animation was not running at the moment Stop was clicked').toBeGreaterThan(0.05);
+    expect(Math.abs(atStop.x - x2),
+      'the animation wedged between the last sample and the click — the freeze ' +
+      'check below would prove nothing').toBeGreaterThan(0.05);
 
     await expect(async () => {
       expect(await page.evaluate(() =>
@@ -452,8 +534,8 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     // Two taps.
     //
-    // (a) The worker channel, so "the clock has stopped" can be asserted on the
-    //     WIRE before the click rather than assumed from a sleep.
+    // (a) The worker channel (the shared tap), so "the clock has stopped" can be
+    //     asserted on the WIRE before the click rather than assumed from a sleep.
     // (b) The front-end INSTANCE, to check that the page NOTIFIES it when the
     //     pacer stops instead of leaving it to infer that from how long ago the
     //     last tick was. The inference has a ~100 ms window after the final tick
@@ -468,18 +550,8 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     //     name comes from a top-level `function` declaration in a classic
     //     script, which redefines the global property as a data property and
     //     silently discards any accessor installed beforehand.
+    await tapWorkerChannel(page);
     await page.addInitScript(() => {
-      const RealWorker = window.Worker;
-      window.__sceneOps = [];
-      window.Worker = function (url, options) {
-        const w = new RealWorker(url, options);
-        w.addEventListener('message', (e) => {
-          if (e && e.data && e.data.type === 'scene-ops') window.__sceneOps.push(1);
-        });
-        return w;
-      };
-      window.Worker.prototype = RealWorker.prototype;
-
       window.__pacingStopped = 0;
       let scene = null;
       Object.defineProperty(window, '__vpythonScene', {
@@ -507,8 +579,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       });
     });
 
-    await skipUnlessWorkerVPython(page);
-    await runProgram(page, CLICK_PROGRAM);
+    await runVPython(page, CLICK_PROGRAM);
 
     // GLOW IS LAZY: a canvas with no objects renders no <canvas> element, so the
     // element appearing is the signal that the sphere really reached the scene.
@@ -621,8 +692,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       window.Worker.prototype = RealWorker.prototype;
     });
 
-    await skipUnlessWorkerVPython(page);
-    await runProgram(page, GRAPH_PROGRAM);
+    await runVPython(page, GRAPH_PROGRAM);
 
     // The plot canvas appearing is the "the graph machinery really ran" signal.
     await expect(async () => {
@@ -747,5 +817,164 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
     expect(consoleErrors, 'the page logged an error while plotting').toEqual([]);
+  });
+
+  // --- Task 11: lifecycle, and deferrals that are loud ----------------------
+  //
+  // Everything above runs a program ONCE. A student runs the same program over
+  // and over, changing a number each time, and that is where the scene lifecycle
+  // is actually decided.
+  //
+  // THE RE-RUN CONTRACT. A vpython re-run starts from a fresh interpreter
+  // (worker-client discardWorker(), called from runInWorker). It has to: vpython
+  // builds `scene = canvas()` exactly once, at `import vpython`, so on a warm
+  // worker run 2's objects attach to run 1's canvas — which the page destroyed
+  // when it bumped the generation. Measured before the fix: run 2 reported
+  // generation 2 and 53 handled packages and drew NOTHING, because every object
+  // it made belonged to a canvas the page no longer knew about. This diverges
+  // from spec decision V7 ("Python state persists across runs") for vpython runs
+  // only; the spec records the divergence and why.
+
+  test('a re-run replaces the scene instead of stacking a second one', async ({ page }) => {
+    // Two cold runs now that each vpython run boots its own interpreter.
+    test.setTimeout(420_000);
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await tapWorkerChannel(page);
+    await runVPython(page, STATIC_SPHERE);
+
+    // GLOW IS LAZY: the <canvas> element appearing is the signal that objects
+    // reached the front-end.
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    const run1 = await page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs().filter(Boolean);
+      return {
+        objs: objs.length,
+        canvases: objs.filter((o) => o && o.constructor && o.constructor.name === 'canvas').length,
+        // Two per scene: glow stacks a 2D overlay over the WebGL canvas.
+        dom: document.querySelectorAll('#vpython-scene canvas').length,
+        gen: window.__vpythonScene.generation,
+      };
+    });
+    expect(run1.canvases, 'run 1 did not produce exactly one canvas').toBe(1);
+    expect(run1.dom).toBeGreaterThan(0);
+
+    // Re-run — and on the way through, prove the ORDER inside resetVPythonScene.
+    // It drops the front-end reference BEFORE stopping the pacer, because
+    // stopVPythonPacer() tells the front-end its clock has gone and the
+    // front-end answers that by FLUSHING its queue. Those queued events name
+    // idxs from the scene being torn down, and Python's registry would resolve
+    // them against whatever the next generation puts at those idxs.
+    //
+    // With an empty queue the wrong order is silent, so the queue is loaded
+    // first: bind a click through the front-end (capturing the handler glow is
+    // given), tick so the front-end believes the host's clock is live — which is
+    // what makes an event QUEUE rather than flush itself — then fire the handler
+    // and hit Run. All in ONE evaluate: startRun() is synchronous from
+    // resetVPythonScene() through to the worker being discarded, so nothing can
+    // interleave, and the click cannot have gone out for any innocent reason.
+    const armed = await page.evaluate(() => {
+      const fe = window.__vpythonScene.frontend;
+      const cvs = fe._objs()[0];
+      let handler = null;
+      const realBind = cvs.bind;
+      cvs.bind = function (types, fn) { handler = fn; return realBind.call(cvs, types, fn); };
+      fe.handle({ attrs: ['m0Gclick'] });     // method code G is bind, on idx 0
+      cvs.bind = realBind;
+      if (typeof handler !== 'function') return { bound: false };
+
+      fe.tick();                              // ...so the clock looks live
+      window.__sceneEvents.length = 0;        // baseline: nothing sent from here on
+      handler({ type: 'click', canvas: cvs, pos: window.vec(1, 2, 3),
+                press: false, release: true, which: 1 });
+      const queued = window.__sceneEvents.length === 0;
+      document.querySelector('.run-it').click();
+      return { bound: true, queued };
+    });
+    expect(armed.bound, 'could not bind a handler on the live canvas').toBe(true);
+    expect(armed.queued,
+      'the click flushed itself instead of queueing — this spec cannot see the leak').toBe(true);
+
+    // Run 2 draws. This is the whole point: before the fresh-interpreter change
+    // it did not.
+    await expect(async () => {
+      expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(2);
+      expect(await page.evaluate(() => {
+        const fe = window.__vpythonScene.frontend;
+        return fe ? fe._objs().filter(Boolean).length : 0;
+      }), 'run 2 rendered nothing — its objects attached to run 1\'s canvas').toBeGreaterThan(1);
+    }).toPass({ timeout: 180_000 });
+
+    const run2 = await page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs().filter(Boolean);
+      const red = objs.find((o) => o && o.color && o.color.x === 1 && o.color.y === 0 && o.color.z === 0);
+      return {
+        objs: objs.length,
+        canvases: objs.filter((o) => o && o.constructor && o.constructor.name === 'canvas').length,
+        dom: document.querySelectorAll('#vpython-scene canvas').length,
+        red: !!red,
+      };
+    });
+
+    // ONE scene, not two. Both halves matter: a second canvas OBJECT would mean
+    // the registry accumulated across runs, and extra canvas ELEMENTS would mean
+    // the old scene's DOM survived underneath the new one.
+    expect(run2.canvases, 'a second canvas is stacked on the first').toBe(1);
+    expect(run2.dom, 'the previous run\'s canvas elements are still on the page').toBe(run1.dom);
+    expect(run2.objs, 'the object registry accumulated across runs').toBe(run1.objs);
+    expect(run2.red, 'run 2 drew no sphere of its own').toBe(true);
+
+    // ...and nothing from the dying generation escaped on the way there.
+    const leaked = await page.evaluate(() =>
+      window.__sceneEvents.filter((e) => e.indexOf('"click"') !== -1));
+    expect(leaked,
+      'a queued event from the torn-down scene went out — resetVPythonScene ' +
+      'stopped the pacer before dropping the front-end').toEqual([]);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+  });
+
+  // LOUD DEFERRALS (spec V5). scene.pause() cannot work in a worker: it spins
+  // the one and only thread waiting for a browser reply that has to arrive on
+  // that same thread. The failure mode we are ruling out is not "it does not
+  // work" — it is "the tab appears to hang and the student is told nothing".
+  //
+  // The message is vpython/trinket_worker.py's _DEFER, applied to
+  // `_vp.canvas.pause`. Asserted in two halves so the em dash between them is
+  // not part of the contract.
+  const PAUSE_PROGRAM = 'from vpython import *\n' +
+                        'sphere()\n' +
+                        'scene.pause()\n';
+
+  test('scene.pause() reports the deferral clearly instead of hanging', async ({ page }) => {
+    test.setTimeout(300_000);   // cold Pyodide boot + 3.5 MB wheel install
+
+    await runVPython(page, PAUSE_PROGRAM);
+
+    await expect(async () => {
+      const out = await page.evaluate(() =>
+        document.querySelector('#console-output')?.innerText || '');
+      expect(out, 'the deferral never reached the console').toContain(
+        'scene.pause is not supported in the worker runtime yet');
+      expect(out).toContain('run without the workerVPython flag to use it');
+    }).toPass({ timeout: 180_000 });
+
+    // ...and the run SETTLED. A deferral that raised but left the page thinking
+    // a program was still running would be the same hang with a message on top:
+    // the Stop button stays up, the toolbar stays in its running state, and the
+    // student's next Run is fighting the last one.
+    await expect(page.locator('.stop-it')).toBeHidden({ timeout: 30_000 });
+
+    // The sphere on the line before still drew: the program ran up to the
+    // deferral rather than the whole run being thrown away.
+    expect(await page.evaluate(() =>
+      window.__vpythonScene.frontend
+        ? window.__vpythonScene.frontend._objs().filter(Boolean).length : 0),
+      'nothing was drawn before the deferral').toBeGreaterThan(1);
   });
 });

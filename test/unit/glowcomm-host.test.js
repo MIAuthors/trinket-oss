@@ -365,12 +365,31 @@ describe('createGlowFrontend event channel', () => {
   });
 
   it('pacingStopped() on an empty queue says nothing', () => {
-    const { g } = stubGlow();
+    // The fixture has to make the guard EARNABLE. An earlier version used the
+    // bare stubGlow, whose canvas static has no `hasmouse` — so update_canvas()
+    // returned null and a mutant pacing_stopped() that drained and sent
+    // unconditionally would have stayed silent too, for entirely the wrong
+    // reason. Here the mouse IS over the canvas and the camera HAS moved since
+    // the last tick, so the canvas poll has plenty to say: the only thing
+    // keeping this quiet is flush()'s "empty queue -> don't poll, don't send".
+    const { g } = stubGlowWithMouse();
     const sent = [];
     const fe = createGlowFrontend({ container: null, send: (e) => sent.push(e), glow: g });
-    fe.handle(MSG0);
-    fe.tick();
+    const cvs = fakeCanvas(g, 0);
+    g.canvas = Object.assign(() => cvs, { hasmouse: null });
+    fe.handle({ cmds: [{ cmd: 'canvas', idx: 0 }] });
+    g.canvas.hasmouse = cvs;
+    fe.tick();                                  // consume the initial diff
     sent.length = 0;
+    cvs.forward = g.vec(1, 0, 0);               // the student orbited...
+    cvs.mouse.pos = g.vec(5, 5, 5);             // ...and moved the mouse
+
+    // Precondition, so the fixture cannot rot back into the accidental pass: a
+    // tick right now WOULD have something to report.
+    expect(fe.poll().length, 'the canvas poll had nothing to say — the guard below is vacuous')
+      .toBeGreaterThan(0);
+    sent.length = 0;
+    cvs.forward = g.vec(0, 1, 0);               // move it again, so the diff is live
     fe.pacingStopped();
     expect(sent).toEqual([]);
   });
@@ -380,6 +399,60 @@ describe('createGlowFrontend event channel', () => {
     // No tick has ever happened, so there is demonstrably no clock.
     click(3);
     expect(sent.length).toBe(1);
+  });
+
+  // --- Task 11: the two clocks ----------------------------------------------
+  // While the student's own loop is calling rate(), the PROGRAM is flushing the
+  // scene (up to rate_control.MAX_RENDERS a second) and the host's handshake is
+  // pure overhead — measured at 91 host messages against 254 packages over three
+  // seconds. poll() is the tick a host uses in that state: it does the half only
+  // the browser can do and skips the half the program is already doing.
+
+  it('poll() says nothing when the browser has nothing to say', () => {
+    const { g } = stubGlow();
+    const sent = [];
+    const fe = createGlowFrontend({ container: null, send: (e) => sent.push(e), glow: g });
+    fe.handle(MSG0);
+    fe.tick();
+    expect(sent, 'precondition: tick() DOES send the handshake').toEqual(
+      [[{ event: 'update_canvas', trigger: 1 }]]);
+    sent.length = 0;
+
+    fe.poll();
+    expect(sent, 'poll() sent the handshake anyway — it is just tick() again').toEqual([]);
+  });
+
+  it('poll() still carries queued events and current camera state', () => {
+    // The saving is the empty handshake, not the browser's half of the channel:
+    // a click, or a camera the student orbited mid-animation, must still get
+    // through on a polled tick.
+    const { g, fe, cvs, sent, click } = boundClickFixture();
+    g.canvas.hasmouse = cvs;
+    fe.tick();                       // consume the initial diff
+    sent.length = 0;
+
+    cvs.forward = g.vec(1, 0, 0);    // orbited while the animation runs
+    click(7);
+    fe.poll();
+
+    expect(sent.length).toBe(1);
+    expect(sent[0].map((e) => e.event)).toEqual(['click', 'update_canvas']);
+    expect(sent[0][0].pos).toEqual([7, 0, 0]);
+    expect(sent[0][1].forward).toEqual([1, 0, 0]);
+  });
+
+  it('poll() keeps the clock alive, so events still batch', () => {
+    // poll() stamps last_tick like tick() does. If it did not, the grace window
+    // would decide the clock had died and every mouse event during an animation
+    // would pay its own round trip — the opposite of the point.
+    const { fe, sent, click } = boundClickFixture();
+    fe.poll();
+    sent.length = 0;
+    click(1); click(2);
+    expect(sent, 'poll() left the front-end thinking the clock was gone').toEqual([]);
+    fe.poll();
+    expect(sent.length).toBe(1);
+    expect(sent[0].map((e) => e.pos)).toEqual([[1, 0, 0], [2, 0, 0]]);
   });
 
   // --- I2: an event-driven flush still carries the canvas poll ---------------

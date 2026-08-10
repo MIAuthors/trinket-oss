@@ -127,6 +127,36 @@ describe('createWorkerClient', () => {
     expect(() => client.stop()).not.toThrow();
   });
 
+  // discardWorker() is the VPython re-run contract (Task 11): the page throws the
+  // interpreter away between runs so the Python namespace, the vpython scene and
+  // the page's object registry reset together. It is stop()'s mechanism used with
+  // a different intent, and what a caller depends on is that the NEXT run gets a
+  // brand new interpreter — not a recycled one carrying `scene = canvas()` from
+  // the run before.
+  it('discardWorker() terminates the worker and the next run boots a fresh one', async () => {
+    const { client, made } = await bootedClient();
+    client.run('from vpython import *');
+    await tick();
+    made[0].onmessage({ data: { type: 'done', id: made[0].posted.find(m => m.type === 'run').id } });
+    await tick();
+
+    client.discardWorker();
+    expect(made[0].terminated).toBe(true);
+
+    client.run('from vpython import *');
+    await tick();
+    expect(made.length).toBe(2);
+    expect(made[1].posted[0].type).toBe('init');       // a cold boot, not a reuse
+    made[1].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    expect(made[1].posted.find(m => m.type === 'run')).toBeTruthy();
+  });
+
+  it('discardWorker() with nothing running is harmless', () => {
+    const { client } = newClient();
+    expect(() => client.discardWorker()).not.toThrow();
+  });
+
   it('does NOT post a run before the worker reports ready', async () => {
     // Booting Pyodide takes seconds; a run posted first is answered
     // "Python is not ready yet". Found by the browser spec, not by unit tests.
