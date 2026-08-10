@@ -13,7 +13,12 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   test('CANARY: captured sphere stream renders on trinket glow 3.2.3', async ({ page }) => {
     const logs = [];
     page.on('console', (m) => logs.push(m.type() + ': ' + m.text()));
-    page.on('pageerror', (e) => logs.push('pageerror: ' + e.message));
+    // Kept separate from `logs` because it is ASSERTED, not just printed: an
+    // exception thrown inside glow's async render loop lands here and nowhere
+    // else, and would otherwise be invisible unless it happened to zero the
+    // pixel count. Tasks 8-11 add genuinely async behaviour to this file.
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
 
     await page.goto('/embed/python3?runtime=main');   // any embed page; we just need a DOM + origin
 
@@ -93,13 +98,18 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     if (logs.length) console.log('page console:\n' + logs.join('\n'));
 
     expect(result.errs, 'the ported handler threw on the captured stream').toEqual([]);
+    // Nothing blew up asynchronously either — see the pageErrors comment above.
+    // No filter: the only page-console noise these runs produce is SwiftShader's
+    // "GPU stall due to ReadPixels" performance warning, which is a console
+    // warning and never reaches pageerror.
+    expect(pageErrors, 'uncaught page exception (glow render loop?)').toEqual([]);
     // Whole stream landed on real glow constructors.
     expect(result.shape.idxs).toEqual(['0', '2', '3', '4']);
+    expect(result.shape.isCanvas).toBe(true);       // idx 0 is a real glow canvas, not just some object
     expect(result.shape.lights).toBe(2);            // "empty_list" cleared the defaults, 2 distant_lights added
     expect(result.shape.pos).toEqual([1, 2, 3]);    // compact attr code "a4a1,2,3" reached the live object
     expect(result.shape.color).toEqual([1, 0, 0]);
     // ...and it actually rasterised: a red sphere occupies >100 pixels.
-    expect(result.why).toBeDefined();
     expect(result.inFrame).toBeGreaterThan(100);
   });
 });
