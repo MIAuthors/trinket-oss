@@ -649,20 +649,10 @@ var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importl
 // Names Python uses when code has no real file — all mean "the user's program".
 var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
 
-// jqconsole's Write(text, cls, escape) inserts raw HTML when `escape` is false.
-// Everything we put in the console is Python text, and Python text is full of
-// angle brackets: a traceback names its scope `<module>`, and repr() renders an
-// object as `<Foo object at 0x…>`. Parsed as HTML those become unknown tags and
-// DISAPPEAR — which is why a traceback rendered as `File "", line 1, in ` with
-// the names silently eaten. It is also an injection hole: an exception message
-// containing markup is executed by the page.
-//
-// Escape here and keep the `false` (jqconsole's own escaping would also swallow
-// the ANSI codes the run path emits) — the convention python.js already uses.
-function escapeConsoleHtml(text) {
-  var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
-}
+// escapeConsoleHtml is defined once, above, next to the other console helpers —
+// #114 and #117 each introduced an identical copy, and two definitions of the
+// same name in one file is a defect waiting to happen: the later declaration
+// silently wins, so a future edit to the first would have no effect at all.
 
 function formatPythonTraceback(msg, mainName) {
   if (!msg) return msg;
