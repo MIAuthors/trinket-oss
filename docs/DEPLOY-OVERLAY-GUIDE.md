@@ -137,7 +137,9 @@ features:
 
 - **Web VPython / GlowScript.** Its bridge binds `from js import sphere, box,
   rate, …` to the browser window, which does not exist in a worker. Unchanged,
-  deliberately: Stop already works there via `rate()`.
+  deliberately: Stop already works there via `rate()`. (A separate, experimental
+  flag — `features.workerVPython`, below — routes VPython through a *different*
+  worker path built on the `vpython` package; `workerRuntime` alone never does.)
 - Programs calling `input()`, `sleep()` or `rate()` inside a **lambda or a
   comprehension**, where `await` cannot be inserted. They keep working exactly as
   they do today; they just do not gain the freeze protection.
@@ -167,40 +169,47 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 
 ## Optional: run Web VPython off the main thread (`features.workerVPython`)
 
-> ⚠️ **Experimental — the first run of a static scene works, nothing beyond that
-> yet. Do not enable on a deploy.** The path is joined up end to end: the worker
-> installs the VPython wheel, runs the program, and the page draws the scene with
-> GlowScript. Three things behind it are still missing.
+> ⚠️ **Experimental — for a trial, not a production deploy.** The path is joined
+> up end to end and browser-tested: static scenes, `rate()` animations, Stop,
+> `scene.bind(...)` mouse/key handlers, camera interaction, `gcurve`/`gdots`
+> graphs and re-runs all work. What still gates it is validation, not plumbing —
+> a representative set of M&I programs (to be picked with Todd) has to render and
+> animate identically to the main-thread path first. Three things to know before
+> you turn it on:
 >
-> 1. **`rate()` does not pace.** Worker runs do not yet get the async rewrite that
->    turns it into a yield point, so an animation loop does not animate. Static
->    scenes are correct; animated ones are not.
-> 2. **Pressing Run a second time draws nothing.** The scene is torn down as it
->    should be, but the worker's Python namespace survives, so the rebuilt scene
->    is never re-sent and the second run ends with an empty graphic pane. The
->    workaround today is to **reload the page between runs**.
->
->    *The first two are owned by later tasks in the same plan (the `rate()`
->    rewrite next, the re-run lifecycle after it). Until they land this is a
->    single-run demo, not a feature. Item 3 below is not one of them.*
->
+> 1. **Every Run boots a fresh interpreter, so the Python namespace does NOT
+>    carry over between Runs.** This is deliberate (design decision V7a), not a
+>    limitation: pressing Run here means "run this program from the top", which is
+>    exactly what the main-thread VPython bridge and WebVPython do — there is no
+>    persistent namespace between runs on either. It is also the one place
+>    `workerVPython` behaves differently from `workerRuntime`, where python3
+>    worker runs *do* accumulate state across Runs. The REPL session lives in that
+>    same interpreter, so a VPython Run also resets the console session and says
+>    so on the console rather than leaving it to be discovered.
+> 2. **Each Run therefore pays a cold boot — about 4 seconds** from click to
+>    rendered scene on the dev stack (measured: 4.1 s on the first run, 3.9 s on
+>    the second), being a fresh Pyodide plus the VPython wheel install. Pyodide's
+>    own artifacts do come from the browser cache; **trinket's own 3.5 MB VPython
+>    wheel does not** — `app.js` sends `no-store` on every response it serves, so
+>    the wheel is refetched in full on every Run. That is cheap on localhost and
+>    not cheap over the internet; it is the first follow-up below.
 > 3. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
 >    (`wvpython/vpython/core_funcs.py` forwards constructor kwargs straight to
 >    GlowScript) but the stock 6 under `workerVPython`. Cause: the packaged
 >    `vpython` library's `gobj.setup` assigns `self._size` directly, while `size`
 >    on `gobj` is a property derived from `_radius` — so the constructor argument
->    is written to a dead attribute and never reaches the wire. Upstream
->    vpython-jupyter bug, not trinket's; unaffected by the two items above, and
->    it will still be here when they are fixed. `radius=` is honoured on both
+>    is written to a dead attribute and never reaches the wire. This is an
+>    upstream vpython-jupyter bug, not trinket's. `radius=` is honoured on both
 >    paths and is the workaround. Setting `.size` *after* construction goes
 >    through the property setter and works on both paths too.
 
-Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
-VPython programs run through the `vpython-jupyter` package inside the Web Worker
-and GlowScript draws the scene on the page. The animation becomes killable — the
-page cannot freeze, and Stop halts a VPython loop the same way it halts any other
-worker program.
+Default **`false`**. When enabled, Web VPython programs run through the
+`vpython-jupyter` package inside the Web Worker and GlowScript draws the scene on
+the page. The animation becomes killable — the page cannot freeze, and Stop halts
+a VPython loop the same way it halts any other worker program. The flag is
+**independent of `workerRuntime`**: a deploy can worker-ize VPython without
+worker-izing plain python3, or the other way round.
 
 ```yaml
 features:
@@ -215,14 +224,51 @@ escapes it, sending the program back to the untouched main-thread bridge.
 
 | | |
 |---|---|
-| a static VPython scene | drawn by GlowScript from the worker's updates — **on the first run of a page only** |
-| a VPython animation loop | *(intended)* stoppable, page stays responsive — blocked on the `rate()` gap above |
-| Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen; it is not resumable |
-| Python state | persists across runs; the **scene does not** — each run starts a fresh scene, and today that fresh scene stays **empty** (see the caveat: reload between runs) |
-| `pause()` / `waitfor()` / widgets | not yet supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
+| a static VPython scene | drawn by GlowScript from the worker's updates |
+| a VPython animation loop | paces normally and **Stop halts it** with the page responsive throughout — the point of the whole path |
+| Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen, so it can still be orbited; it is not resumable |
+| Run pressed during a running animation | restarts the program from the top (the same fresh interpreter as any other Run) |
+| a re-run | replaces the scene and renders normally — no page reload needed, no objects stacking up from the previous run |
+| Python state | does **not** carry over between Runs — each Run is a fresh interpreter (see caveat 1). Unlike `workerRuntime` python3 runs, which do |
+| mouse / keys / camera | `scene.bind('click', …)` and friends fire, and orbit/zoom/pan work |
+| `gcurve` / `gdots` | plot — but `size=` at construction is ignored (see caveat 3) |
+| `pause()` / `waitfor()` / widgets | not supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
 
 With the flag off, VPython behaves exactly as it always has (main thread,
 `from js import …` bridge) — that path is untouched.
+
+**Known follow-ups (none of these block a trial; all of them need an owner):**
+
+1. **`/components/` is served with `no-store`, so the 3.5 MB VPython wheel is
+   refetched on every Run.** The cheapest performance lever on this path by a
+   wide margin — the wheel already carries an etag, and a conditional GET returns
+   304 with 0 bytes, so it would revalidate happily if it were allowed to be
+   cached at all. The catch is that the header is set site-wide in `app.js`'s
+   shared `onPreResponse` extension (the same one that sets `Pragma`, `Expires`
+   and `X-Frame-Options`), with no path guard. Exempting `/components/` is a
+   **serving-policy change for the whole site** and wants its own review, not a
+   drive-by. **Needs an owner.**
+2. **The `gcurve`/`gdots` `size=` regression** (caveat 3) should be fixed
+   upstream in vpython-jupyter, in `gobj.setup`, rather than patched here.
+3. **`from time import sleep` breaks in a VPython program.** The async transform
+   awaits the *bare* names `rate` and `sleep`, so `sleep(1)` from `time` gets an
+   `await` inserted and raises `TypeError`. This is **not** a regression — it is
+   exact parity with the main-thread bridge, which shares the same transform —
+   but it is newly reachable, because VPython worker runs force the transform on.
+   `import time; time.sleep(1)` is untouched and is the workaround. The fix
+   belongs in the shared `_async_transform.py`, which has its own 35-test suite
+   and an obligation to stay in sync upstream.
+4. **A REPL statement in flight during a live VPython run can wedge the restart.**
+   `worker-client.js` tracks a single in-flight `current` slot, so a console
+   statement submitted mid-animation overwrites the run's resolver; a Run pressed
+   at that moment settles the REPL promise instead of the run, `finishRun()` never
+   fires, `rerunQueued` stays set and the Stop button keeps showing. Needs the
+   console open *and* a statement in flight during an animation. Pre-existing
+   shape, newly reachable now that Run-during-a-run restarts.
+5. **Widgets and `scene.pause()` / `scene.waitfor()` remain deferred** (design
+   decision V5). They raise a clear `NotImplementedError` naming the feature —
+   deliberately loud, because a `pause()` that does not pause changes what the
+   program means.
 
 ## Example — prod-only infra in `config/local-production.yaml`
 

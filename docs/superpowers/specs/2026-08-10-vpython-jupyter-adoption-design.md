@@ -93,3 +93,43 @@ Widgets; `pause`/`waitfor`; JSPI fast path; changing the default path or removin
 | Event round-trip latency makes dragging feel bad | Events ride the existing ~33 ms pacing, same rhythm as Jupyter vpython today; measure on the trials before judging |
 | Transform misses a yield in a real M&I program → worker starves | The M&I sample set is the gate; any starving program routes to main via `?runtime=main` while diagnosed |
 | Two-repo coordination (wheel version ↔ front-end version) | Wheel filename carries the version; host shim logs both at boot; single owner (Steve) for both repos |
+
+## Implementation notes (Task 12) — where the build diverged from the text above
+
+Only divergences are recorded. Decisions V1–V7 held as written except where V7a
+already amends them, and the T7/T11 "Built shape" note above already records the
+pacing-ownership and `solicited`-flag design.
+
+- **The transform did not "apply unchanged" — it had to be *forced*.** The
+  Ownership section says the worker kernel installs the wheel and "the existing
+  `_async_transform` applies unchanged". The transform itself is indeed
+  untouched, but it was never *reaching* a vpython run: `pyodide-worker.js`
+  decided whether to transform by pattern-matching the source (`needsTransform`),
+  and vpython source does not look like the python3 source that predicate was
+  written for. With no transform there is no `await` on `rate()`, the flush
+  inside `_async_rate` never runs, the worker never yields to its event loop, and
+  **nothing rendered at all** — not even the objects built before the loop
+  (Task 8). The fix is `wantsTransform(msg, src) = !!msg.vpython ||
+  needsTransform(src)`: the router's own vpython decision forces it on. Widening
+  the regex instead was rejected because `_BASE_AWAIT_NAMES` holds the *bare*
+  names `rate`/`sleep`, so a python3 program defining its own `rate()` would have
+  had `await` inserted in front of a plain value — that route can break a working
+  program, `msg.vpython` cannot.
+  - **Consequence, documented in the deploy guide rather than fixed here:**
+    `from time import sleep` in a vpython program now gets an `await` and raises
+    `TypeError`. Not a regression — the main-thread bridge shares the transform
+    and does the same — but newly reachable. The fix belongs in
+    `_async_transform.py` (35-test suite, upstream sync obligation), not in the
+    worker kernel.
+- **Served path is `public/components/vpython-worker/`, not `vpython-wheel/`.**
+  It holds the front-end JS *and* the wheel, and `scripts/sync-vpython-worker.sh`
+  is the only writer (source of truth is the vpython-jupyter checkout).
+- **At program end the pacing clock stops; the scene stays live anyway.** The
+  Scene lifecycle section says the transport "keeps answering pacing triggers"
+  after the program ends. It does not: the clock belongs to the *run*, so
+  `finishVPythonPacing()` drains and then stops it. The stated outcome still
+  holds by a different mechanism — the rendered scene is client-side glow, so
+  orbit/zoom/pan keep working with no worker involved, and the archetypal
+  interactive program (`scene.bind('click', f)` then end-of-file) works because
+  the front-end **self-flushes an event when no tick has happened within 100 ms**
+  instead of queueing it for a clock that will never come round again (T9).
