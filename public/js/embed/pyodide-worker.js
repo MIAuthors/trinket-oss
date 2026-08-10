@@ -175,7 +175,25 @@
         // Never cache a failed install, or one transient fetch error poisons
         // every later vpython run for the life of this worker.
         vpythonReady = null;
-        throw e;
+        // A raw micropip failure would reach the page as a Python traceback
+        // whose frames are all site-packages — and formatPythonTraceback maps
+        // the synthetic <exec> frame to main.py, so the student would be shown
+        // "File main.py, line 2" above micropip internals, for a failure that
+        // has nothing to do with their program. Send one plain sentence
+        // instead: with no frame lines in it the formatter passes it through
+        // untouched.
+        //
+        // A Pyodide PythonError's `.message` is the WHOLE traceback, so only
+        // its last line (the `SomeError: text` one) is quoted — embedding the
+        // rest would reintroduce exactly the frames this exists to suppress.
+        var raw = String(e && e.message || e).split('\n');
+        var reason = '';
+        for (var li = raw.length - 1; li >= 0 && !reason; li--) {
+          if (raw[li].trim()) reason = raw[li].trim();
+        }
+        throw new Error('VPython could not be loaded in the worker runtime ' +
+          '(the vpython package failed to install: ' + reason +
+          '). This is a site problem, not an error in your program.');
       });
       return vpythonReady;
     }
