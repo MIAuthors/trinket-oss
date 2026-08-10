@@ -237,13 +237,35 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    thing to report. `?runtime=main` runs the program on the untouched
 >    main-thread bridge, where all five work.
 >
-> 5. **A `rate(N)` loop runs slower in wall clock than on the main thread.** The
->    worker's `rate()` sleeps a flat `1/N` seconds and does not subtract the time
->    the loop body already took, so a heavy body compounds. The *physics* is
->    unaffected — M&I programs integrate with their own fixed `dt` — but a
->    side-by-side comparison against the main-thread path will show a visible
->    speed difference, and it is the port, not the program. Expect it rather than
->    discover it when judging "renders and animates identically".
+> 5. **A `rate(N)` loop paces at N iterations/second — which the main-thread
+>    path does not do.** The worker's `rate()` subtracts the time the loop body
+>    already took from the sleep (a fixed timestep, as upstream
+>    vpython-jupyter's `RateKeeper` does with its measured `userTime`), so work
+>    inside the period is absorbed rather than added on top of it. The
+>    main-thread bridge calls GlowScript's own `rate()` from
+>    `glow.3.2.3.min.js`, which for `N <= 120` sleeps a flat `1000/N` ms and does
+>    **not** compensate. The two paths therefore still differ once the loop body
+>    is heavy — but the worker is now the *faster* of the two, and the one
+>    matching desktop VPython. Measured on the dev stack, 180 iterations of
+>    `rate(60)` with a busy-wait body:
+>
+>    | loop body | main thread | worker |
+>    |---|---|---|
+>    | (empty) | 52.0 Hz | 51.3–53.2 Hz |
+>    | 8 ms | 38.0 Hz | 54.2–54.6 Hz |
+>    | 20 ms | 25.8 Hz | 49.5–49.7 Hz |
+>
+>    A 20 ms body cannot exceed 50 Hz whatever `rate()` does, so that row is at
+>    its ceiling. Both paths land a few Hz short of the requested 60 even with an
+>    empty body — browser timer granularity plus the per-iteration scene update,
+>    present on both paths before and after this change, and *not* something the
+>    fixed timestep addresses (it clamps at zero rather than banking debt, so a
+>    late iteration is never repaid by a burst of zero-sleep ones). The *physics*
+>    is unaffected either way — M&I programs integrate with their own fixed `dt`
+>    — but a side-by-side comparison of a loop with real work in it will show the
+>    worker running closer to the requested rate than the main thread. Expect
+>    that rather than discover it when judging "renders and animates
+>    identically".
 >
 > 6. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
@@ -295,7 +317,7 @@ The two versions should match; the sync script refuses to run if they do not.
 | the interactive console | statements reach the scene — `ball.color = color.blue` at the prompt redraws it — but **only if `workerRuntime` is on too**, so the console and the VPython run share one interpreter |
 | `pause()` / `waitfor()` / widgets | not supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
 | `compound()` / `text()` / `extrusion()` / `obj.clone()` / `scene.mouse.pick` | **also not supported**, same loud `NotImplementedError` (see caveat 4) |
-| animation speed | a `rate(N)` loop runs a little slower in wall clock than the main-thread path (see caveat 5) |
+| animation speed | a `rate(N)` loop paces at ~N iterations/second with the loop body's own cost absorbed, so a heavy body runs *faster* here than on the main-thread path, which does not compensate (see caveat 5) |
 
 With the flag off, VPython behaves exactly as it always has (main thread,
 `from js import …` bridge) — that path is untouched.
