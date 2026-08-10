@@ -73,6 +73,17 @@
         return;
       }
 
+      // SPIKE (vpython-jupyter adoption): scene updates from the vpython
+      // transport. NOT scoped to `current` like figures — deliberately: a
+      // vpython scene outlives its run (the program ends, the scene stays live
+      // and browser-paced), so ops legitimately arrive after settle() nulls
+      // `current`. Lifecycle (what happens on re-run/stop) is a design question
+      // for the real implementation, recorded here rather than guessed at.
+      if (msg.type === 'scene-ops') {
+        if (opts.onSceneOps) opts.onSceneOps(msg);
+        return;
+      }
+
       // Request/response replies (the variable explorer). Not tied to a run:
       // they are asked for AFTER a run finishes, when the worker is idle.
       if (msg.type === 'snapshot-result') {
@@ -195,6 +206,15 @@
       sendMplEvent: function(figureId, content) {
         if (worker) {
           worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
+        }
+      },
+
+      // SPIKE (vpython-jupyter adoption): browser events — or the bare pacing
+      // trigger `[{"trigger":1}]` — to the vpython transport in the worker.
+      // `events` is a JSON array string in glowcomm's wire format.
+      sendSceneEvent: function(events) {
+        if (worker) {
+          worker.postMessage({ type: 'scene-event', events: String(events) });
         }
       },
 

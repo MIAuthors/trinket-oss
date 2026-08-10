@@ -153,6 +153,16 @@
       post({ type: 'figure', id: currentRunId, figureId: String(figid), kind: String(sub), data: String(payload) });
     };
 
+    // SPIKE (vpython-jupyter adoption, §14-16): the outbound half of the pipe
+    // vpython's trinket_worker transport expects. The transport JSON-encodes
+    // every update package ({cmds, methods, attrs} — glowcomm's wire format)
+    // and calls this; it rides out on the protocol's RESERVED `scene-ops` type.
+    // `ops` is carried as the raw JSON string for now — the page is the first
+    // consumer and decides its parsed shape when real rendering lands.
+    self.__trinket_vpython_send = function(jsonStr) {
+      post({ type: 'scene-ops', id: currentRunId, ops: String(jsonStr) });
+    };
+
     // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
     // transport-agnostic — upstream webagg carries its messages over a WebSocket
     // from a Tornado server, ipympl over a Jupyter comm. We carry them over
@@ -452,6 +462,20 @@
             var resolve = pendingInput;
             pendingInput = null;
             resolve(msg.value);
+          }
+          return;
+        }
+
+        // SPIKE (vpython-jupyter adoption): inbound half of the vpython pipe.
+        // The page sends browser events (or a bare pacing trigger) on the
+        // RESERVED `scene-event` type; vpython's trinket_worker transport set
+        // __trinket_vpython_dispatch when it booted. Before that boot — or on a
+        // run with no vpython at all — there is nothing to dispatch to, and
+        // dropping the message is correct: it is pacing, not data.
+        if (msg.type === 'scene-event') {
+          if (typeof self.__trinket_vpython_dispatch === 'function') {
+            try { self.__trinket_vpython_dispatch(String(msg.events || '[]')); }
+            catch (e) { post({ type: 'stderr', id: currentRunId, text: '[vpython dispatch] ' + String(e && e.message || e) + '\n' }); }
           }
           return;
         }

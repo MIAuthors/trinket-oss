@@ -1916,6 +1916,7 @@ function ensureWorkerClient() {
     varsHelper   : VARS_HELPER,
     onStdout   : function(text) { writeOut(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
+    onSceneOps : function(msg) { handleWorkerSceneOps(msg); },
     onInputRequest : function(prompt) {
       // The same jq-console widget console.input() uses, so a prompt looks
       // identical whichever runtime is executing.
@@ -2064,6 +2065,38 @@ function applyMplToolbarIcons(fig) {
       button.appendChild(icon);
     }
   });
+}
+
+// SPIKE (vpython-jupyter adoption, §14-16): first consumer of the `scene-ops`
+// stream. Renders NOTHING yet — it proves the channel: vpython's trinket_worker
+// transport in the worker → postMessage → here, and paces the reply loop that
+// transport is built around (the browser's ~33 ms canvas_update, exactly how
+// glowcomm.js paces the Jupyter kernel). Wiring this stream into GlowScript is
+// the real implementation's job; until then the ops are summarised into the
+// console so a human (or a probe) can see the scene arrive.
+var vpythonSceneTimer = null;
+function handleWorkerSceneOps(msg) {
+  var ops = null;
+  try { ops = JSON.parse(msg.ops); } catch (e) { ops = null; }
+
+  // Start the pacing loop on the FIRST ops message — that is the transport
+  // announcing it is alive. Each tick answers with a bare trigger; the
+  // transport answers every trigger with a flush (possibly empty). Cleared when
+  // the worker goes away (stop terminates it, and the next run replaces it).
+  if (!vpythonSceneTimer && workerClient) {
+    vpythonSceneTimer = setInterval(function() {
+      if (workerClient) { workerClient.sendSceneEvent('[{"trigger":1}]'); }
+      else { clearInterval(vpythonSceneTimer); vpythonSceneTimer = null; }
+    }, 33);
+  }
+
+  if (!ops) return;
+  var cmds  = (ops.cmds || []).map(function(c) { return c.cmd || '?'; }).filter(function(n) { return n !== '?'; });
+  var attrs = ops.attrs || [];
+  if (cmds.length || attrs.length) {
+    writeOut('[vpython scene] cmds: ' + (cmds.join(', ') || '(none)') +
+             (attrs.length ? ('  attrs: ' + attrs.length) : '') + '\n');
+  }
 }
 
 function handleWorkerFigure(msg) {
