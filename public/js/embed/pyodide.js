@@ -2083,11 +2083,13 @@ function applyMplToolbarIcons(fig) {
 // counter that tells a live scene from a torn-down one.
 var GLOWCOMM_HOST_SRC = '/components/vpython-worker/glowcomm_host.js';
 var SCENE_PACE_MS     = 33;    // glowcomm.js's canvas_update rate
+var SCENE_DRAIN_MS    = 500;   // how long the clock keeps running past the run's end
 
 var vpythonFrontend        = null;  // the front-end for the CURRENT generation
 var vpythonFrontendLoading = null;  // memoized glow + glowcomm_host.js load
 var vpythonGeneration      = 0;     // bumped by resetVPythonScene, every run
 var vpythonPacer           = null;  // the trigger loop
+var vpythonDrainTimer      = null;  // its post-run wind-down
 var vpythonSceneFailed     = false; // report a broken scene once, not 30×/second
 
 // Read by the browser specs, like window.__trinketRuntime: the live generation,
@@ -2102,7 +2104,14 @@ window.__vpythonScene = { generation: 0, handled: 0, dropped: 0, frontend: null 
 // glowcomm.js drives the Jupyter kernel from the browser's canvas_update timer.
 // Without this clock a program that never calls rate() — any static scene —
 // would build its objects in Python and never draw a single one.
-function ensureVPythonPacer() {
+//
+// The clock belongs to the RUN, not to the scene. It is a polling loop against
+// another thread, so leaving it on for a finished program costs 30 worker round
+// trips a second for as long as the tab is open, and buys nothing: orbiting the
+// camera is glow's own work on this thread, and trinket_worker._dispatch answers
+// every event we send with a flush — so a live scene needs a ping only when there
+// is actually something to say, which is exactly when we are already sending.
+function startVPythonPacer() {
   if (vpythonPacer) return;
   vpythonPacer = setInterval(function() {
     if (workerClient) { workerClient.sendSceneEvent('[{"trigger":1}]'); }
@@ -2112,6 +2121,26 @@ function ensureVPythonPacer() {
 
 function stopVPythonPacer() {
   if (vpythonPacer) { clearInterval(vpythonPacer); vpythonPacer = null; }
+  if (vpythonDrainTimer) { clearTimeout(vpythonDrainTimer); vpythonDrainTimer = null; }
+}
+
+// The run has settled (finished, or failed). Wind the clock down: keep ticking
+// briefly, because the objects a program created in its final moments — and, on
+// a warm worker, very possibly ALL of them — are still sitting in the transport's
+// buffer, and only a ping gets them out. Then stop for good.
+//
+// The drain is unconditional, deliberately. An earlier version skipped it when
+// nothing had come back yet, to avoid pinging a worker whose wheel install had
+// failed; but a re-run on a warm worker settles in milliseconds, before the first
+// tick's round trip, so "nothing back yet" is also the normal healthy case and
+// skipping the drain deadlocked the second scene. Draining regardless costs a
+// failed run ~15 no-op messages and no longer orphans anything.
+function finishVPythonPacing() {
+  if (!vpythonPacer || vpythonDrainTimer) return;
+  vpythonDrainTimer = setTimeout(function() {
+    vpythonDrainTimer = null;
+    stopVPythonPacer();
+  }, SCENE_DRAIN_MS);
 }
 
 // Load glow (the main path's loader — same library, same build, one copy) and
@@ -2141,8 +2170,15 @@ function ensureVPythonFrontendLib() {
 // precisely the "the scene does not survive a run" behaviour we want.
 function ensureVPythonFrontend() {
   if (vpythonFrontend) return Promise.resolve(vpythonFrontend);
+  var gen = vpythonGeneration;
   return ensureVPythonFrontendLib().then(function() {
     if (vpythonFrontend) return vpythonFrontend;   // a concurrent call got there first
+
+    // A reset raced the one-off glow load — which takes long enough for a student
+    // to hit Run again. The caller checks this too, but too late: by then this
+    // function has already built the scene's DOM and split the output pane, so a
+    // console-only run would open a graphic pane it never uses. Nothing to build.
+    if (gen !== vpythonGeneration) return null;
 
     var holder = document.getElementById('vpython-scene');
     if (!holder) {
@@ -2185,13 +2221,12 @@ function handleWorkerSceneOps(msg) {
     return;
   }
 
-  // Also started at run start (see runInWorker): a re-run in a WARM worker
-  // re-imports nothing, so no unprompted package ever arrives to start it here.
-  ensureVPythonPacer();
-
   var gen = vpythonGeneration;
   ensureVPythonFrontend().then(function(fe) {
-    if (gen !== vpythonGeneration) return;      // a reset raced the library load
+    // A reset raced the library load. (`fe` is null for the same reason — see
+    // ensureVPythonFrontend — but check the generation too: a package can also
+    // arrive against a front-end built for a scene that has since been replaced.)
+    if (!fe || gen !== vpythonGeneration) return;
 
     // The FIRST package after the transport boots is the bare string "trigger",
     // not an ops object (the eager boot flushes an empty buffer). handle()
@@ -2308,7 +2343,7 @@ function runInWorker(program, files, serialized, decision) {
   // already done — nothing is emitted unprompted, so waiting for a first package
   // to start the clock would deadlock the second run's scene. Pings that arrive
   // before the transport exists are dropped in the worker, by design.
-  if (decision && decision.vpython) { ensureVPythonPacer(); }
+  if (decision && decision.vpython) { startVPythonPacer(); }
 
   return workerClient.run(program, files, {
     graphicWidth: graphicWidth,
@@ -2317,6 +2352,10 @@ function runInWorker(program, files, serialized, decision) {
     // resetVPythonScene() bumped this in startRun, before we got here.
     sceneGeneration: vpythonGeneration
   }).then(function() {
+    // Resolves on success AND on error (worker-client settles both), which is
+    // what we want: a wheel that failed to install must not leave the clock
+    // ticking at a worker that has no transport to answer it.
+    finishVPythonPacing();
     finishRun(serialized, workerRunError);
 
     // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here

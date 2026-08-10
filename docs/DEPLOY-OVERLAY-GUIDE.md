@@ -167,13 +167,22 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 
 ## Optional: run Web VPython off the main thread (`features.workerVPython`)
 
-> ⚠️ **Experimental — renders, but does not animate yet. Not for a deploy.** The
-> path is now complete end to end: the worker installs the VPython wheel, runs
-> the program, and the page draws the scene with GlowScript. What is still
-> missing is `rate()` — worker runs do not yet get the async rewrite that turns
-> it into a yield point, so an animation loop does not pace. **Static scenes are
-> correct today; animated ones are not.** Leave this off on real deploys until
-> that lands.
+> ⚠️ **Experimental — the first run of a static scene works, nothing beyond that
+> yet. Do not enable on a deploy.** The path is joined up end to end: the worker
+> installs the VPython wheel, runs the program, and the page draws the scene with
+> GlowScript. Two things behind it are still missing.
+>
+> 1. **`rate()` does not pace.** Worker runs do not yet get the async rewrite that
+>    turns it into a yield point, so an animation loop does not animate. Static
+>    scenes are correct; animated ones are not.
+> 2. **Pressing Run a second time draws nothing.** The scene is torn down as it
+>    should be, but the worker's Python namespace survives, so the rebuilt scene
+>    is never re-sent and the second run ends with an empty graphic pane. The
+>    workaround today is to **reload the page between runs**.
+>
+> Both are owned by later tasks in the same plan (the `rate()` rewrite next, the
+> re-run lifecycle after it). Until they land this is a single-run demo, not a
+> feature.
 
 Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
 VPython programs run through the `vpython-jupyter` package inside the Web Worker
@@ -194,10 +203,10 @@ escapes it, sending the program back to the untouched main-thread bridge.
 
 | | |
 |---|---|
-| a static VPython scene | drawn by GlowScript from the worker's updates |
+| a static VPython scene | drawn by GlowScript from the worker's updates — **on the first run of a page only** |
 | a VPython animation loop | *(intended)* stoppable, page stays responsive — blocked on the `rate()` gap above |
 | Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen; it is not resumable |
-| Python state | persists across runs; the **scene does not** — each run starts a fresh scene |
+| Python state | persists across runs; the **scene does not** — each run starts a fresh scene, and today that fresh scene stays **empty** (see the caveat: reload between runs) |
 | `pause()` / `waitfor()` / widgets | not yet supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
 
 With the flag off, VPython behaves exactly as it always has (main thread,

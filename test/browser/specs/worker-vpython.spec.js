@@ -146,6 +146,9 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   }
 
   test('a real program renders a sphere via the worker', async ({ page }) => {
+    // Well past the file's 90 s default: a cold Pyodide boot plus a 3.5 MB wheel
+    // install is the slow part, and the toPass budget below has to fit inside it.
+    test.setTimeout(300_000);
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
 
@@ -178,6 +181,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   });
 
   test('scene ops carry the live generation, and a stale scene is dropped', async ({ page }) => {
+    test.setTimeout(300_000);   // two full runs, plus a quiet-stream measurement
     // Task 5 stamps `generation` on every scene-ops package and Task 7 owns the
     // counter it stamps; until now neither had a test. Tap the worker channel
     // from OUTSIDE the page code so the assertion sees the real wire messages.
@@ -205,6 +209,17 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         document.querySelectorAll('#vpython-scene canvas').length);
       expect(n).toBeGreaterThan(0);
     }).toPass({ timeout: 180_000 });
+
+    // The pacing clock belongs to the RUN, not to the scene. Once the program has
+    // finished (plus a short drain so its last objects flush), the stream must go
+    // quiet: an idle scene polling the worker 30 times a second for the life of
+    // the tab is pure cost, and glow orbits the camera on this thread anyway.
+    await expect(async () => {
+      const before = await page.evaluate(() => window.__sceneOps.length);
+      await page.waitForTimeout(1000);
+      expect(await page.evaluate(() => window.__sceneOps.length),
+        'the pacing clock is still ticking after the run finished').toBe(before);
+    }).toPass({ timeout: 60_000 });
 
     // Every package of the first run carries generation 1 — the page's counter,
     // bumped once when this run tore the previous (empty) scene down. A literal
