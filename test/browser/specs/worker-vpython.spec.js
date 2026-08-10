@@ -118,10 +118,11 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   // editor -> router -> worker -> vpython wheel -> transport -> scene-ops ->
   // the page host shim -> GlowScript on the page.
   //
-  // NOTE (Task 8 owns the fix): needsTransform() in pyodide-worker.js still
-  // gates the async transform on `input(`, so `rate()` in a worker run returns
-  // a coroutine nobody awaits. Every program here is therefore deliberately
-  // STATIC — no rate(), no animation. Animation is Task 8's spec.
+  // The programs in THIS block are deliberately static — no rate(), no
+  // animation — so they isolate "the scene renders" from "the loop is paced".
+  // Animation is the Task 8 spec at the bottom of the file (which is also what
+  // made the kernel apply the async transform to vpython runs; these static
+  // programs go through that same transform now, and must still pass).
 
   const STATIC_SPHERE = 'from vpython import *\nball = sphere(color=color.red)\n';
 
@@ -261,5 +262,112 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       expect(Math.max(...after)).toBe(2);
     }).toPass({ timeout: 120_000 });
     expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(2);
+  });
+
+  // --- Task 8: THE HEADLINE -------------------------------------------------
+  // Everything above runs a program that ENDS. This one never does — it is the
+  // shape every real VPython program has, and the whole reason for the worker:
+  // on the main thread a `while True: rate(60)` loop owns the only thread, so
+  // Stop is a button the page is too busy to notice (picup #108). Off-thread it
+  // is one terminate() call.
+  //
+  // Three claims, and the middle one is the easy one to fake:
+  //   1. it ANIMATES — pacing works, not merely "the program started";
+  //   2. the page stays responsive while it runs;
+  //   3. Stop actually kills it (and the scene stops moving, and the pacing
+  //      clock is wound down rather than left pinging a dead worker).
+  const ANIMATION = 'from vpython import *\n' +
+                    'b = sphere()\n' +
+                    'while True:\n' +
+                    '    rate(60)\n' +
+                    '    b.pos.x += 0.01\n';
+
+  // The sphere, found by shape rather than by constructor identity: on this
+  // scene it is the only object with a numeric `pos` (the canvas has `center`,
+  // the two distant_lights have `direction`), so this does not depend on which
+  // glow constructors happen to be global.
+  function movingX(page) {
+    return page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs().filter(Boolean);
+      const s = objs.find((o) => o && o.pos && typeof o.pos.x === 'number');
+      return s ? s.pos.x : null;
+    });
+  }
+
+  test('THE POINT: a rate() animation animates, the page stays responsive, and Stop kills it', async ({ page }) => {
+    // Same budget as the other real-path specs: a cold Pyodide boot plus the
+    // 3.5 MB wheel install dominates, and the toPass windows sit inside it.
+    test.setTimeout(300_000);
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    // Tap the worker channel from outside the page (same trick as the
+    // generation spec) so claim 3 can be checked on the WIRE: after Stop no
+    // further scene-ops may arrive, which is only true if the pacing clock was
+    // wound down and the worker really is gone.
+    await page.addInitScript(() => {
+      const RealWorker = window.Worker;
+      window.__sceneOps = [];
+      window.Worker = function (url, options) {
+        const w = new RealWorker(url, options);
+        w.addEventListener('message', (e) => {
+          if (e && e.data && e.data.type === 'scene-ops') window.__sceneOps.push(1);
+        });
+        return w;
+      };
+      window.Worker.prototype = RealWorker.prototype;
+    });
+
+    await skipUnlessWorkerVPython(page);
+    await runProgram(page, ANIMATION);
+
+    // The scene comes up. GLOW IS LAZY, so the <canvas> element appearing is
+    // the signal that objects actually reached the front-end.
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // Claim 1: it MOVES. Sample the live glow object twice. Without the async
+    // transform, `rate(60)` builds a coroutine nobody awaits: no flush, no
+    // asyncio yield, the worker spins forever inside the loop and x never
+    // changes. "The program is running" would still look true; this would not.
+    let x0 = null;
+    await expect(async () => {
+      x0 = await movingX(page);
+      expect(x0, 'no object with a position ever reached the scene').not.toBeNull();
+    }).toPass({ timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    const x1 = await movingX(page);
+    // 1.5 s of rate(60) at 0.01/frame is ~0.9 units; anything above noise proves
+    // the loop is being paced and flushed rather than spinning or stalled.
+    expect(Math.abs(x1 - x0),
+      'the sphere never moved — rate() is not pacing/flushing the loop').toBeGreaterThan(0.05);
+
+    // Claim 2: the page is not the thing doing the work. A main-thread run of
+    // this program would never answer at all.
+    const t0 = Date.now();
+    await page.evaluate(() => document.title);
+    expect(Date.now() - t0, 'the page blocked while the animation ran').toBeLessThan(2000);
+
+    // Claim 3: Stop. The button is still up, because the program never ends.
+    await expect(page.locator('.stop-it')).toBeVisible();
+    await page.locator('.stop-it').click();
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelector('#console-output')?.innerText || '')).toContain('[stopped');
+    }).toPass({ timeout: 30_000 });
+
+    // ...and it is dead, not merely reported dead: the scene stays where it
+    // froze (a stopped program keeps its picture — the student can still orbit
+    // it) and nothing more arrives on the wire, so the clock is off too.
+    const frozen = await movingX(page);
+    const opsAtStop = await page.evaluate(() => window.__sceneOps.length);
+    await page.waitForTimeout(1500);
+    expect(await movingX(page), 'the animation kept running after Stop').toBe(frozen);
+    expect(await page.evaluate(() => window.__sceneOps.length),
+      'scene-ops still arriving after Stop — the pacing clock is still ticking').toBe(opsAtStop);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });
 });

@@ -119,8 +119,28 @@
 
     // Only programs that actually read input need rewriting; everything else
     // runs unmodified, so the transform can't perturb an ordinary program.
+    //
+    // VPython is the other case, and it is decided by the RUN, not by this
+    // regex — see wantsTransform() below.
     function needsTransform(src) {
       return /(^|[^.\w])input\s*\(/.test(src || '') || /\bconsole\s*\.\s*input\s*\(/.test(src || '');
+    }
+
+    // A vpython run ALWAYS gets the transform. rate()/sleep() are coroutines in
+    // the worker (trinket_worker's transport patches), so without an inserted
+    // `await` the program builds a coroutine per iteration and throws it away:
+    // no pacing, no flush — the animation never draws and the loop hot-spins.
+    //
+    // Keyed off msg.vpython rather than a widened source regex on purpose. The
+    // transform's await set contains the BARE names `rate` and `sleep`, so a
+    // regex hit on `rate(` would also fire for an ordinary python3 program that
+    // defines its own rate() — and `await`ing a function that returns a plain
+    // value is a TypeError at runtime, i.e. the transform would break a working
+    // program. msg.vpython is set only by the router, only for a run it has
+    // already classified as VPython, so it cannot mis-fire on a non-vpython
+    // program at all.
+    function wantsTransform(msg, src) {
+      return !!(msg && msg.vpython) || needsTransform(src);
     }
 
     // ---- matplotlib ---------------------------------------------------------
@@ -434,7 +454,7 @@
       // scene it has already torn down. Absent (any non-vpython run) means 0.
       if (msg.vpython) { sceneGeneration = msg.sceneGeneration | 0; }
 
-      var prepare = function() { return needsTransform(source)
+      var prepare = function() { return wantsTransform(msg, source)
         ? ensureTransform(msg.transformUrl).then(function() {
             pyodide.runPython(shadowsConsole
               ? '_t._MODULE_AWAIT_ATTRS = {}'
