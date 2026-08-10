@@ -20,7 +20,8 @@ var PYODIDE_INDEX_URL = window.__PYODIDE_INDEX_URL__ || 'https://cdn.jsdelivr.ne
 // box, rate(), …) — the approach proven by webvpython's wmWVPRunner. The glow
 // library is the same build the `glowscript` trinket uses; the bridge zip is
 // the webvpython `vpython` package.
-var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.2.min.js';
+// 3.2.3 = the rsWVPRunner GCS build the Dockerfile provisions; 3.2.2 was the stale components-tarball fallback (spec 2026-08-10, decision V3).
+var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.3.min.js';
 var VPYTHON_ZIP_URL = '/js/embed/wvpython/vpython.zip';
 
 // Python code injected before user code runs each time a matplotlib program
