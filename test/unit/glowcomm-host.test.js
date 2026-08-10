@@ -13,10 +13,16 @@ const MSG1 = {"cmds": [{"cmd": "sphere", "idx": 4, "color": [1.0, 0.0, 0.0], "si
 
 function stubGlow() {
   const calls = [];
-  const mk = (name) => (cfg) => { calls.push({ name, cfg }); return { __stub: name, pos: null }; };
+  // `ret` is recorded too: idx-valued cfg keys (canvas, graph, v0…v3) are meant
+  // to arrive as the constructed OBJECT, and only identity proves that.
+  const mk = (name) => (cfg) => {
+    const ret = { __stub: name, pos: null };
+    calls.push({ name, cfg, ret });
+    return ret;
+  };
   const names = ['canvas','sphere','box','arrow','cone','cylinder','helix','pyramid','ring',
-                 'curve','points','vertex','distant_light','local_light','label','gcurve','gdots',
-                 'vec','vector','attach_arrow','attach_trail'];
+                 'curve','points','vertex','distant_light','local_light','label','graph','gcurve',
+                 'gdots','gvbars','ghbars','vec','vector','attach_arrow','attach_trail'];
   const g = {}; names.forEach(n => g[n] = mk(n));
   g.vec = (x,y,z) => ({x,y,z,__vec:true}); g.vector = g.vec;
   return { g, calls };
@@ -90,6 +96,47 @@ describe('createGlowFrontend', () => {
     expect(typeof bind).toBe('function');   // glow gets a handler, as upstream
     bind(fe._objs()[1]);                    // what a real click would call
     expect(sent).toEqual([]);               // nothing invalid reaches Python
+  });
+
+  // Task 10. Captured verbatim from a worker run of
+  //   graph(title=…); gcurve(graph=gd, color=color.blue);
+  //   gdots(graph=gd, color=color.red, size=8)
+  // Two things in it are load-bearing and easy to "tidy" into breakage:
+  // `size` is a bare NUMBER (on gcurve/gdots it is a dot diameter, not a
+  // vector — everywhere else in VPython `size` is a triple), and `graph: 4` is
+  // an object idx that has to be resolved through the registry like `canvas`.
+  // The 6 is not a typo for the 8 above: vpython's gobj.setup assigns `_size`
+  // directly instead of through the derived `size` property, so the constructor
+  // argument never takes effect. Upstream Python bug, out of scope here — the
+  // fixture records what the wire ACTUALLY carries.
+  const MSG_GRAPH = {"cmds": [
+    {"cmd": "graph", "idx": 4, "title": "T", "xtitle": "x", "ytitle": "y"},
+    {"cmd": "gcurve", "idx": 5, "color": [0, 0, 1], "graph": 4},
+    {"cmd": "gdots", "idx": 6, "color": [1, 0, 0], "graph": 4, "size": 6}]};
+
+  it('keeps gcurve/gdots size a scalar and resolves the graph idx', () => {
+    const { g, calls } = stubGlow();
+    const fe = createGlowFrontend({ container: null, send: () => {}, glow: g });
+    fe.handle(MSG0); fe.handle(MSG_GRAPH);
+
+    const dots = calls.find(c => c.name === 'gdots');
+    // THE QUIRK: through o2vec3 this would be vec(undefined, undefined, undefined).
+    expect(dots.cfg.size).toBe(6);
+    expect(dots.cfg.size.__vec).toBeUndefined();
+    // …and the branch is narrow — the neighbouring vector attribute still converts.
+    expect(dots.cfg.color.__vec).toBe(true);
+
+    // `graph` is an idx, like `canvas`: both plot objects must receive the
+    // constructed graph object, not the integer 4.
+    const graphObj = fe._objs()[4];
+    expect(graphObj).toBe(calls.find(c => c.name === 'graph').ret);
+    expect(dots.cfg.graph).toBe(graphObj);
+    expect(calls.find(c => c.name === 'gcurve').cfg.graph).toBe(graphObj);
+
+    // graph/gcurve/gdots are the constructors upstream strips `idx` from —
+    // they throw on any argument they do not recognise.
+    expect('idx' in calls.find(c => c.name === 'graph').cfg).toBe(false);
+    expect('idx' in dots.cfg).toBe(false);
   });
 
   it('reset() clears the object registry', () => {

@@ -553,4 +553,168 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });
+
+  // --- Task 10: graphs ------------------------------------------------------
+  // Everything above draws 3D objects onto the WebGL canvas. Graphs are a
+  // separate half of glow with its own machinery, its own DOM, and its own
+  // corner of the wire protocol, and it is the half a physics course actually
+  // uses most (`gcurve` of energy vs. time is the standard M&I exercise).
+  //
+  // Three things here are specific to graphs and cannot be inferred from the
+  // sphere specs:
+  //
+  //   1. THE SCALAR-`size` QUIRK. `size` is a vector everywhere in VPython —
+  //      handle_cmds runs it through o2vec3 — EXCEPT on gcurve/gdots, where it
+  //      is a dot diameter. The ported handle_cmds carries upstream's branch for
+  //      that; without it a named `size=` reaches glow as vec(undefined,…) and
+  //      the dots vanish (or worse, NaN propagates into the autoscale). It only
+  //      fires when the student NAMES size in the constructor — which is why
+  //      `gdots(size=…)` is in this program and not just a bare gcurve.
+  //
+  //   2. THE `graph` CFG KEY. gcurve/gdots attach to a plot by an idx that
+  //      handle_cmds must resolve through the object registry, exactly like
+  //      `canvas`. If that mapping is missed, glow receives the integer 4 as a
+  //      graph and draws into a fresh default plot instead of the student's.
+  //
+  //   3. A DIFFERENT DOM. Measured, not assumed: glow builds
+  //      `#vpython-scene > div#graph0.glowscript-graph`, holding `canvas.base`
+  //      (the plot) and `canvas.overlay` — 2D contexts, not WebGL. Note this
+  //      program creates no 3D objects at all, so GLOW'S LAZINESS means there is
+  //      no 3D canvas on the page: the only `#vpython-scene canvas` elements
+  //      here belong to the graph. Hence the `.glowscript-graph` in the
+  //      selectors below — a bare `#vpython-scene canvas` would pass on a page
+  //      where the graph never appeared and something else drew a scene.
+  const GRAPH_PROGRAM = 'from vpython import *\n' +
+                        'gd = graph(title="Task 10", xtitle="x", ytitle="y")\n' +
+                        'c = gcurve(graph=gd, color=color.blue)\n' +
+                        'd = gdots(graph=gd, color=color.red, size=8)\n' +
+                        'for i in range(50):\n' +
+                        '    c.plot(i*0.1, i*i*0.01)\n' +
+                        'd.plot(2.0, 2.0)\n' +
+                        'd.plot(3.0, 4.0)\n';
+
+  test('gcurve/gdots plot through the worker onto a real graph canvas', async ({ page }) => {
+    test.setTimeout(300_000);   // cold Pyodide boot + 3.5 MB wheel install
+    const consoleErrors = [];
+    page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    // The constructor packages, straight off the wire. The scalar-`size` claim
+    // is only worth anything if `size` really arrives as a bare number — if the
+    // Python side ever started sending `[8,8,8]` the front-end branch would be
+    // dead code and this spec would be asserting nothing.
+    await page.addInitScript(() => {
+      const RealWorker = window.Worker;
+      window.__graphCmds = [];
+      window.Worker = function (url, options) {
+        const w = new RealWorker(url, options);
+        w.addEventListener('message', (e) => {
+          if (!(e && e.data && e.data.type === 'scene-ops')) return;
+          let pkg; try { pkg = JSON.parse(e.data.ops); } catch (err) { return; }
+          for (const c of (pkg.cmds || [])) {
+            if (['graph', 'gcurve', 'gdots'].includes(c.cmd)) window.__graphCmds.push(c);
+          }
+        });
+        return w;
+      };
+      window.Worker.prototype = RealWorker.prototype;
+    });
+
+    await skipUnlessWorkerVPython(page);
+    await runProgram(page, GRAPH_PROGRAM);
+
+    // The plot canvas appearing is the "the graph machinery really ran" signal.
+    await expect(async () => {
+      expect(await page.evaluate(() => window.__trinketRuntime)).toBe('worker');
+      expect(await page.evaluate(() => document.querySelectorAll(
+        '#vpython-scene .glowscript-graph canvas.base').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // glow redraws graphs on its own schedule; give the plotted points a frame
+    // or two to reach the canvas before the pixels are counted.
+    await page.waitForTimeout(3000);
+
+    const r = await page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs();
+      const graphObj = objs[4], curve = objs[5], dots = objs[6];
+
+      // The plot canvas is a 2D context, so unlike the WebGL canary this can be
+      // read straight — no rAF, no preserveDrawingBuffer.
+      const base = document.querySelector('#vpython-scene .glowscript-graph canvas.base');
+      const px = base.getContext('2d').getImageData(0, 0, base.width, base.height).data;
+      let blue = 0, red = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i + 3] === 0) continue;
+        if (px[i + 2] > 100 && px[i] < 100 && px[i + 1] < 100) blue++;   // the gcurve
+        if (px[i] > 100 && px[i + 1] < 100 && px[i + 2] < 100) red++;    // the gdots
+      }
+
+      // Autoscale is downstream of the data actually landing in glow: an empty
+      // graph draws a 0..1 axis, so a tick label up in the twenties can only
+      // come from the student's y values (max 24.01).
+      const ticks = [...document.querySelectorAll('#vpython-scene .glowscript-graph .tickLabel')]
+        .map((e) => parseFloat(e.textContent)).filter((n) => !isNaN(n));
+
+      return {
+        wireCmds: window.__graphCmds,
+        graphCtor: graphObj && graphObj.constructor && graphObj.constructor.name,
+        // `__graph` holds what handle_cmds put in cfg.graph. The identity check
+        // is the point: the integer 4 off the wire had to become THIS object.
+        curveAttachedToGraph: !!curve && curve.__graph === graphObj,
+        dotsAttachedToGraph: !!dots && dots.__graph === graphObj,
+        curveType: curve && curve.__realtype,
+        dotsType: dots && dots.__realtype,
+        curveLen: curve && curve.__data && curve.__data.length,
+        curveLast: curve && curve.__data && curve.__data[curve.__data.length - 1],
+        dotsLen: dots && dots.__data && dots.__data.length,
+        dotsSizeType: dots && typeof dots.size,
+        // …and the neighbouring vector attribute still WAS converted, so the
+        // branch is narrow rather than "graph objects skip o2vec3".
+        dotsColorIsVec: !!(dots && dots.color && typeof dots.color.x === 'number'),
+        dotsColor: dots && dots.color ? [dots.color.x, dots.color.y, dots.color.z] : null,
+        blue, red, maxTick: ticks.length ? Math.max(...ticks) : null,
+      };
+    });
+
+    // 1. The wire really carries a scalar. VPython's own gobj.setup writes
+    //    `_size` directly instead of going through the `size` property (which is
+    //    derived: 2*radius), so the constructor value is silently the default 6
+    //    rather than the 8 above — an upstream Python-side bug, unrelated to
+    //    this port. What matters here is the TYPE: a bare number, not a triple.
+    const dotsCmd = r.wireCmds.find((c) => c.cmd === 'gdots');
+    expect(dotsCmd, 'no gdots constructor reached the page').toBeTruthy();
+    expect(typeof dotsCmd.size,
+      'gdots no longer sends a scalar size — the front-end branch is now dead code').toBe('number');
+
+    // 2. …and the front-end left it a scalar instead of running it through
+    //    o2vec3. This is the quirk, asserted on the LIVE glow object.
+    expect(r.dotsSizeType,
+      'gdots size went through o2vec3 — the gcurve/gdots branch in handle_cmds did not fire')
+      .toBe('number');
+    expect(r.dotsColorIsVec, 'gdots color was not converted to a glow vector').toBe(true);
+    expect(r.dotsColor).toEqual([1, 0, 0]);
+
+    // 3. The `graph` cfg key resolved through the registry, both times.
+    expect(r.graphCtor).toBe('graph');
+    expect(r.curveAttachedToGraph,
+      'gcurve was not attached to the student\'s graph — the `graph` idx was not mapped').toBe(true);
+    expect(r.dotsAttachedToGraph).toBe(true);
+    expect(r.curveType).toBe('lines');
+    expect(r.dotsType).toBe('points');
+
+    // 4. Every plot() call reached glow, with its values intact.
+    expect(r.curveLen).toBe(50);
+    expect(r.curveLast).toEqual([4.9, 24.01]);
+    expect(r.dotsLen).toBe(2);
+
+    // 5. …and it rasterised: a blue curve and red dots on the plot canvas, with
+    //    the axis scaled to the data rather than to an empty default range.
+    expect(r.blue, 'the gcurve never reached the plot canvas').toBeGreaterThan(100);
+    expect(r.red, 'the gdots never reached the plot canvas').toBeGreaterThan(0);
+    expect(r.maxTick, 'the axis never autoscaled to the plotted data').toBeGreaterThan(20);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+    expect(consoleErrors, 'the page logged an error while plotting').toEqual([]);
+  });
 });
