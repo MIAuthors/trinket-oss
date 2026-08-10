@@ -24,8 +24,10 @@ var PYODIDE_INDEX_URL = window.__PYODIDE_INDEX_URL__ || 'https://cdn.jsdelivr.ne
 var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.3.min.js';
 var VPYTHON_ZIP_URL = '/js/embed/wvpython/vpython.zip';
 // The vpython-jupyter wheel the WORKER path installs (spec 2026-08-10) — a
-// different package from the main-thread bridge zip above. Kept in step with
-// scripts/sync-vpython-worker.sh, which puts the file in that directory.
+// different package from the main-thread bridge zip above. This name is the ONE
+// place the page says which file to fetch; scripts/sync-vpython-worker.sh reads
+// it back and refuses to sync a wheel that does not match, because a bump on one
+// side alone is a run-time 404 with nothing pointing at the cause.
 var VPYTHON_WHEEL_NAME = 'vpython-7.6.5-py3-none-any.whl';
 
 // Python code injected before user code runs each time a matplotlib program
@@ -281,6 +283,23 @@ function replUsesWorker() {
   } catch (e) { return false; }
 }
 
+// A console statement can change the scene — `ball.color = color.blue` is the
+// whole point of having a REPL next to a 3D canvas — but only when both flags are
+// on, so the REPL and the VPython run share one worker interpreter. The update it
+// makes lands in the transport's buffer and stays there: the transport is
+// request/reply, and the clock that does the asking belongs to the RUN, which
+// ended. Nothing would flush it until some unrelated browser event happened to,
+// which for a still scene is never.
+//
+// So: one ping when the statement settles, which is the tick that statement is
+// owed. Deliberately the bare trigger rather than frontend.tick() — the clock is
+// stopped, pacingStopped() has already put the front-end in its flush-everything
+// state, and tick() would undo that.
+function flushVPythonAfterRepl() {
+  if (!vpythonFrontend || !workerClient) return;
+  workerClient.sendSceneEvent('[{"trigger":1}]');
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
@@ -295,6 +314,7 @@ function startReplPrompt() {
       $('.stop-it').removeClass('hide');
       ensureWorkerClient().pushRepl(input).then(function() {
         $('.stop-it').addClass('hide');
+        flushVPythonAfterRepl();
         startReplPrompt();
       });
       return;
@@ -2183,17 +2203,39 @@ function finishVPythonPacing() {
   }, SCENE_DRAIN_MS);
 }
 
+// Say, once, what this page is actually serving.
+//
+// `public/components/vpython-worker/` is a build artifact of ANOTHER repository
+// (vpython-jupyter), copied in by hand: the front-end JS and the Python wheel
+// are two halves of one protocol and nothing at run time checks that they match
+// — or that either matches the checkout someone has just edited. The spec's own
+// two-repo mitigation was "wheel filename carries the version; host shim logs
+// both at boot"; this is that line. It turns "is my stack serving what I just
+// built?" into something answerable from devtools instead of by unzipping a
+// wheel. Once per page: it fires from the memoized loader, not per run.
+var vpythonVersionsLogged = false;
+function logVPythonVersions() {
+  if (vpythonVersionsLogged) return;
+  vpythonVersionsLogged = true;
+  var fe = window.createGlowFrontend;
+  var feVersion = (fe && fe.version) || 'unknown';
+  try {
+    console.log('[vpython] worker path: front-end ' + feVersion +
+                ' (' + GLOWCOMM_HOST_SRC + '), wheel ' + VPYTHON_WHEEL_NAME);
+  } catch (e) { /* no console: nothing to do, and nothing to break */ }
+}
+
 // Load glow (the main path's loader — same library, same build, one copy) and
 // the front-end factory. Memoized; a failure is not cached, so a transient fetch
 // error does not poison every later run (see ensureConsoleTransform).
 function ensureVPythonFrontendLib() {
   if (vpythonFrontendLoading) return vpythonFrontendLoading;
   vpythonFrontendLoading = ensureGlow().then(function() {
-    if (typeof window.createGlowFrontend === 'function') return;
+    if (typeof window.createGlowFrontend === 'function') { logVPythonVersions(); return; }
     return new Promise(function(resolve, reject) {
       var s = document.createElement('script');
       s.src = GLOWCOMM_HOST_SRC;
-      s.onload = function() { resolve(); };
+      s.onload = function() { logVPythonVersions(); resolve(); };
       s.onerror = function() { reject(new Error('Failed to load the VPython scene renderer.')); };
       document.head.appendChild(s);
     });

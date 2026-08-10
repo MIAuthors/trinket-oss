@@ -176,8 +176,9 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 > the same path as mouse events but have **no test behind them**; treat them as
 > plausible, not verified.) What still gates it is validation, not plumbing —
 > a representative set of M&I programs (to be picked with Todd) has to render and
-> animate identically to the main-thread path first. Three things to know before
-> you turn it on:
+> animate identically to the main-thread path first. Six things to know before
+> you turn it on — caveats 4 and 5 in particular bear directly on judging
+> "identically":
 >
 > 1. **Every Run boots a fresh interpreter, so the Python namespace does NOT
 >    carry over between Runs — and this is a real, deliberate behaviour change
@@ -216,7 +217,35 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    the wheel is refetched in full on every Run. That is cheap on localhost and
 >    not cheap over the internet; it is the first follow-up below.
 >
-> 3. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
+> 3. **A python3 worker session is thrown away by a VPython Run** — *only if
+>    `workerRuntime` is also on.* Every VPython Run discards the shared worker
+>    interpreter (caveat 1), and that interpreter is the same one plain python3
+>    runs have been accumulating names in. So a python3 Run, then a VPython Run,
+>    then a python3 Run means the third one starts empty — a divergence from the
+>    "python3 runs keep accumulating" behaviour `workerRuntime` gives on its own.
+>    Same mechanism as the console-session reset above; the console at least says
+>    so on screen, and this does not.
+>
+> 4. **`compound()`, `text()`, `extrusion()`, `obj.clone()` and
+>    `scene.mouse.pick` are deferred and raise.** They are not exotic in the M&I
+>    corpus, so read this before choosing a validation set. Each of them waits,
+>    inside the library, for a reply from the browser — and in a worker that
+>    reply can only be delivered by the very thread doing the waiting, so waiting
+>    can never end. They now raise `NotImplementedError` naming the construct,
+>    for the same reason `pause()` does: a deadlocked program shows a student no
+>    output, no error and a Stop button that works, which is the hardest possible
+>    thing to report. `?runtime=main` runs the program on the untouched
+>    main-thread bridge, where all five work.
+>
+> 5. **A `rate(N)` loop runs slower in wall clock than on the main thread.** The
+>    worker's `rate()` sleeps a flat `1/N` seconds and does not subtract the time
+>    the loop body already took, so a heavy body compounds. The *physics* is
+>    unaffected — M&I programs integrate with their own fixed `dt` — but a
+>    side-by-side comparison against the main-thread path will show a visible
+>    speed difference, and it is the port, not the program. Expect it rather than
+>    discover it when judging "renders and animates identically".
+>
+> 6. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
 >    (`wvpython/vpython/core_funcs.py` forwards constructor kwargs straight to
 >    GlowScript) but the stock 6 under `workerVPython`. Cause: the packaged
@@ -243,6 +272,14 @@ features:
 this path — it cannot be enabled per-trinket by URL. `?runtime=main` still
 escapes it, sending the program back to the untouched main-thread bridge.
 
+**Which build is this deploy serving?** The two files this path adds
+(`public/components/vpython-worker/`) are build artifacts of the vpython-jupyter
+repo, copied in by `scripts/sync-vpython-worker.sh` — so "did the sync actually
+happen?" is a real question. The page answers it: run a VPython program with the
+flag on and the browser console prints, once,
+`[vpython] worker path: front-end 7.6.5 (…/glowcomm_host.js), wheel vpython-7.6.5-py3-none-any.whl`.
+The two versions should match; the sync script refuses to run if they do not.
+
 **What changes when this is on:**
 
 | | |
@@ -254,8 +291,11 @@ escapes it, sending the program back to the untouched main-thread bridge.
 | a re-run | replaces the scene and renders normally — no page reload needed, no objects stacking up from the previous run |
 | Python state | does **not** carry over between Runs — each Run is a fresh interpreter. This differs from **both** the main-thread VPython path *and* `workerRuntime` python3 runs, where variables from an earlier Run stay visible. Deliberate — see caveat 1 |
 | mouse / camera | `scene.bind('click', …)` and friends fire, and orbit/zoom/pan work. Key bindings ride the same path but are untested |
-| `gcurve` / `gdots` | plot — but `size=` at construction is ignored (see caveat 3) |
+| `gcurve` / `gdots` | plot — but `size=` at construction is ignored (see caveat 6) |
+| the interactive console | statements reach the scene — `ball.color = color.blue` at the prompt redraws it — but **only if `workerRuntime` is on too**, so the console and the VPython run share one interpreter |
 | `pause()` / `waitfor()` / widgets | not supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
+| `compound()` / `text()` / `extrusion()` / `obj.clone()` / `scene.mouse.pick` | **also not supported**, same loud `NotImplementedError` (see caveat 4) |
+| animation speed | a `rate(N)` loop runs a little slower in wall clock than the main-thread path (see caveat 5) |
 
 With the flag off, VPython behaves exactly as it always has (main thread,
 `from js import …` bridge) — that path is untouched.
@@ -271,7 +311,7 @@ With the flag off, VPython behaves exactly as it always has (main thread,
    and `X-Frame-Options`), with no path guard. Exempting `/components/` is a
    **serving-policy change for the whole site** and wants its own review, not a
    drive-by. **Needs an owner.**
-2. **The `gcurve`/`gdots` `size=` regression** (caveat 3) should be fixed
+2. **The `gcurve`/`gdots` `size=` regression** (caveat 6) should be fixed
    upstream in vpython-jupyter, in `gobj.setup`, rather than patched here.
 3. **`from time import sleep` breaks in a VPython program.** The async transform
    awaits the *bare* names `rate` and `sleep`, so `sleep(1)` from `time` gets an
@@ -292,10 +332,28 @@ With the flag off, VPython behaves exactly as it always has (main thread,
    with a statement in flight, and a live animation. Pre-existing shape, newly
    reachable now that Run-during-a-run restarts. Recorded as a hypothesis with a
    clear mechanism; it should be reproduced before it is fixed.
-5. **Widgets and `scene.pause()` / `scene.waitfor()` remain deferred** (design
+5. **Widgets, `scene.pause()` / `scene.waitfor()`, and `compound()` / `text()` /
+   `extrusion()` / `obj.clone()` / `scene.mouse.pick` remain deferred** (design
    decision V5). They raise a clear `NotImplementedError` naming the feature —
    deliberately loud, because a `pause()` that does not pause changes what the
-   program means.
+   program means, and a `compound()` that deadlocks says nothing at all. The
+   five in caveat 4 are the ones worth *undeferring* one day: each is a
+   synchronous wait on a browser reply, and each would need the same treatment
+   `rate()` got — a coroutine the async transform can `await` — plus a way for
+   the library's own internal callers to await it too. That is a real piece of
+   work, not a patch.
+6. **PRE-EXISTING, NOT CAUSED BY THIS PATH — the console prompt disappears after
+   a normal Run, on every deploy, with no flags at all.** `replActive` in
+   `pyodide.js` is a latch: it is set when a prompt is armed and never cleared,
+   while `resetOutput()` kills the armed prompt on every Run and only `stopCode()`
+   re-arms it. So: open the Console, Run a program that *finishes*, and the
+   prompt is gone for good — and the Console menu entry does nothing to bring it
+   back, because it is guarded on `if (!replActive)` and `replActive` is still
+   true. Reproduce it on any current deploy before blaming `workerVPython`; this
+   branch neither causes it nor makes it worse (its change to `stopCode` restores
+   the prompt in strictly more cases than before). It wants its own issue and its
+   own fix — clearing the latch is a one-liner, but the surrounding REPL
+   lifecycle deserves a look at the same time.
 
 ## Example — prod-only infra in `config/local-production.yaml`
 

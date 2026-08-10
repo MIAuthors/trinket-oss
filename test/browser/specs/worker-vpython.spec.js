@@ -1157,4 +1157,68 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       'Stop left the surviving page REPL with no prompt — the console is now dead')
       .toBeVisible({ timeout: 60_000 });
   });
+
+  // The OTHER direction of the console/scene relationship, and the one that is
+  // the point of having a REPL beside a 3D canvas: a typed statement must be
+  // able to CHANGE what is on screen.
+  //
+  // It could not. The transport is request/reply — it flushes only when the page
+  // pings it — and the clock that pings belongs to the RUN, which has ended and
+  // drained. `pushRepl()` posts a plain `run` message and nothing pings
+  // afterwards, so `ball.color = color.blue` executed in the worker, buffered,
+  // and sat there until some unrelated browser event happened to flush it:
+  // indefinitely, and invisibly, for a scene nobody touches.
+  //
+  // Needs BOTH flags — the REPL follows `workerRuntime`, so only then do the
+  // console and the VPython run share one interpreter and the name `ball` mean
+  // anything at the prompt.
+  test('a console statement redraws the scene after the program has ended', async ({ page }) => {
+    test.setTimeout(300_000);
+
+    await runVPython(page, STATIC_SPHERE);
+    const bothFlags = await page.evaluate(() =>
+      !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime));
+    test.skip(!bothFlags, 'SKIP: needs features.workerRuntime as well — with ' +
+      'workerVPython alone the REPL runs on the page and cannot see the ' +
+      "worker's `ball` at all.");
+
+    const sphereColor = () => page.evaluate(() => {
+      const fe = window.__vpythonScene.frontend;
+      if (!fe) return null;
+      // The sphere is the only object carrying a saturated primary; the canvas
+      // background is black and the two default lights are greys.
+      const o = fe._objs().find((x) => x && x.radius !== undefined && x.color);
+      return o ? [o.color.x, o.color.y, o.color.z] : null;
+    });
+
+    await expect(async () => {
+      expect(await sphereColor()).toEqual([1, 0, 0]);
+    }).toPass({ timeout: 180_000 });
+
+    // The run has to be genuinely OVER, clock and all: that is the state the bug
+    // lives in. `.stop-it` hidden says the program finished; the wait covers
+    // SCENE_DRAIN_MS (500 ms), after which stopVPythonPacer() has run and
+    // nothing is asking the worker for anything. A real timeout, not a poll —
+    // what is being waited for is the ABSENCE of further activity.
+    await expect(page.locator('.stop-it')).toBeHidden({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+
+    // Open the console. Deliberately AFTER the run: `replActive` is a latch that
+    // resetOutput() outlives, so a prompt armed before a Run does not survive it
+    // (a pre-existing bug on every deploy, recorded in the deploy guide) — the
+    // first arm has to come after.
+    await page.evaluate(() => $(document).trigger('trinket.code.console'));
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+
+    // Typing lands in the console, not on the canvas: no mouse or key event
+    // reaches the scene, so nothing but the fix can flush this statement.
+    await page.locator('#console-output').click();
+    await page.keyboard.type('ball.color = color.blue');
+    await page.keyboard.press('Enter');
+
+    await expect(async () => {
+      expect(await sphereColor(),
+        'the statement ran in the worker but never reached the scene').toEqual([0, 0, 1]);
+    }).toPass({ timeout: 60_000 });
+  });
 });

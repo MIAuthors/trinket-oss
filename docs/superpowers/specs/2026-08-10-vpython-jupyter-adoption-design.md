@@ -19,7 +19,7 @@ Settled with Steve during design; recorded so the plan doesn't relitigate them.
 | V2 | **The browser half lives in vpython-jupyter, host-agnostic.** A factory `createGlowFrontend({container, send})` beside `glowcomm.js`; trinket injects the pipe. | Steve owns the repo; the identical piece is what VS Code and Colab hosts need; keeping trinket-isms out of the seam is the "marriage" (§15). |
 | V3 | **Trinket's served GlowScript (glow 3.2.3) renders the scene.** One glow per page. | Checked, not assumed: trinket's 3.2.3 is byte-identical to the GCS artifact; vpython-jupyter's vendored glow.min.js is the *same 3.2 source line* with different dependency packaging (browserify bundle vs lean clipper; divergence at byte 54,076, identical shader tail). Constructor API expected compatible; the canary task (T-first below) verifies before anything is built on it. |
 | V4 | **`rate()` becomes async via the existing `_async_transform`.** The transport replaces `vpython.rate` with: flush, then `await asyncio.sleep(dt)`. | No threads in a worker: blocking sleep starves `onmessage`, so events and pacing never dispatch. The transform already awaits `rate(` (comprehensions included; lambdas route to main as today), so program compatibility matches the current bridge. JSPI/`run_sync` is a future capability-detected fast path, not v1. |
-| V5 | **v1 surface = M&I core:** objects + attributes, `rate()` animation, graphs (`gcurve`/`gdots`), mouse events via `scene.bind`. Widgets and `scene.pause()`/`waitfor()` are deferred **loudly** (raise with a clear message). | Covers the real course corpus without gating v1 on the hardest, least-used 20%. `pause`/`waitfor` spin on sync `rate(30)` inside library code the transform never sees — they need their own async patching, deferred. |
+| V5 | **v1 surface = M&I core:** objects + attributes, `rate()` animation, graphs (`gcurve`/`gdots`), mouse events via `scene.bind`. Deferred **loudly** (raise with a clear message): widgets, `scene.pause()`/`waitfor()`, **`compound()`, `text()`, `extrusion()`, `obj.clone()`, `scene.mouse.pick`**. | Covers the real course corpus without gating v1 on the hardest, least-used 20%. Every deferred item is the same defect: a synchronous wait, inside library code the transform never sees, for a browser reply that in a worker can only be delivered by the waiting thread. They need their own async patching, deferred. The list grew during implementation — `pause`/`waitfor` were the ones the spec knew about; the other five were found by auditing `vpython.py` for the same shape (see the implementation notes). |
 | V6 | **Build shape = thin port of glowcomm.js** (approach A). Strip Jupyter/websocket edges, keep `handler`/`handle_cmds`/`handle_methods`/`handle_attrs`/`decode`/`o2vec3`/`update_canvas`, wrap in the factory. | Those 986 lines encode a decade of wire-format quirks (compact attr codes, per-constructor cfg fixups, event throttling). A port keeps them; a clean room re-learns them as rendering bugs. |
 | V7 | **Python state persists across runs; the scene does not.** Per-run *generation* counter on the page; stale-generation ops dropped. **Amended — see V7a.** | Andrew's constraint from #127 applies here too: flipping a runtime flag must not change program semantics. Main-thread Python state persists across Run clicks; the worker path matches. The *scene* is rebuilt per run because re-execution constructs new objects anyway. |
 | V7a | **AMENDMENT (Task 11, Steve's ruling): a *vpython* run gets a fresh interpreter.** Each Run discards the worker and boots a new one, so the Python namespace, the vpython scene and the page's object registry reset together. python3 runs are unchanged and keep accumulating state, so V7 stands everywhere else. | **This is the host's semantics, not a workaround.** Steve: *"Jupyter, Colab, and VS Code have a model where the kernel persists between runs… But in WebVPython.org and Trinket, there's no concept of 'persistent namespace' between runs."* Pressing Run here means "run this program from the top". A namespace surviving between Runs is a *notebook* affordance that this host does not offer, does not show anywhere in its UI, and cannot explain to a student — so V7's "flipping a runtime flag must not change program semantics" argues *for* the fresh interpreter on the vpython path, not against it: it is the main-thread bridge's behaviour, where every Run rebuilds the world.<br><br>vpython's design then makes the right thing unavoidable anyway. The package builds `scene = canvas()` **once**, at `import vpython`, and a surviving namespace memoizes that import — so on a warm worker run 2's objects attach to the canvas run 1 built, which the page destroyed when it bumped the generation, and run 2 draws **nothing**. Measured before the fix: generation 2, zero objects in the scene (the page's `handled` counter read 53, but it is cumulative across both runs and is not a per-run figure).<br><br>**Alternatives.** (a) *Keep run 1's canvas alive on the page* — that is the scene persisting across runs, contradicting the other half of V7 and leaving one scene accumulating every Run's objects. Rejected. (b) *Re-run vpython's module-level scene construction from the page each Run.* This was **viable** — Steve owns vpython-jupyter and this plan already patches it (`apply_worker_patches`), so "package internals" is not the objection. It loses on scope, not on access: it resets `scene` and the canvas, but not the student's own module-level state, so it would deliver a *partial* reset — `scene` fresh, their globals stale — which is the semantics hardest to explain and to test, and it would need re-deriving every time upstream vpython changes how the default canvas is built. Fresh-per-run gets the same result from one line and one mechanism.<br><br>**Cost — measured, not assumed.** ~4 s per vpython Run on the dev stack (run 1 4.1 s, run 2 3.9 s). Two halves, and the *transfer* half is the surprising one: on run 2 Pyodide's own artifacts (2.4 MB `python_stdlib.zip`, 2.7 MB `pyodide.asm.wasm`, 3.1 MB numpy) all come from the browser cache — they are cross-origin from jsdelivr with sane cache headers — while **our wheel is refetched in full, all 3,516,355 bytes**, because `app.js:65` applies `private, no-cache, **no-store**, must-revalidate` to *every* response trinket sends, in every environment. The wheel does carry an etag and a conditional GET returns 304/0 bytes, so the **cheapest lever by far is exempting `/components/` from that blanket policy** — a narrow change in the `onPreResponse` extension that would help every embed asset, not just this one. It matters more on a real deploy than on localhost, where 3.5 MB same-origin is nearly free. The remaining (compute) half's lever is a **pre-booted standby worker** — boot the replacement while the student is still reading run N's output — at the price of a second resident Pyodide (~100 MB+) in every embed. Neither is taken now; both are recorded as the follow-ups if the cost bites.<br><br>**Retained:** the generation counter, unchanged — `terminate()` does not un-post messages already queued for the page. |
@@ -52,7 +52,7 @@ The spike's page-side `setInterval` pacing loop is **removed**: the ported front
 - `vpython/trinket_worker.py` — grows: async `rate` replacement; loud stubs for `pause`/`waitfor`/widget constructors; already provides sender/dispatch.
 
 **trinket:**
-- `runtime-router.js` — one new rule above D2's: `usesVPython(source) && workerVPython → 'worker'`. Precedence, explicitly: `?runtime=main` beats everything (escape hatch unchanged); `workerVPython` is **independent of `workerRuntime`** (a deploy can worker-ize VPython without worker-izing plain python3, and vice versa); `?runtime=worker` alone still does **not** send VPython to the worker — the flag is the only gate, so an embed link can never opt a class into the experimental path by URL. Pure, unit-tested.
+- `runtime-router.js` — one new rule above D2's: `usesVPython(source) && workerVPython → 'worker'`. Precedence, explicitly: `?runtime=main` beats everything (escape hatch unchanged); `workerVPython` is **independent of `workerRuntime`** (a deploy can worker-ize VPython without worker-izing plain python3, and vice versa); `?runtime=worker` alone still does **not** send VPython to the worker — the flag is the only gate, so an embed link can never opt a class into the experimental path by URL. The existing lambda/comprehension guard applies to this rule too (see the implementation notes). Pure, unit-tested.
 - `config/default.yaml` — `features.workerVPython: false`, documented beside `workerRuntime`.
 - Worker kernel — when the router marked the run vpython: install numpy + the vpython wheel (idempotent per worker) before executing; the existing `_async_transform` applies unchanged.
 - Page host shim (~50 lines in `pyodide.js`) — instantiate the factory on first `scene-ops` of a vpython run, `send = workerClient.sendSceneEvent`, `onSceneOps → frontend.handle(ops)`; generation handling; load glow 3.2.3 into the scene container on demand.
@@ -121,9 +121,41 @@ pacing-ownership and `solicited`-flag design.
     and does the same — but newly reachable. The fix belongs in
     `_async_transform.py` (35-test suite, upstream sync obligation), not in the
     worker kernel.
+- **The lambda/comprehension guard had to be added to the vpython rule, and it
+  matters more there than where it came from.** The rule sits above the query
+  rules by design, which also put it above `hasUnawaitableCall(source)`. On the
+  python3 path an un-awaited `input()`/`rate()`/`sleep()` is merely a
+  synchronous call; in a vpython worker run those names are coroutine
+  *factories*, so a call the transform could not reach builds a coroutine and
+  discards it — no flush, no pacing, no yield, nothing rendered, and a hot spin.
+  The flag would have turned a program that works on the main thread into a dead
+  one, for exactly the shape the guard exists to catch. The rule now carries
+  `&& !hasUnawaitableCall(source)` and falls through to `usesVPython → main`.
+- **The console can change the scene, but only because the page now pings after
+  each statement.** The transport is request/reply and the pacing clock belongs
+  to the *run*, which has ended and drained by the time anyone types; `pushRepl`
+  posts a plain `run` and nothing else. So `ball.color = color.blue` at the
+  prompt executed, buffered, and rendered only if some unrelated browser event
+  happened to flush it. `pyodide.js` sends one `[{"trigger":1}]` when a REPL
+  statement settles — the tick that statement is owed. Reaches only the
+  both-flags configuration, where the REPL and the run share an interpreter.
 - **Served path is `public/components/vpython-worker/`, not `vpython-wheel/`.**
   It holds the front-end JS *and* the wheel, and `scripts/sync-vpython-worker.sh`
   is the only writer (source of truth is the vpython-jupyter checkout).
+- **The two-repo mitigation needed a third leg to actually work.** The Risks
+  table says *"wheel filename carries the version; host shim logs both at
+  boot"*. The filename did; the log did not exist, and the front-end had no
+  version to log — so "which build is this deploy serving?" was answerable only
+  by unzipping the wheel. Now: `glowcomm_host.js` carries
+  `GLOWCOMM_HOST_VERSION` (exposed as `createGlowFrontend.version`), the page
+  logs `[vpython] worker path: front-end <v>, wheel <file>` once when the
+  front-end loads, and — the leg the spec did not anticipate —
+  `sync-vpython-worker.sh` refuses to sync at all unless the built wheel's
+  filename matches `VPYTHON_WHEEL_NAME` in `pyodide.js` and its version matches
+  the front-end's. The hand-duplicated filename was the real hazard: a bump on
+  one side alone is a run-time 404 that surfaces as a generic site error. The
+  script also deletes stale wheels rather than leaving 3.5 MB copies to be
+  committed by accident.
 - **At program end the pacing clock stops; the scene stays live anyway.** The
   Scene lifecycle section says the transport "keeps answering pacing triggers"
   after the program ends. It does not: the clock belongs to the *run*, so
@@ -158,6 +190,25 @@ pacing-ownership and `solicited`-flag design.
     the worse bug to diagnose. The 100 ms grace is a backstop, not the contract.
     `tick()`/`poll()` are the same seam from the other side: the host decides
     *when*, the front-end decides *what*.
+- **The deferral list is longer than V5 first said — five more constructs, found
+  by audit rather than by test.** The spec named widgets, `pause` and `waitfor`,
+  reasoning from "spin on sync `rate(30)` inside library code the transform never
+  sees". That reasoning is right and it does not stop there: `compound()`
+  (`while not baseObj.sent: time.sleep(0.001)`), `text()`, `extrusion()` and
+  `scene.mouse.pick` (all via `_wait()`), and `obj.clone()`
+  (`while not baseObj.empty(): rate(60)`) have exactly the same shape. All five
+  now raise the same `_DEFER` message naming themselves, and V5's surface list
+  above is amended to match.
+  - Two things made this worth chasing rather than leaving as a known rough
+    edge. **`compound` and `text` are common in the M&I corpus**, so a validation
+    run would have hit them early. And this branch made the failure *worse*:
+    `_wait()` polls with `rate(30)`, and `rate` is now a coroutine factory, so
+    called from synchronous library code it builds a coroutine and discards it
+    without ever sleeping — the hang became a 100% CPU hot spin with no yield.
+    Either way the student sees no scene, no error and a working Stop button,
+    which is the silent no-op the Errors section forbids.
+  - `_wait` itself is patched too, as a backstop: those four are every caller in
+    the package today, and a future one should say so rather than hang.
 - **The Errors section quotes a deferral message that was never shipped, and it
   names an escape that does not exist.** The spec has *"…not supported in the
   worker runtime yet — run without `?runtime=worker` (or ask your instructor to
