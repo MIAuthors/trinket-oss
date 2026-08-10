@@ -66,7 +66,7 @@ fi
 STALE=$(find "$SRC/vpython" -name '__pycache__' -prune -o -type f -newer "$WHEEL" -print 2>/dev/null | head -5)
 if [ -n "$STALE" ]; then
   echo "FAILED: $SRC source is NEWER than the wheel in dist/ — the wheel is stale." >&2
-  printf '  %s\n' $STALE >&2
+  printf '  %s\n' "$STALE" >&2
   echo "Nothing else here can catch this: the version did not change, so the" >&2
   echo "filename and version gates both pass on a wheel built before those edits." >&2
   echo "Rebuild it:" >&2
@@ -97,6 +97,11 @@ else
 fi
 {
   echo "# Written by scripts/sync-vpython-worker.sh. Do not edit."
+  echo "#"
+  echo "# 'source:' is the line that answers \"which code is this?\". 'sha256:'"
+  echo "# identifies THIS ARTIFACT only: wheels are not byte-reproducible, so two"
+  echo "# builds of the same commit have different sums. A changed sha256 with an"
+  echo "# unchanged source: means someone rebuilt, not that the code moved."
   echo "wheel:   $WHEEL_BASE"
   echo "source:  vpython-jupyter $SRC_SHA"
   echo "sha256:  $WHEEL_SUM"
@@ -120,5 +125,8 @@ else
   docker exec "$CONTAINER" sh -c "rm -f $CDEST/vpython-*.whl"
   docker cp "$DEST/glowcomm_host.js" "$CONTAINER:$CDEST/"
   docker cp "$DEST/$WHEEL_BASE" "$CONTAINER:$CDEST/"
-  echo "copied into $CONTAINER:$CDEST/ — glowcomm_host.js, $WHEEL_BASE"
+  # BUILD-INFO too: the container is where a "what is actually serving?" question
+  # gets asked, and the worktree copy answers for the worktree, not for this.
+  docker cp "$DEST/BUILD-INFO" "$CONTAINER:$CDEST/"
+  echo "copied into $CONTAINER:$CDEST/ — glowcomm_host.js, $WHEEL_BASE, BUILD-INFO"
 fi

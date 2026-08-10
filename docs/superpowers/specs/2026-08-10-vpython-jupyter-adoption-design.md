@@ -79,7 +79,9 @@ The spike's page-side `setInterval` pacing loop is **removed**: the ported front
 
 ## Rollout and success criterion
 
-Flag off everywhere by default; trials enable it in untracked `local.yaml`. Success: a representative set of M&I programs — **to be picked with Todd** — renders and animates identically to the main path on both trials, and Stop kills each of them mid-animation. Only then does "should this become the default" become a question, and it is not this spec's question.
+Flag off everywhere by default; trials enable it in untracked `local.yaml`. Success: a representative set of M&I programs — **to be picked with Todd** — renders and **animates correctly** on both trials, and Stop kills each of them mid-animation. Only then does "should this become the default" become a question, and it is not this spec's question.
+
+> **Amended 2026-08-10.** This read "animates identically to the main path" until implementing `rate()` compensation showed the main path is the one that paces wrongly: GlowScript's own `rate()` sleeps a flat `1000/N` ms regardless of what the loop body cost, so a heavy loop runs slow there and at its requested rate here (measured: 38.0 Hz vs 54.6 Hz for `rate(60)` with an 8 ms body). Holding the worker to "identical" would have meant reproducing that bug deliberately. The worker matches upstream desktop VPython, which is what a student's program was written against; GlowScript's flat `rate()` is **to be filed** separately against the main-thread path. See caveat 5 in `docs/DEPLOY-OVERLAY-GUIDE.md` for the full measurements.
 
 ## Non-goals
 

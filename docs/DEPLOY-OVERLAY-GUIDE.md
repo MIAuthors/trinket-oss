@@ -176,9 +176,12 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 > the same path as mouse events but have **no test behind them**; treat them as
 > plausible, not verified.) What still gates it is validation, not plumbing —
 > a representative set of M&I programs (to be picked with Todd) has to render and
-> animate identically to the main-thread path first. Six things to know before
-> you turn it on — caveats 4 and 5 in particular bear directly on judging
-> "identically":
+> **animate correctly** first. That criterion used to read "identically to the
+> main-thread path"; it was amended once the main-thread path turned out to be
+> the one that paces wrongly (caveat 5), so a program that runs *nearer* its
+> requested `rate()` here than it does on the main thread has passed, not
+> failed. Six things to know before you turn it on — caveats 4 and 5 in
+> particular bear on how to judge a program:
 >
 > 1. **Every Run boots a fresh interpreter, so the Python namespace does NOT
 >    carry over between Runs — and this is a real, deliberate behaviour change
@@ -269,8 +272,9 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    criterion for this path was "renders and animates identically to the main
 >    path"; it is now **"animates correctly"**. The worker matches upstream
 >    desktop VPython, which is what a student's program was written against, and
->    GlowScript's flat `rate()` is filed as its own bug against the main-thread
->    path rather than something the worker should imitate. The *physics* is
+>    GlowScript's flat `rate()` is **to be filed** as its own bug against the
+>    main-thread path rather than treated as something the worker should
+>    imitate. The *physics* is
 >    unaffected either way — M&I programs integrate with their own fixed `dt` —
 >    so what a side-by-side shows is a heavy loop running nearer its requested
 >    rate here than on the main thread. That is the expected result, not a

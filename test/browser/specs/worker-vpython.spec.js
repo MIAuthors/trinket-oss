@@ -550,6 +550,19 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   // DURING an over-period loop: mouse events reaching Python is what dies, in a
   // scene that otherwise looks perfectly healthy. Guards the unconditional
   // `await asyncio.sleep(0)` in vpython-jupyter's _async_rate.
+  //
+  // TO RE-PROVE IT BITES (the claim above is only worth what it can be checked
+  // against). In the vpython-jupyter checkout, replace that await with
+  //     if remaining <= 0.0:
+  //         _last_return[0] = time.monotonic()
+  //         return
+  // then `VPYTHON_PURE_PYTHON=1 SETUPTOOLS_SCM_PRETEND_VERSION=7.6.5 python3 -m
+  // build --wheel`, `bash scripts/sync-vpython-worker.sh` from trinket, and run
+  // this spec: it fails on CLICKED after passing the movement and
+  // responsiveness checks. `git checkout --` the file, rebuild, re-sync.
+  // vpython-jupyter's test_rate_still_yields_when_user_code_overruns_the_period
+  // fails on the same mutation and costs a second, so it is the cheaper guard;
+  // this one is the guard that speaks in terms of what a student would see.
   const OVERRUN_ANIMATION = 'from vpython import *\n' +
                             'import time\n' +
                             'b = sphere()\n' +

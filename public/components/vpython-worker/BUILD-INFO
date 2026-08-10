@@ -1,4 +1,9 @@
 # Written by scripts/sync-vpython-worker.sh. Do not edit.
+#
+# 'source:' is the line that answers "which code is this?". 'sha256:'
+# identifies THIS ARTIFACT only: wheels are not byte-reproducible, so two
+# builds of the same commit have different sums. A changed sha256 with an
+# unchanged source: means someone rebuilt, not that the code moved.
 wheel:   vpython-7.6.5-py3-none-any.whl
-source:  vpython-jupyter b403c71
-sha256:  2f38c114607043a383571bae9b60e26a90cb5a73ba7ae7c30601183eea3f7dc0
+source:  vpython-jupyter 042d30e
+sha256:  de0f510f00c376d27d490869ea1ff522950d708cb45017eaf31a02034e56c1d1
