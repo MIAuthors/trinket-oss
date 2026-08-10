@@ -450,8 +450,24 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
 
-    // The same worker tap the specs above use, so "the clock has stopped" can be
-    // asserted on the WIRE before the click rather than assumed from a sleep.
+    // Two taps.
+    //
+    // (a) The worker channel, so "the clock has stopped" can be asserted on the
+    //     WIRE before the click rather than assumed from a sleep.
+    // (b) The front-end INSTANCE, to check that the page NOTIFIES it when the
+    //     pacer stops instead of leaving it to infer that from how long ago the
+    //     last tick was. The inference has a ~100 ms window after the final tick
+    //     in which a click is queued for a tick that never comes; that race is
+    //     not reproducible from a browser (the window closes before a test can
+    //     see it opened), so what is asserted here is the notification the fix
+    //     is made of. The precise timing is pinned by the unit suite.
+    //
+    //     Tapped through `window.__vpythonScene.frontend`, which pyodide.js
+    //     assigns the moment it builds the front-end — earlier than any tick, so
+    //     earlier than any stop. NOT through `window.createGlowFrontend`: that
+    //     name comes from a top-level `function` declaration in a classic
+    //     script, which redefines the global property as a data property and
+    //     silently discards any accessor installed beforehand.
     await page.addInitScript(() => {
       const RealWorker = window.Worker;
       window.__sceneOps = [];
@@ -463,6 +479,32 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         return w;
       };
       window.Worker.prototype = RealWorker.prototype;
+
+      window.__pacingStopped = 0;
+      let scene = null;
+      Object.defineProperty(window, '__vpythonScene', {
+        configurable: true,
+        get() { return scene; },
+        set(v) {
+          scene = v;
+          let fe = null;
+          Object.defineProperty(scene, 'frontend', {
+            configurable: true,
+            get() { return fe; },
+            set(f) {
+              fe = f;
+              if (f && typeof f.pacingStopped === 'function' && !f.__tapped) {
+                const real = f.pacingStopped;
+                f.__tapped = true;
+                f.pacingStopped = function () {
+                  window.__pacingStopped++;
+                  return real.apply(f, arguments);
+                };
+              }
+            },
+          });
+        },
+      });
     });
 
     await skipUnlessWorkerVPython(page);
@@ -487,6 +529,11 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         'the pacing clock never wound down; this spec would not test what it claims')
         .toBe(before);
     }).toPass({ timeout: 60_000 });
+
+    // ...and the front-end was TOLD, not left to work it out from a timer.
+    expect(await page.evaluate(() => window.__pacingStopped),
+      'stopVPythonPacer() never told the front-end its clock was gone')
+      .toBeGreaterThan(0);
 
     // .last(), not .first(): glow stacks a 2D overlay canvas (labels, captions)
     // on top of the WebGL one and binds the mouse handlers through it, so the

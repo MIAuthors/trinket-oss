@@ -2130,6 +2130,11 @@ function startVPythonPacer() {
 function stopVPythonPacer() {
   if (vpythonPacer) { clearInterval(vpythonPacer); vpythonPacer = null; }
   if (vpythonDrainTimer) { clearTimeout(vpythonDrainTimer); vpythonDrainTimer = null; }
+  // TELL the front-end, rather than leaving it to infer from how long ago the
+  // last tick was. The inference has a window: an event arriving in the ~100 ms
+  // after the final tick still looks like it has a tick coming, so it waits for
+  // one that will never happen. Only the page knows the clock is gone.
+  if (vpythonFrontend) { try { vpythonFrontend.pacingStopped(); } catch (e) {} }
 }
 
 // The run has settled (finished, or failed). Wind the clock down: keep ticking
@@ -2258,10 +2263,16 @@ function resetVPythonScene() {
   vpythonGeneration++;
   window.__vpythonScene.generation = vpythonGeneration;
   vpythonSceneFailed = false;
+  // Drop the reference BEFORE stopping the clock. stopVPythonPacer() flushes the
+  // front-end's queue on the way out, which is right when a live scene loses its
+  // clock — but not here: these events name idxs from the scene being torn down,
+  // and Python's registry (which survives the run) would resolve them against
+  // whatever the next generation puts at those idxs.
+  var dying = vpythonFrontend;
+  vpythonFrontend = null;
   stopVPythonPacer();
-  if (vpythonFrontend) {
-    try { vpythonFrontend.destroy(); } catch (e) {}
-    vpythonFrontend = null;
+  if (dying) {
+    try { dying.destroy(); } catch (e) {}
   }
   window.__vpythonScene.frontend = null;
   // Usually already gone — resetOutput() empties #graphic just before this.

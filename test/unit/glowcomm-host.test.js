@@ -272,6 +272,93 @@ describe('createGlowFrontend event channel', () => {
     expect(sent).toEqual([[{ event: 'update_canvas', trigger: 1 }]]);
   });
 
+  // --- I1: the host NOTIFIES, it is not inferred from a timer ----------------
+  // A click landing in the ~100 ms after the pacer's FINAL tick still looks (to
+  // the grace window) like it has a tick coming. It does not. Without an
+  // explicit "the clock stopped" it sits in the queue until some later event
+  // happens to flush it — which, for a program that has ended, may be never.
+
+  function boundClickFixture() {
+    const { g } = stubGlowWithMouse();
+    const sent = [];
+    const fe = createGlowFrontend({ container: null, send: (e) => sent.push(e), glow: g });
+    const cvs = fakeCanvas(g, 0);
+    let handler = null;
+    cvs.bind = (types, fn) => { handler = fn; };
+    g.canvas = Object.assign(() => cvs, { hasmouse: null });
+    fe.handle({ cmds: [{ cmd: 'canvas', idx: 0 }] });
+    fe.handle({ attrs: ['m0Gclick'] });
+    const click = (x) => handler({ type: 'click', canvas: cvs, pos: g.vec(x, 0, 0),
+                                   press: false, release: true, which: 1 });
+    return { g, fe, cvs, sent, click };
+  }
+
+  it('pacingStopped() delivers a click queued just before the clock died', () => {
+    const { fe, sent, click } = boundClickFixture();
+    fe.tick();                 // the pacer's final tick
+    sent.length = 0;
+    click(9);                  // ...and the student clicks 5 ms later
+    expect(sent, 'precondition: inside the grace window a click is queued').toEqual([]);
+
+    fe.pacingStopped();        // stopVPythonPacer() says so
+    expect(sent.length, 'the click was stranded in the queue').toBe(1);
+    expect(sent[0][0].event).toBe('click');
+    expect(sent[0][0].pos).toEqual([9, 0, 0]);
+  });
+
+  it('after pacingStopped() every later event flushes itself immediately', () => {
+    const { fe, sent, click } = boundClickFixture();
+    fe.tick();
+    fe.pacingStopped();
+    sent.length = 0;
+    click(1);
+    click(2);
+    // Two messages, not one batch waiting for a tick: there is no tick.
+    expect(sent.map((m) => m[0].pos)).toEqual([[1, 0, 0], [2, 0, 0]]);
+  });
+
+  it('pacingStopped() on an empty queue says nothing', () => {
+    const { g } = stubGlow();
+    const sent = [];
+    const fe = createGlowFrontend({ container: null, send: (e) => sent.push(e), glow: g });
+    fe.handle(MSG0);
+    fe.tick();
+    sent.length = 0;
+    fe.pacingStopped();
+    expect(sent).toEqual([]);
+  });
+
+  it('the grace window remains as a backstop for a host that never says stop', () => {
+    const { fe, sent, click } = boundClickFixture();
+    // No tick has ever happened, so there is demonstrably no clock.
+    click(3);
+    expect(sent.length).toBe(1);
+  });
+
+  // --- I2: an event-driven flush still carries the canvas poll ---------------
+
+  it('an immediate flush carries current camera state, not the run-end values', () => {
+    // glowcomm.js polled the canvas on EVERY message out, because it only had
+    // one path out. With no clock running, a handler that reads scene.forward or
+    // keysdown() would otherwise see whatever was true when the clock stopped.
+    const { g, fe, cvs, sent, click } = boundClickFixture();
+    g.canvas.hasmouse = cvs;
+    fe.tick();                                  // consume the initial diff
+    sent.length = 0;
+
+    cvs.forward = g.vec(1, 0, 0);               // the student orbited after the run ended
+    cvs.mouse.pos = g.vec(5, 5, 5);
+    fe.pacingStopped();                         // no clock from here on
+    click(2);
+
+    expect(sent.length).toBe(1);
+    const msg = sent[0];
+    // Upstream ordering: queued events first, then the canvas poll appended.
+    expect(msg.map((e) => e.event)).toEqual(['click', 'update_canvas']);
+    expect(msg[1].forward).toEqual([1, 0, 0]);
+    expect(msg[1].pos).toEqual([5, 5, 5]);
+  });
+
   it('pick and compound answers never wait for a tick', () => {
     // Python blocks inside _wait() for both, so a queued answer is a deadlock —
     // even with the host's clock running.
