@@ -25,6 +25,67 @@
     return { type: 'done', id: id };
   }
 
+  // The vpython scene channel, and the one thing on it the page cannot work out
+  // for itself: whether a package is the REPLY to a trigger the page sent, or
+  // something the PROGRAM pushed on its own (rate() flushes up to
+  // rate_control.MAX_RENDERS a second from inside the animation loop).
+  //
+  // The page's pacer needs that to know when to get out of the way, and it
+  // cannot infer it: trinket_worker._dispatch answers EVERY inbound message with
+  // a flush, so inbound traffic alone never distinguishes a busy program from
+  // the page's own echo.
+  //
+  // Implemented as a COUNT of dispatches still owed a reply rather than "are we
+  // inside the dispatch call right now". The two are identical while _dispatch
+  // is synchronous, which it is today — but decision V4 has JSPI in view, and
+  // under it a dispatch could suspend and flush after returning. A boolean
+  // would then mark every reply unsolicited, the pacer would alternate
+  // tick/poll, and a static scene would silently drop to half its pacing with
+  // nothing failing. The count survives that: what it relies on is the
+  // transport's own contract — one flush per dispatch (trinket_worker._dispatch
+  // ends with baseObj.trigger()) — not on JS call-stack timing.
+  //
+  // Pure so it can be unit-tested; the live path is a browser spec.
+  function createSceneChannel(opts) {
+    var owed = 0;        // dispatches that have not yet produced their flush
+    var sends = 0;
+
+    return {
+      // The outbound half of the pipe vpython's trinket_worker transport
+      // expects. The transport JSON-encodes every update package ({cmds,
+      // methods, attrs} — glowcomm's wire format) and calls this.
+      send: function(jsonStr) {
+        sends++;
+        var solicited = owed > 0;
+        if (solicited) owed--;
+        opts.post({ type: 'scene-ops', id: opts.runId(), generation: opts.generation(),
+                    solicited: solicited, ops: String(jsonStr) });
+      },
+
+      // The page's browser events (or a bare pacing trigger) going in. Before
+      // the transport boots — or on a run with no vpython at all — there is
+      // nothing to dispatch to, and dropping the message is correct: it is
+      // pacing, not data, and it must not be counted as owing a reply.
+      dispatch: function(eventsJson) {
+        var fn = opts.dispatcher();
+        if (typeof fn !== 'function') return;
+        owed++;
+        var before = sends;
+        try {
+          fn(String(eventsJson || '[]'));
+        } catch (e) {
+          // It threw without flushing, so the reply is not merely late — it is
+          // never coming. Give the credit back, or the next thing the PROGRAM
+          // pushes would be mislabelled as this dispatch's reply.
+          if (sends === before && owed > 0) owed--;
+          opts.onError(e);
+        }
+      },
+
+      _owed: function() { return owed; }    // test-only
+    };
+  }
+
   // ---- worker runtime (skipped entirely when required from node) -----------
   if (typeof self !== 'undefined' && typeof self.importScripts === 'function') {
     var pyodide = null;
@@ -218,29 +279,29 @@
       return vpythonReady;
     }
 
-    // The scene a program draws into. The page bumps this on every re-run (a
-    // fresh scene) while the worker's Python namespace persists, so ops from a
-    // program whose scene has been torn down are identifiable as stale.
+    // The scene a program draws into. The page bumps this on every re-run, so
+    // ops belonging to a scene it has already torn down are identifiable as
+    // stale. A vpython re-run also discards this whole worker (spec V7a), so the
+    // tag is no longer guarding against a surviving Python namespace — it guards
+    // against messages ALREADY POSTED when that happened, which terminate()
+    // cannot un-post.
     var sceneGeneration = 0;
 
-    // True while a `scene-event` message is being dispatched into the transport.
-    // The dispatch is synchronous (trinket_worker._dispatch ends with a
-    // baseObj.trigger()), so any send that happens with this set is the REPLY
-    // half of the page's request — and any send that happens with it clear came
-    // from the program itself, i.e. rate()'s own flush. The page needs that
-    // distinction to tell "the worker is animating on its own clock" from "the
-    // worker only speaks when spoken to"; see the pacer in pyodide.js.
-    var inSceneDispatch = false;
-
-    // The outbound half of the pipe vpython's trinket_worker transport expects.
-    // The transport JSON-encodes every update package ({cmds, methods, attrs} —
-    // glowcomm's wire format) and calls this; it rides out on the protocol's
-    // RESERVED `scene-ops` type. `ops` is carried as the raw JSON string: the
+    // The scene channel (see createSceneChannel above). `ops` rides out on the
+    // protocol's RESERVED `scene-ops` type, carried as the raw JSON string: the
     // page parses it once, into the object the front-end factory takes.
-    self.__trinket_vpython_send = function(jsonStr) {
-      post({ type: 'scene-ops', id: currentRunId, generation: sceneGeneration,
-             solicited: inSceneDispatch, ops: String(jsonStr) });
-    };
+    var sceneChannel = createSceneChannel({
+      post: post,
+      runId: function() { return currentRunId; },
+      generation: function() { return sceneGeneration; },
+      dispatcher: function() { return self.__trinket_vpython_dispatch; },
+      onError: function(e) {
+        post({ type: 'stderr', id: currentRunId,
+               text: '[vpython dispatch] ' + String(e && e.message || e) + '\n' });
+      }
+    });
+
+    self.__trinket_vpython_send = sceneChannel.send;
 
     // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
     // transport-agnostic — upstream webagg carries its messages over a WebSocket
@@ -557,18 +618,10 @@
         // SPIKE (vpython-jupyter adoption): inbound half of the vpython pipe.
         // The page sends browser events (or a bare pacing trigger) on the
         // RESERVED `scene-event` type; vpython's trinket_worker transport set
-        // __trinket_vpython_dispatch when it booted. Before that boot — or on a
-        // run with no vpython at all — there is nothing to dispatch to, and
-        // dropping the message is correct: it is pacing, not data.
+        // __trinket_vpython_dispatch when it booted. See createSceneChannel for
+        // what happens before that boot, and for the reply accounting.
         if (msg.type === 'scene-event') {
-          if (typeof self.__trinket_vpython_dispatch === 'function') {
-            // `finally`, not just the happy path: a dispatch that throws must not
-            // leave every later rate() flush mislabelled as solicited forever.
-            inSceneDispatch = true;
-            try { self.__trinket_vpython_dispatch(String(msg.events || '[]')); }
-            catch (e) { post({ type: 'stderr', id: currentRunId, text: '[vpython dispatch] ' + String(e && e.message || e) + '\n' }); }
-            finally { inSceneDispatch = false; }
-          }
+          sceneChannel.dispatch(msg.events);
           return;
         }
 
@@ -595,6 +648,7 @@
     };
   }
 
-  var api = { buildRunReply: buildRunReply, PROTOCOL_VERSION: PROTOCOL_VERSION };
+  var api = { buildRunReply: buildRunReply, createSceneChannel: createSceneChannel,
+              PROTOCOL_VERSION: PROTOCOL_VERSION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : this);

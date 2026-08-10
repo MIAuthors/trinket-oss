@@ -35,7 +35,11 @@ async function skipUnlessWorkerVPython(page) {
 // this is called: the goto inside it is the navigation the taps attach to.
 async function runVPython(page, src) {
   await skipUnlessWorkerVPython(page);
-  await expect(page.locator('.ace_editor').first()).toBeVisible();
+  // Generous, not the 5 s default: these specs run back to back and each leaves
+  // a Pyodide teardown behind it, so the editor's own boot has been seen to lose
+  // the race on a loaded machine. Waiting longer costs nothing when it is ready
+  // (which is almost always) and turns a flake into a real failure signal.
+  await expect(page.locator('.ace_editor').first()).toBeVisible({ timeout: 30_000 });
   await page.evaluate((code) => {
     document.querySelector('.ace_editor').env.editor.setValue(code, 1);
   }, src);
@@ -825,15 +829,19 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
   // and over, changing a number each time, and that is where the scene lifecycle
   // is actually decided.
   //
-  // THE RE-RUN CONTRACT. A vpython re-run starts from a fresh interpreter
-  // (worker-client discardWorker(), called from runInWorker). It has to: vpython
-  // builds `scene = canvas()` exactly once, at `import vpython`, so on a warm
-  // worker run 2's objects attach to run 1's canvas — which the page destroyed
-  // when it bumped the generation. Measured before the fix: run 2 reported
-  // generation 2 and 53 handled packages and drew NOTHING, because every object
-  // it made belonged to a canvas the page no longer knew about. This diverges
-  // from spec decision V7 ("Python state persists across runs") for vpython runs
-  // only; the spec records the divergence and why.
+  // THE RE-RUN CONTRACT (spec V7a). A vpython run starts from a fresh
+  // interpreter — worker-client discardWorker(), called from runInWorker.
+  //
+  // That is this host's semantics: Jupyter/Colab/VS Code keep a kernel alive
+  // between runs, Web VPython and trinket do not, and Run here means "run this
+  // program from the top". vpython's design makes it unavoidable besides — the
+  // package builds `scene = canvas()` exactly once, at `import vpython`, so on a
+  // warm worker run 2's objects attach to run 1's canvas, which the page
+  // destroyed when it bumped the generation. Measured before the fix: run 2
+  // reported generation 2 and drew NOTHING.
+  //
+  // Two specs, because a student meets the contract two ways: Run after a
+  // program ended, and Run DURING one that never will.
 
   test('a re-run replaces the scene instead of stacking a second one', async ({ page }) => {
     // Two cold runs now that each vpython run boots its own interpreter.
@@ -935,6 +943,82 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     expect(leaked,
       'a queued event from the torn-down scene went out — resetVPythonScene ' +
       'stopped the pacer before dropping the front-end').toEqual([]);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+  });
+
+  test('Run during a live animation restarts it', async ({ page }) => {
+    // THE SHAPE THE FEATURE EXISTS FOR. A VPython program is
+    // `while True: rate(60)` — it never ends — and the student's loop is: change
+    // a number, press Run. The spec above only covers Run after a program has
+    // finished, which a real animation never does.
+    //
+    // On the main-thread bridge that click restarts the animation (cooperative
+    // cancel at the next rate(), then re-run). Off-thread there is nothing to
+    // cancel cooperatively, so the restart is the discard the next run was going
+    // to do anyway: terminate, settle, re-run. Without it Run is simply inert
+    // until the student thinks to press Stop first — a behaviour difference
+    // between the two runtimes, on the commonest interaction there is.
+    test.setTimeout(420_000);   // two cold interpreters
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await tapWorkerChannel(page);
+    await runVPython(page, ANIMATION);
+
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // Let it run far enough that a restart is unmistakable. `b.pos.x` starts at
+    // 0 and climbs 0.01 a frame, so waiting for 2.0 units means a fresh
+    // interpreter's sphere cannot be confused with this one's — and it also
+    // proves the animation was genuinely LIVE at the moment Run was clicked,
+    // which is the whole premise of the test.
+    let preRestart = null;
+    await expect(async () => {
+      preRestart = await movingX(page);
+      expect(preRestart, 'the animation never got going').toBeGreaterThan(2.0);
+    }).toPass({ timeout: 120_000 });
+    expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(1);
+    await expect(page.locator('.stop-it')).toBeVisible();   // still running
+
+    await page.locator('.run-it').first().click();
+
+    // The first sample of the NEW scene. Read generation and position together,
+    // so the position cannot belong to a scene the counter has already left.
+    let xAfter = null;
+    await expect(async () => {
+      const s = await page.evaluate(() => {
+        const fe = window.__vpythonScene.frontend;
+        const objs = fe ? fe._objs().filter(Boolean) : [];
+        const o = objs.find((x) => x && x.pos && typeof x.pos.x === 'number');
+        return { gen: window.__vpythonScene.generation, x: o ? o.pos.x : null };
+      });
+      expect(s.gen, 'Run did nothing — the click was swallowed mid-run').toBe(2);
+      expect(s.x, 'the restarted run drew no sphere').not.toBeNull();
+      xAfter = s.x;
+    }).toPass({ timeout: 180_000 });
+
+    // It started OVER, from a fresh interpreter: had the namespace survived, `b`
+    // would still be where run 1 left it and the count would carry on climbing
+    // from there.
+    expect(xAfter, 'the restarted animation resumed instead of starting over')
+      .toBeLessThan(preRestart / 2);
+
+    // ...and it is animating, not merely drawn: a restart that produced a frozen
+    // scene would satisfy everything above.
+    const a = await movingX(page);
+    await page.waitForTimeout(1500);
+    expect(Math.abs(await movingX(page) - a),
+      'the restarted scene is not moving').toBeGreaterThan(0.05);
+
+    // Still a run in flight (this program never ends), and the wire agrees the
+    // live scene is generation 2.
+    await expect(page.locator('.stop-it')).toBeVisible();
+    const gens = await page.evaluate(() => window.__sceneOps.slice());
+    expect(Math.max(...gens)).toBe(2);
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });

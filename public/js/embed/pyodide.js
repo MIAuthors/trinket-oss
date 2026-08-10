@@ -564,7 +564,8 @@ function setCancelRequested(v) {
   window.__trinket_cancel_requested = v;
 }
 var rerunQueued = false;      // a Run was clicked mid-run; re-run once it stops
-var runningIsVpython = false; // the in-flight run is a VPython program (cancellable)
+var runningIsVpython = false; // the in-flight run is a MAIN-THREAD VPython program (cancellable)
+var runningIsWorkerVPython = false; // ...and the worker-path equivalent (restartable by terminate)
 var vpythonBaselineCaptured = false; // folded vpython star-imports into the explorer baseline once
 
 // Wrap the global rate() so it rejects when cancellation is requested. Must run
@@ -2165,16 +2166,15 @@ function stopVPythonPacer() {
 }
 
 // The run has settled (finished, or failed). Wind the clock down: keep ticking
-// briefly, because the objects a program created in its final moments — and, on
-// a warm worker, very possibly ALL of them — are still sitting in the transport's
-// buffer, and only a ping gets them out. Then stop for good.
+// briefly, because the objects a program created in its final moments are still
+// sitting in the transport's buffer, and only a ping gets them out. Then stop
+// for good.
 //
 // The drain is unconditional, deliberately. An earlier version skipped it when
 // nothing had come back yet, to avoid pinging a worker whose wheel install had
-// failed; but a re-run on a warm worker settles in milliseconds, before the first
-// tick's round trip, so "nothing back yet" is also the normal healthy case and
-// skipping the drain deadlocked the second scene. Draining regardless costs a
-// failed run ~15 no-op messages and no longer orphans anything.
+// failed — but "nothing back yet" is not a reliable sign of a broken run, and
+// getting it wrong deadlocks the scene rather than the reverse. Draining
+// regardless costs a failed run ~15 no-op messages and orphans nothing.
 function finishVPythonPacing() {
   if (!vpythonPacer || vpythonDrainTimer) return;
   vpythonDrainTimer = setTimeout(function() {
@@ -2251,9 +2251,10 @@ function ensureVPythonFrontend() {
 
 // One update package from the worker's vpython transport.
 function handleWorkerSceneOps(msg) {
-  // Ops from a scene this page has already torn down. The worker's Python
-  // namespace survives a re-run, so packages belonging to the previous scene can
-  // still be in flight (or buffered) when the new one starts; the generation tag
+  // Ops from a scene this page has already torn down. A vpython re-run discards
+  // the whole interpreter, but terminate() does not un-post what the dying
+  // worker already put on the page's message queue, so packages belonging to the
+  // previous scene can still arrive after the new one starts; the generation tag
   // is the only thing that distinguishes them. Drop them — drawing them into the
   // new scene would mix two runs' objects.
   if ((msg.generation | 0) !== vpythonGeneration) {
@@ -2289,9 +2290,11 @@ function handleWorkerSceneOps(msg) {
   });
 }
 
-// A scene belongs to ONE run: Python state persists across runs in the worker,
-// the scene does not. Called at the start of every run (before the run message
-// is posted, so the generation the kernel is told is already the new one).
+// A scene belongs to ONE run. Called at the start of EVERY run — including
+// python3 and ?runtime=main runs, which is the point: a scene must not outlive
+// the program that drew it whatever the next program turns out to be. Runs
+// before the run message is posted, so the generation the kernel is told is
+// already the new one.
 function resetVPythonScene() {
   vpythonGeneration++;
   window.__vpythonScene.generation = vpythonGeneration;
@@ -2373,21 +2376,39 @@ function runInWorker(program, files, serialized, decision) {
   mplFigures = {};              // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
 
-  // A VPython re-run starts from a FRESH INTERPRETER. This diverges from decision
-  // V7 ("Python state persists across runs") for vpython runs only, and it has to:
-  // vpython builds `scene = canvas()` once, at `import vpython`, so on a warm
-  // worker the second run's objects attach to the canvas the FIRST run created —
-  // which the page tore down when it bumped the generation. The student's sphere
-  // then belongs to a canvas nothing on the page knows about, and run 2 draws
-  // nothing at all (measured before this line existed: generation 2, 53 packages
-  // handled, zero objects). Discarding the worker resets the scene, the Python
-  // namespace and the page's registry together — the same three things Stop
-  // already resets, which is why a stopped-then-re-run program has always worked.
+  // A VPython run starts from a FRESH INTERPRETER (spec V7a).
   //
-  // The cost is a cold start per run: Pyodide boots and the 3.5 MB wheel installs
-  // again (~6 s on this stack, browser-cached). Accepted — see the spec.
-  // python3 runs are untouched and keep accumulating their namespace.
-  if (decision && decision.vpython) { workerClient.discardWorker(); }
+  // This is the HOST'S semantics, not a workaround: Jupyter, Colab and VS Code
+  // keep a kernel alive between cell runs, and Web VPython and trinket do not —
+  // pressing Run here means "run this program from the top", and there is no
+  // persistent namespace for a student to reason about. vpython's
+  // `scene = canvas()` at import time only makes that unavoidable: on a warm
+  // worker the import is already done, so run 2's objects attach to run 1's
+  // canvas, which the page tore down when it bumped the generation, and run 2
+  // draws nothing at all (measured before this line existed: generation 2, 53
+  // packages handled by the page across both runs, zero objects in the scene).
+  //
+  // The cost is a cold start per run: a Pyodide boot, loadPackage('numpy',
+  // 'micropip'), and unpacking/installing the wheel. ~4 s on the dev stack.
+  // MEASURED, because the obvious guess is wrong: Pyodide's own artifacts (2.4 MB
+  // stdlib, 2.7 MB wasm, 3.1 MB numpy) come from jsdelivr and are served from the
+  // browser cache on run 2, but OUR wheel is refetched in full — all 3,516,355
+  // bytes — because app.js:65 puts `no-store` on every response trinket sends.
+  // It carries an etag, so exempting /components/ from that blanket policy would
+  // make it a 304. See the spec (V7a) for that and the standby-worker lever.
+  // python3 runs never take this branch.
+  if (decision && decision.vpython) {
+    runningIsWorkerVPython = true;   // Run-while-running restarts this; see runCode()
+    var hadInterpreter = workerClient.discardWorker();
+    // ...and if the student had a console session in that interpreter, its
+    // variables have just gone. stopCode() says so when Stop discards the
+    // interpreter; a Run that discards it owes the same explanation, or `x` is
+    // simply undefined at the next prompt for no visible reason. resetOutput()
+    // has already cleared the console, so this is the first line they see.
+    if (hadInterpreter && replActive) {
+      writeOut('[console session reset — a VPython run starts a fresh interpreter]\n');
+    }
+  }
 
   writeOut('Loading Python (Pyodide)…\n');
 
@@ -2406,11 +2427,16 @@ function runInWorker(program, files, serialized, decision) {
   if (!graphicWidth) { graphicWidth = Math.round(window.innerWidth / 2); }
 
   // Start the pacing clock BEFORE the run: the transport only flushes when the
-  // host pings it. On the very first run the transport's eager boot would ping
-  // us first, but a re-run reuses a warm worker where `import vpython` is
-  // already done — nothing is emitted unprompted, so waiting for a first package
-  // to start the clock would deadlock the second run's scene. Pings that arrive
-  // before the transport exists are dropped in the worker, by design.
+  // host pings it, so the clock has to exist before there is anything to flush.
+  //
+  // Every vpython run now boots its own interpreter, so the transport's eager
+  // boot handshake does arrive unprompted on every run and the clock could in
+  // principle be started by it instead. It is not, for two reasons: the boot
+  // flush is the only unprompted one — everything after it needs a ping, so a
+  // handshake lost to a race would strand the whole scene — and a run whose
+  // wheel install FAILS never sends anything at all, which would leave the page
+  // waiting on a signal that is not coming. Pings that arrive before the
+  // transport exists are dropped in the worker, by design (createSceneChannel).
   if (decision && decision.vpython) { startVPythonPacer(); }
 
   return workerClient.run(program, files, {
@@ -2424,7 +2450,14 @@ function runInWorker(program, files, serialized, decision) {
     // what we want: a wheel that failed to install must not leave the clock
     // ticking at a worker that has no transport to answer it.
     finishVPythonPacing();
+    // finishRun() consumes rerunQueued and may start the next run SYNCHRONOUSLY,
+    // so read it first. A restart (Run clicked during a live animation) must not
+    // then snapshot: by the time the reply came back it would be describing the
+    // NEW run's half-built namespace, and it would be asking a worker that is
+    // busy booting.
+    var restarting = rerunQueued;
     finishRun(serialized, workerRunError);
+    if (restarting) return;
 
     // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here
     // because this page's Pyodide never ran the program. Ask the worker instead
@@ -2481,6 +2514,25 @@ function runCode() {
     if (runningIsVpython) {
       setCancelRequested(true);
       rerunQueued = true;
+      return;
+    }
+
+    // The same promise for the WORKER VPython path, by the mechanism that path
+    // already uses. This is the shape the whole feature exists for: a VPython
+    // program is `while True: rate(60)`, it never ends, and a student edits a
+    // number and hits Run. Without this, Run does nothing until they think to
+    // press Stop first — and on the main-thread bridge the same click restarts.
+    //
+    // Not cooperative cancellation: there is nothing to cancel cooperatively,
+    // because a worker run is killed by terminate(). discardWorker() IS the
+    // restart — it settles the in-flight run, whose completion handler sees
+    // rerunQueued and starts the fresh one, and the next run was going to
+    // discard the interpreter anyway (V7a). Deliberately vpython-only:
+    // Run-while-running is ignored for python3 worker runs exactly as it is on
+    // the main thread, and nothing here changes that.
+    if (runningIsWorkerVPython && workerClient && workerClient.isRunning()) {
+      rerunQueued = true;
+      workerClient.discardWorker();
     }
     return;
   }
@@ -2495,6 +2547,7 @@ function startRun() {
   $('.stop-it').removeClass('hide');
   rerunQueued = false;
   runningIsVpython = false;
+  runningIsWorkerVPython = false;
 
   if (window.parent) {
     window.parent.postMessage("started", "*");

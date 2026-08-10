@@ -157,6 +157,15 @@ describe('createWorkerClient', () => {
     expect(() => client.discardWorker()).not.toThrow();
   });
 
+  it('discardWorker() reports whether there WAS an interpreter to discard', async () => {
+    // The page uses this to decide whether to tell a student their console
+    // session just went with it. Saying so when nothing was lost is as wrong as
+    // staying silent when something was.
+    const { client } = await bootedClient();
+    expect(client.discardWorker(), 'a live worker was discarded').toBe(true);
+    expect(client.discardWorker(), 'there was nothing left to discard').toBe(false);
+  });
+
   it('does NOT post a run before the worker reports ready', async () => {
     // Booting Pyodide takes seconds; a run posted first is answered
     // "Python is not ready yet". Found by the browser spec, not by unit tests.

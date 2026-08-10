@@ -187,15 +187,19 @@
       // Same mechanism as stop() and named differently on purpose — the caller's
       // intent is "start clean", not "kill what is running", and the two are read
       // in very different places. The worker VPython path (spec 2026-08-10) is
-      // the one caller: a re-run has to reset the Python namespace TOGETHER with
-      // the page's scene, because vpython's `scene = canvas()` runs once at
-      // `import vpython` and would otherwise keep pointing the student's objects
-      // at a canvas the page has already torn down (see the V7 amendment in the
-      // design spec). Ordinary python3 runs never call this and keep their
-      // accumulating namespace.
+      // the one caller: on this host a Run is a fresh program from the top, and
+      // vpython's `scene = canvas()` at import time makes that unavoidable
+      // besides (see V7a in the design spec). Ordinary python3 runs never call
+      // this and keep their accumulating namespace.
+      //
+      // Returns whether there WAS an interpreter to discard, so the page can
+      // tell a student whose console session just went with it — and stay quiet
+      // when nothing was lost.
       discardWorker: function() {
+        var had = !!worker;
         if (worker) { worker.terminate(); worker = null; }
         settle();
+        return had;
       },
 
       // One REPL statement. Same channel and same correlation as run(), so
