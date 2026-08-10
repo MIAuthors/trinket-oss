@@ -258,14 +258,23 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    A 20 ms body cannot exceed 50 Hz whatever `rate()` does, so that row is at
 >    its ceiling. Both paths land a few Hz short of the requested 60 even with an
 >    empty body — browser timer granularity plus the per-iteration scene update,
->    present on both paths before and after this change, and *not* something the
->    fixed timestep addresses (it clamps at zero rather than banking debt, so a
->    late iteration is never repaid by a burst of zero-sleep ones). The *physics*
->    is unaffected either way — M&I programs integrate with their own fixed `dt`
->    — but a side-by-side comparison of a loop with real work in it will show the
->    worker running closer to the requested rate than the main thread. Expect
->    that rather than discover it when judging "renders and animates
->    identically".
+>    present on both paths before and after this change. Closing that last few Hz
+>    is possible (anchor the next deadline at `max(last + period, now - period)`,
+>    which bounds catch-up to a single period) but deliberately not done: the
+>    residual is small, and paying for it with any amount of catch-up buys a
+>    burst of zero-sleep iterations after every hiccup. Read ~53 Hz on an empty
+>    `rate(60)` as normal, not as a broken fix.
+>
+>    **Ruled on, so a tester does not have to re-litigate it:** the acceptance
+>    criterion for this path was "renders and animates identically to the main
+>    path"; it is now **"animates correctly"**. The worker matches upstream
+>    desktop VPython, which is what a student's program was written against, and
+>    GlowScript's flat `rate()` is filed as its own bug against the main-thread
+>    path rather than something the worker should imitate. The *physics* is
+>    unaffected either way — M&I programs integrate with their own fixed `dt` —
+>    so what a side-by-side shows is a heavy loop running nearer its requested
+>    rate here than on the main thread. That is the expected result, not a
+>    finding.
 >
 > 6. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
@@ -301,6 +310,18 @@ happen?" is a real question. The page answers it: run a VPython program with the
 flag on and the browser console prints, once,
 `[vpython] worker path: front-end 7.6.5 (…/glowcomm_host.js), wheel vpython-7.6.5-py3-none-any.whl`.
 The two versions should match; the sync script refuses to run if they do not.
+
+**Which *source* built that wheel?** Versions cannot answer this: the common
+mistake is editing vpython-jupyter, forgetting to rebuild, and syncing last
+week's wheel — same filename, same version, both gates pass. Two things address
+it. The sync script refuses when any source file under `$VPJ/vpython` is newer
+than the wheel in `dist/`, and it writes
+`public/components/vpython-worker/BUILD-INFO` recording the vpython-jupyter
+commit the wheel was built from (flagged `+ UNCOMMITTED CHANGES` when that
+checkout was dirty), which is committed alongside the binary so trinket's own
+history can answer the question. Note the `sha256:` line identifies *that
+artifact*, not the source: wheels are not byte-reproducible, so two builds of
+the same commit differ. The `source:` line is the one to read.
 
 **What changes when this is on:**
 

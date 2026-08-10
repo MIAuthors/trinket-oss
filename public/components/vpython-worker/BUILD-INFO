@@ -1,0 +1,4 @@
+# Written by scripts/sync-vpython-worker.sh. Do not edit.
+wheel:   vpython-7.6.5-py3-none-any.whl
+source:  vpython-jupyter b403c71
+sha256:  2f38c114607043a383571bae9b60e26a90cb5a73ba7ae7c30601183eea3f7dc0

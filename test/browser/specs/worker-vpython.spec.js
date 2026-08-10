@@ -527,6 +527,98 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });
 
+  // The case the test above cannot reach. ANIMATION's body is a single float
+  // add, so its rate(60) always has most of the 16.7 ms period left to sleep —
+  // the ordinary path. This body takes 50 ms, so EVERY call is already past its
+  // deadline and the compensated rate() has no time left to wait. That branch
+  // exists only because rate() now subtracts the body's cost, and the tempting
+  // "optimisation" there is to return early: there is nothing to sleep for.
+  //
+  // What that would break is narrower than it looks, and the narrowness is the
+  // reason this test is shaped the way it is. Flushing is SYNCHRONOUS —
+  // _flush_if_due() postMessages from the worker without yielding — so a
+  // non-yielding rate() still renders and the sphere still moves. Stop still
+  // works too: it is worker.terminate() on the page side and needs nothing from
+  // the worker thread. Motion and Stop therefore prove nothing here; a test
+  // asserting only those passes against a build with the yield removed
+  // (verified by doing exactly that).
+  //
+  // The half that does break is INBOUND. The host delivers browser events by
+  // calling the transport's dispatch, and the worker only reaches its JS event
+  // loop — where that queued message is waiting — when the running coroutine
+  // gives up a turn. So the assertion with teeth is a scene.bind handler firing
+  // DURING an over-period loop: mouse events reaching Python is what dies, in a
+  // scene that otherwise looks perfectly healthy. Guards the unconditional
+  // `await asyncio.sleep(0)` in vpython-jupyter's _async_rate.
+  const OVERRUN_ANIMATION = 'from vpython import *\n' +
+                            'import time\n' +
+                            'b = sphere()\n' +
+                            'def hit(evt):\n' +
+                            '    print("CLICKED")\n' +
+                            'scene.bind("click", hit)\n' +
+                            'while True:\n' +
+                            '    rate(60)\n' +
+                            '    end = time.time() + 0.05\n' +
+                            '    while time.time() < end:\n' +
+                            '        pass\n' +
+                            '    b.pos.x += 0.05\n';
+
+  test('a loop whose body overruns the rate() period still dispatches events, stays responsive and stops',
+    async ({ page }) => {
+    test.setTimeout(300_000);
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await runVPython(page, OVERRUN_ANIMATION);
+
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // The loop is running (~20 iterations/second at 0.05 units each). Necessary
+    // but NOT sufficient — see the note above — so it is a precondition for the
+    // click assertion rather than a claim in its own right.
+    let x0 = null;
+    await expect(async () => {
+      x0 = await movingX(page);
+      expect(x0, 'no object with a position ever reached the scene').not.toBeNull();
+    }).toPass({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+    expect(Math.abs((await movingX(page)) - x0),
+      'the over-period loop never even started animating — this spec would ' +
+      'test nothing').toBeGreaterThan(0.05);
+
+    // The page is still not the thing doing the work, and this body hogs the
+    // worker far harder than ANIMATION's does.
+    const t0 = Date.now();
+    await page.evaluate(() => document.title);
+    expect(Date.now() - t0, 'the page blocked while the over-period loop ran')
+      .toBeLessThan(2000);
+
+    // THE ASSERTION WITH TEETH. .last() for the same reason as the Task 9 spec:
+    // glow's 2D overlay canvas sits on top of the WebGL one and carries the
+    // mouse handlers.
+    await page.locator('#vpython-scene canvas').last().click({ position: { x: 100, y: 100 } });
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelector('#console-output')?.innerText || '')).toContain('CLICKED');
+    }).toPass({ timeout: 30_000 });
+
+    // ...and Stop still kills it.
+    await expect(page.locator('.stop-it')).toBeVisible();
+    await page.locator('.stop-it').first().click();
+    await expect(async () => {
+      expect(await page.evaluate(() =>
+        document.querySelector('#console-output')?.innerText || '')).toContain('[stopped');
+    }).toPass({ timeout: 30_000 });
+    const frozen = await movingX(page);
+    await page.waitForTimeout(1500);
+    expect(await movingX(page), 'the animation kept running after Stop').toBe(frozen);
+
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+  });
+
   // --- Task 9: mouse events -------------------------------------------------
   // Everything above is one-way: Python builds objects, the page draws them.
   // This is the return path — the browser's mouse reaching a Python callback.
