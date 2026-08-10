@@ -180,9 +180,21 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    is never re-sent and the second run ends with an empty graphic pane. The
 >    workaround today is to **reload the page between runs**.
 >
-> Both are owned by later tasks in the same plan (the `rate()` rewrite next, the
-> re-run lifecycle after it). Until they land this is a single-run demo, not a
-> feature.
+> The first two are owned by later tasks in the same plan (the `rate()` rewrite
+> next, the re-run lifecycle after it). Until they land this is a single-run
+> demo, not a feature.
+>
+> 3. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
+>    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
+>    (`wvpython/vpython/core_funcs.py` forwards constructor kwargs straight to
+>    GlowScript) but the stock 6 under `workerVPython`. Cause: the packaged
+>    `vpython` library's `gobj.setup` assigns `self._size` directly, while `size`
+>    on `gobj` is a property derived from `_radius` — so the constructor argument
+>    is written to a dead attribute and never reaches the wire. Upstream
+>    vpython-jupyter bug, not trinket's; unaffected by the two items above, and
+>    it will still be here when they are fixed. `radius=` is honoured on both
+>    paths and is the workaround. Setting `.size` *after* construction goes
+>    through the property setter and works on both paths too.
 
 Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
 VPython programs run through the `vpython-jupyter` package inside the Web Worker

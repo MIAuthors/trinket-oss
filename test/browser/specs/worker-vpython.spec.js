@@ -651,8 +651,8 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       }
 
       // Autoscale is downstream of the data actually landing in glow: an empty
-      // graph draws a 0..1 axis, so a tick label up in the twenties can only
-      // come from the student's y values (max 24.01).
+      // graph draws a 0..1 axis, so any tick well above 1 can only come from the
+      // student's y values (which run to 24.01).
       const ticks = [...document.querySelectorAll('#vpython-scene .glowscript-graph .tickLabel')]
         .map((e) => parseFloat(e.textContent)).filter((n) => !isNaN(n));
 
@@ -668,7 +668,11 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         curveLen: curve && curve.__data && curve.__data.length,
         curveLast: curve && curve.__data && curve.__data[curve.__data.length - 1],
         dotsLen: dots && dots.__data && dots.__data.length,
-        dotsSizeType: dots && typeof dots.size,
+        // VALUES, not types. `typeof dots.size === 'number'` would be vacuous:
+        // with the branch removed glow computes __radius = options.size / 2 on a
+        // vec, i.e. NaN — and `typeof NaN` is 'number'. See the assertion below.
+        dotsSize: dots && dots.size,
+        dotsRadius: dots && dots.__radius,
         // …and the neighbouring vector attribute still WAS converted, so the
         // branch is narrow rather than "graph objects skip o2vec3".
         dotsColorIsVec: !!(dots && dots.color && typeof dots.color.x === 'number'),
@@ -688,10 +692,15 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       'gdots no longer sends a scalar size — the front-end branch is now dead code').toBe('number');
 
     // 2. …and the front-end left it a scalar instead of running it through
-    //    o2vec3. This is the quirk, asserted on the LIVE glow object.
-    expect(r.dotsSizeType,
+    //    o2vec3. This is the quirk, asserted on the LIVE glow object — and it
+    //    has to be asserted as a VALUE. Deleting the branch does not make glow
+    //    throw or make `size` a vector: glow does `__radius = options.size / 2`,
+    //    and dividing a vec by 2 yields NaN, which is still `typeof 'number'`.
+    //    Verified by mutation — with the branch removed, these two fail.
+    expect(r.dotsRadius,
       'gdots size went through o2vec3 — the gcurve/gdots branch in handle_cmds did not fire')
-      .toBe('number');
+      .toBe(3);
+    expect(r.dotsSize).toBe(6);
     expect(r.dotsColorIsVec, 'gdots color was not converted to a glow vector').toBe(true);
     expect(r.dotsColor).toEqual([1, 0, 0]);
 
@@ -710,9 +719,11 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     // 5. …and it rasterised: a blue curve and red dots on the plot canvas, with
     //    the axis scaled to the data rather than to an empty default range.
+    //    The tick bound is deliberately loose — the claim is "not the 0..1 axis
+    //    of an empty graph", not "glow rounds the top of the range to 25".
     expect(r.blue, 'the gcurve never reached the plot canvas').toBeGreaterThan(100);
     expect(r.red, 'the gdots never reached the plot canvas').toBeGreaterThan(0);
-    expect(r.maxTick, 'the axis never autoscaled to the plotted data').toBeGreaterThan(20);
+    expect(r.maxTick, 'the axis is still on its empty-graph default range').toBeGreaterThan(5);
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
     expect(consoleErrors, 'the page logged an error while plotting').toEqual([]);
