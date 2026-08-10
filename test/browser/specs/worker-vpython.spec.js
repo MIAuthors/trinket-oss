@@ -668,9 +668,7 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         curveLen: curve && curve.__data && curve.__data.length,
         curveLast: curve && curve.__data && curve.__data[curve.__data.length - 1],
         dotsLen: dots && dots.__data && dots.__data.length,
-        // VALUES, not types. `typeof dots.size === 'number'` would be vacuous:
-        // with the branch removed glow computes __radius = options.size / 2 on a
-        // vec, i.e. NaN — and `typeof NaN` is 'number'. See the assertion below.
+        // Values rather than types — see the honest account at the assertion.
         dotsSize: dots && dots.size,
         dotsRadius: dots && dots.__radius,
         // …and the neighbouring vector attribute still WAS converted, so the
@@ -692,11 +690,33 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       'gdots no longer sends a scalar size — the front-end branch is now dead code').toBe('number');
 
     // 2. …and the front-end left it a scalar instead of running it through
-    //    o2vec3. This is the quirk, asserted on the LIVE glow object — and it
-    //    has to be asserted as a VALUE. Deleting the branch does not make glow
-    //    throw or make `size` a vector: glow does `__radius = options.size / 2`,
-    //    and dividing a vec by 2 yields NaN, which is still `typeof 'number'`.
-    //    Verified by mutation — with the branch removed, these two fail.
+    //    o2vec3. READ THIS BEFORE TRUSTING THE NEXT TWO LINES: they are weaker
+    //    than they look, and the mutation run says so.
+    //
+    //    Deleting the gcurve/gdots branch was tried. glow 3.2.3's `vec`
+    //    VALIDATES its arguments, so `o2vec3(6)` — i.e.
+    //    `vec(undefined, undefined, undefined)` — throws `vector(non-vector) is
+    //    an error.` That throw aborts the rest of the cmds package: gdots is
+    //    never constructed, the gcurve's plot() packages abort with it, and
+    //    glow's graph (lazy, like the 3D canvas) renders no `.glowscript-graph`
+    //    div at all. The mutant therefore dies at the CANVAS GATE above, three
+    //    assertions before either line below is reached. The front-end catches
+    //    the throw and writes it to the trinket console, so it never surfaces
+    //    as a pageerror or a console.error either.
+    //
+    //    And these two cannot fully discriminate anyway: 3 and 6 are glow's
+    //    DEFAULT radius/size. Because of the upstream dead-`_size` bug noted at
+    //    (1), the wire always carries the default 6 no matter what the student
+    //    asked for, so "the branch fired and passed 6 through" and "size was
+    //    dropped on the floor" produce identical objects. Nothing measured on
+    //    the live object can separate them. What actually pins the branch is the
+    //    WIRE assertion at (1) plus the canvas gate.
+    //
+    //    They are kept as values rather than `typeof` because a future glow
+    //    whose `vec` coerces instead of throwing would let a vec through to
+    //    `__radius = size/2` as NaN, and `typeof NaN` is 'number' — the type
+    //    form would pass. That is the only mutant these two are insurance
+    //    against, and it is a hypothetical one.
     expect(r.dotsRadius,
       'gdots size went through o2vec3 — the gcurve/gdots branch in handle_cmds did not fire')
       .toBe(3);

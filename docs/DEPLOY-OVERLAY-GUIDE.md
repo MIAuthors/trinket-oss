@@ -170,7 +170,7 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 > ⚠️ **Experimental — the first run of a static scene works, nothing beyond that
 > yet. Do not enable on a deploy.** The path is joined up end to end: the worker
 > installs the VPython wheel, runs the program, and the page draws the scene with
-> GlowScript. Two things behind it are still missing.
+> GlowScript. Three things behind it are still missing.
 >
 > 1. **`rate()` does not pace.** Worker runs do not yet get the async rewrite that
 >    turns it into a yield point, so an animation loop does not animate. Static
@@ -180,9 +180,9 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    is never re-sent and the second run ends with an empty graphic pane. The
 >    workaround today is to **reload the page between runs**.
 >
-> The first two are owned by later tasks in the same plan (the `rate()` rewrite
-> next, the re-run lifecycle after it). Until they land this is a single-run
-> demo, not a feature.
+>    *The first two are owned by later tasks in the same plan (the `rate()`
+>    rewrite next, the re-run lifecycle after it). Until they land this is a
+>    single-run demo, not a feature. Item 3 below is not one of them.*
 >
 > 3. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
