@@ -56,6 +56,42 @@ describe('createGlowFrontend', () => {
     expect(() => { fe.handle(MSG0); fe.handle('trigger'); }).not.toThrow();
   });
 
+  // Added after review: glow reads its mount point off window.__context, which is
+  // also its own scratch space (canvas_selected / canvas_all / print_container),
+  // and stores the container as a jQuery object — canvas.container.css(...) on the
+  // print path throws on a raw element.
+  it('merges into glow __context and hands the container to jQuery', () => {
+    const { g } = stubGlow();
+    globalThis.$ = (el) => ({ __jq: true, el });
+    globalThis.__context = { canvas_all: ['pre-existing'] };
+    try {
+      const el = { tagName: 'DIV' };
+      createGlowFrontend({ container: el, send: () => {}, glow: g }).handle(MSG0);
+      expect(globalThis.__context.canvas_all).toEqual(['pre-existing']);  // merged, not replaced
+      expect(globalThis.__context.glowscript_container.__jq).toBe(true);  // $-wrapped
+      expect(globalThis.__context.glowscript_container.el).toBe(el);
+    } finally {
+      delete globalThis.$;
+      delete globalThis.__context;
+    }
+  });
+
+  // Added after review: a synthesized widget/bind event is NOT a safe no-op —
+  // vpython.py's handle_msg indexes object_registry by evt['idx'] / evt['canvas']
+  // and reads evt['value'], so a partial event raises inside the kernel loop.
+  // The stubs must warn and drop until the real event capture is ported.
+  it('widget bind stubs warn without sending a partial event', () => {
+    const { g } = stubGlow();
+    g.button = (cfg) => ({ __stub: 'button', cfg });
+    const sent = [];
+    const fe = createGlowFrontend({ container: null, send: (e) => sent.push(e), glow: g });
+    fe.handle({ cmds: [{ cmd: 'canvas', idx: 0 }, { cmd: 'button', idx: 1, text: 'go', canvas: 0 }] });
+    const bind = fe._objs()[1].cfg.bind;
+    expect(typeof bind).toBe('function');   // glow gets a handler, as upstream
+    bind(fe._objs()[1]);                    // what a real click would call
+    expect(sent).toEqual([]);               // nothing invalid reaches Python
+  });
+
   it('reset() clears the object registry', () => {
     const { g } = stubGlow();
     const fe = createGlowFrontend({ container: null, send: () => {}, glow: g });
