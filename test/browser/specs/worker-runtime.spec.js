@@ -25,8 +25,23 @@ test.describe('Worker runtime (#108)', () => {
     expect(await page.evaluate(() => window.__trinketRuntime)).toBe('worker');
   });
 
-  test('keeps VPython on the main thread', async ({ page }) => {
-    await editorRun(page, 'from vpython import *\nsphere()');
+  test('?runtime=worker alone does not move VPython off the main thread', async ({ page }) => {
+    await page.goto('/embed/python3?runtime=worker');
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
+
+    // Running VPython in the worker is a SEPARATE opt-in — features.workerVPython
+    // (spec 2026-08-10) — and a dev box may well have it on in its untracked
+    // local.yaml. Pin it off here, the same way the escape-hatch test below
+    // refuses to rely on the machine's configuration: what this test asserts is
+    // that ?runtime=worker is not by itself enough to move VPython. The flag
+    // matrix is unit-tested in test/unit/runtime-router.test.js.
+    await page.evaluate(() => { window.trinket.config.workerVPython = false; });
+
+    await page.evaluate((src) => {
+      document.querySelector('.ace_editor').env.editor.setValue(src, 1);
+    }, 'from vpython import *\nsphere()');
+    await page.locator('.run-it').first().click();
+
     await expect(async () => {
       expect(await page.evaluate(() => window.__trinketRuntime)).toBe('main');
     }).toPass({ timeout: 90_000 });

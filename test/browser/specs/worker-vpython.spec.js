@@ -112,4 +112,139 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     // ...and it actually rasterised: a red sphere occupies >100 pixels.
     expect(result.inFrame).toBeGreaterThan(100);
   });
+
+  // --- Task 7: the real path ------------------------------------------------
+  // Everything above replays fixtures. Everything below runs a STUDENT PROGRAM:
+  // editor -> router -> worker -> vpython wheel -> transport -> scene-ops ->
+  // the page host shim -> GlowScript on the page.
+  //
+  // NOTE (Task 8 owns the fix): needsTransform() in pyodide-worker.js still
+  // gates the async transform on `input(`, so `rate()` in a worker run returns
+  // a coroutine nobody awaits. Every program here is therefore deliberately
+  // STATIC — no rate(), no animation. Animation is Task 8's spec.
+
+  const STATIC_SPHERE = 'from vpython import *\nball = sphere(color=color.red)\n';
+
+  // The path is opt-in and OFF by default, so a dev stack without it in
+  // config/local.yaml would fail these for a configuration reason rather than a
+  // code reason. Probe the flag the page actually received and say what to do.
+  async function skipUnlessWorkerVPython(page) {
+    await page.goto('/embed/python3');
+    const on = await page.evaluate(() =>
+      !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython));
+    test.skip(!on, 'SKIP: features.workerVPython is off in this dev stack. ' +
+      'Add `workerVPython: true` under `features:` in config/local.yaml and ' +
+      '`docker restart trinket-gcr`, then re-run.');
+  }
+
+  async function runProgram(page, src) {
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
+    await page.evaluate((code) => {
+      document.querySelector('.ace_editor').env.editor.setValue(code, 1);
+    }, src);
+    await page.locator('.run-it').first().click();
+  }
+
+  test('a real program renders a sphere via the worker', async ({ page }) => {
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await skipUnlessWorkerVPython(page);
+    await runProgram(page, STATIC_SPHERE);
+
+    await expect(async () => {
+      expect(await page.evaluate(() => window.__trinketRuntime)).toBe('worker');
+      // GLOW IS LAZY (Task 2 finding): a canvas with no objects produces no
+      // <canvas> element at all, so the element itself — not the container — is
+      // the "the scene is really up" signal.
+      const n = await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length);
+      expect(n).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // ...and it is THIS program's sphere, not just any canvas: the student's
+    // `color=color.red` survived Python -> wire -> port -> glow as a real vector.
+    const scene = await page.evaluate(() => {
+      const objs = window.__vpythonScene.frontend._objs();
+      const red = objs.find((o) => o && o.color && o.color.x === 1 && o.color.y === 0 && o.color.z === 0);
+      return { count: objs.filter(Boolean).length, red: !!red };
+    });
+    expect(scene.red, 'the red sphere never reached GlowScript').toBe(true);
+    expect(scene.count).toBeGreaterThan(1);   // canvas + lights + the sphere
+
+    // The scene shares the output pane with the console, exactly like a figure.
+    await expect(page.locator('#graphic-wrap')).toBeVisible();
+    expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
+  });
+
+  test('scene ops carry the live generation, and a stale scene is dropped', async ({ page }) => {
+    // Task 5 stamps `generation` on every scene-ops package and Task 7 owns the
+    // counter it stamps; until now neither had a test. Tap the worker channel
+    // from OUTSIDE the page code so the assertion sees the real wire messages.
+    await page.addInitScript(() => {
+      const RealWorker = window.Worker;
+      window.__sceneOps = [];
+      window.__workers = [];
+      window.Worker = function (url, options) {
+        const w = new RealWorker(url, options);
+        window.__workers.push(w);
+        w.addEventListener('message', (e) => {
+          const d = e && e.data;
+          if (d && d.type === 'scene-ops') window.__sceneOps.push(d.generation);
+        });
+        return w;
+      };
+      window.Worker.prototype = RealWorker.prototype;
+    });
+
+    await skipUnlessWorkerVPython(page);
+    await runProgram(page, STATIC_SPHERE);
+
+    await expect(async () => {
+      const n = await page.evaluate(() =>
+        document.querySelectorAll('#vpython-scene canvas').length);
+      expect(n).toBeGreaterThan(0);
+    }).toPass({ timeout: 180_000 });
+
+    // Every package of the first run carries generation 1 — the page's counter,
+    // bumped once when this run tore the previous (empty) scene down. A literal
+    // 0 would mean the kernel is still being told a constant.
+    const gens = await page.evaluate(() => window.__sceneOps.slice());
+    expect(gens.length).toBeGreaterThan(0);
+    expect([...new Set(gens)]).toEqual([1]);
+    expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(1);
+    expect(await page.evaluate(() => window.__vpythonScene.handled)).toBeGreaterThan(0);
+
+    // A package from a scene the page has already torn down must be dropped, not
+    // drawn. Inject one directly on the worker object: `generation` is the only
+    // thing that makes it stale, and this is the cheapest way to produce one
+    // deterministically.
+    // The counters are read inside the SAME evaluate as the dispatch: the pacer
+    // is live and moves `handled` between two separate round trips.
+    const probe = await page.evaluate(() => {
+      const before = window.__vpythonScene.dropped;
+      window.__workers[0].dispatchEvent(new MessageEvent('message', { data: {
+        type: 'scene-ops', id: 'stale-run', generation: 999,
+        ops: JSON.stringify({ cmds: [{ cmd: 'box', idx: 77, canvas: 0 }] }),
+      }}));
+      return { before, after: window.__vpythonScene.dropped };
+    });
+    expect(probe.after).toBe(probe.before + 1);
+    // ...and it never reached the front-end: idx 77 was never constructed.
+    expect(await page.evaluate(() =>
+      window.__vpythonScene.frontend._objs()[77] === undefined)).toBe(true);
+
+    // Re-run: the scene is thrown away and the next generation is what the
+    // kernel stamps from then on (the worker's Python namespace survives, which
+    // is exactly why the tag has to move).
+    await page.evaluate(() => { window.__sceneOps.length = 0; });
+    await page.locator('.run-it').first().click();
+    await expect(async () => {
+      const after = await page.evaluate(() =>
+        window.__sceneOps.filter((g) => g !== 999));
+      expect(after.length).toBeGreaterThan(0);
+      expect(Math.max(...after)).toBe(2);
+    }).toPass({ timeout: 120_000 });
+    expect(await page.evaluate(() => window.__vpythonScene.generation)).toBe(2);
+  });
 });

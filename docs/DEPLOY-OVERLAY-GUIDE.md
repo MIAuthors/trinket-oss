@@ -167,14 +167,13 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 
 ## Optional: run Web VPython off the main thread (`features.workerVPython`)
 
-> ⛔ **Experimental — not yet functional. Do not enable on any deploy.** The flag
-> and its routing exist, but the pieces behind them do not: the worker does not
-> install the VPython wheel yet and the page has no shim to draw the scene, so
-> turning this on today sends VPython programs to a worker that cannot run them
-> — they fail instead of animating. It is documented here so the flag is not a
-> surprise when it appears in `config/default.yaml`. **The task that completes the
-> path end to end must delete this caveat** — if you can enable it and a scene
-> renders, this paragraph is stale.
+> ⚠️ **Experimental — renders, but does not animate yet. Not for a deploy.** The
+> path is now complete end to end: the worker installs the VPython wheel, runs
+> the program, and the page draws the scene with GlowScript. What is still
+> missing is `rate()` — worker runs do not yet get the async rewrite that turns
+> it into a yield point, so an animation loop does not pace. **Static scenes are
+> correct today; animated ones are not.** Leave this off on real deploys until
+> that lands.
 
 Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
 VPython programs run through the `vpython-jupyter` package inside the Web Worker
@@ -195,7 +194,8 @@ escapes it, sending the program back to the untouched main-thread bridge.
 
 | | |
 |---|---|
-| a VPython animation loop | stoppable; the page stays responsive |
+| a static VPython scene | drawn by GlowScript from the worker's updates |
+| a VPython animation loop | *(intended)* stoppable, page stays responsive — blocked on the `rate()` gap above |
 | Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen; it is not resumable |
 | Python state | persists across runs; the **scene does not** — each run starts a fresh scene |
 | `pause()` / `waitfor()` / widgets | not yet supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
