@@ -301,10 +301,19 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
 
-    // Tap the worker channel from outside the page (same trick as the
-    // generation spec) so claim 3 can be checked on the WIRE: after Stop no
-    // further scene-ops may arrive, which is only true if the pacing clock was
-    // wound down and the worker really is gone.
+    // Two taps, installed before any page script runs.
+    //
+    // (a) The worker channel, so claim 3 can be checked on the WIRE: after Stop
+    //     no further scene-ops may arrive.
+    // (b) The PACING CLOCK ITSELF, counting how many times its interval
+    //     callback fires. (a) alone cannot see a leaked clock: sendSceneEvent
+    //     no-ops once the worker is gone, so a clock left running emits nothing
+    //     and "no more scene-ops" would only ever prove the WORKER is dead.
+    //     Counting callback invocations survives worker death, which is the
+    //     whole point. Matched on SCENE_PACE_MS (pyodide.js) — the tap is
+    //     self-validating: the run asserts the counter moved, so if that
+    //     constant ever changes this fails loudly instead of silently reading 0
+    //     forever.
     await page.addInitScript(() => {
       const RealWorker = window.Worker;
       window.__sceneOps = [];
@@ -316,6 +325,19 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
         return w;
       };
       window.Worker.prototype = RealWorker.prototype;
+
+      const SCENE_PACE_MS = 33;
+      const realSetInterval = window.setInterval;
+      window.__pacerTicks = 0;
+      window.setInterval = function (fn, delay) {
+        if (delay === SCENE_PACE_MS && typeof fn === 'function') {
+          return realSetInterval.call(window, function () {
+            window.__pacerTicks++;
+            return fn.apply(this, arguments);
+          }, delay);
+        }
+        return realSetInterval.apply(window, arguments);
+      };
     });
 
     await skipUnlessWorkerVPython(page);
@@ -344,15 +366,49 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
     expect(Math.abs(x1 - x0),
       'the sphere never moved — rate() is not pacing/flushing the loop').toBeGreaterThan(0.05);
 
+    // The pacing-clock tap is live. Asserted BEFORE it is used as evidence, so a
+    // tap that silently stopped matching cannot make the post-Stop comparison
+    // below a vacuous 0 === 0.
+    expect(await page.evaluate(() => window.__pacerTicks),
+      'the setInterval tap never saw the pacing clock — did SCENE_PACE_MS change?')
+      .toBeGreaterThan(0);
+
     // Claim 2: the page is not the thing doing the work. A main-thread run of
     // this program would never answer at all.
     const t0 = Date.now();
     await page.evaluate(() => document.title);
     expect(Date.now() - t0, 'the page blocked while the animation ran').toBeLessThan(2000);
 
-    // Claim 3: Stop. The button is still up, because the program never ends.
+    // Claim 3: Stop — and it has to be a stop, not a coincidence. A THIRD
+    // sample first: |x1-x0| alone is satisfied by an animation that ran a
+    // handful of frames and then wedged, and a scene that froze BEFORE the
+    // click passes the freeze check further down for free. Requiring motion
+    // between x1 and x2 means the loop is demonstrably still running at the
+    // moment we stop it.
+    await page.waitForTimeout(1500);
+    const x2 = await movingX(page);
+    expect(Math.abs(x2 - x1),
+      'the animation stalled before Stop — the freeze check below would prove nothing')
+      .toBeGreaterThan(0.05);
+
+    // The button is still up, because the program never ends.
     await expect(page.locator('.stop-it')).toBeVisible();
-    await page.locator('.stop-it').click();
+
+    // Clicked from page context rather than with the locator so the counters
+    // are read in the SAME synchronous turn as the click. This matters: a
+    // pacing clock that stopCode() forgot to cancel is still wound down ~500 ms
+    // later by finishVPythonPacing()'s drain, so a baseline taken one round
+    // trip after the click would already contain the leaked ticks and the leak
+    // would be invisible. Reading them the instant stopCode() returns makes the
+    // difference exact — 0 further ticks if it cancelled, ~15 if it did not.
+    const atStop = await page.evaluate(() => {
+      document.querySelector('.stop-it').click();
+      return { ticks: window.__pacerTicks, ops: window.__sceneOps.length };
+    });
+    expect(atStop.ops,
+      'the scene-ops tap never saw a package — the comparison below would be 0 vs 0')
+      .toBeGreaterThan(0);
+
     await expect(async () => {
       expect(await page.evaluate(() =>
         document.querySelector('#console-output')?.innerText || '')).toContain('[stopped');
@@ -360,13 +416,15 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
 
     // ...and it is dead, not merely reported dead: the scene stays where it
     // froze (a stopped program keeps its picture — the student can still orbit
-    // it) and nothing more arrives on the wire, so the clock is off too.
+    // it), nothing more arrives on the wire, and the clock itself has stopped.
     const frozen = await movingX(page);
-    const opsAtStop = await page.evaluate(() => window.__sceneOps.length);
     await page.waitForTimeout(1500);
     expect(await movingX(page), 'the animation kept running after Stop').toBe(frozen);
     expect(await page.evaluate(() => window.__sceneOps.length),
-      'scene-ops still arriving after Stop — the pacing clock is still ticking').toBe(opsAtStop);
+      'scene-ops still arriving after Stop — the worker outlived terminate()').toBe(atStop.ops);
+    expect(await page.evaluate(() => window.__pacerTicks),
+      'the pacing clock is still ticking after Stop — stopVPythonPacer() did not run')
+      .toBe(atStop.ticks);
 
     expect(pageErrors, 'uncaught page exception on the worker vpython path').toEqual([]);
   });
