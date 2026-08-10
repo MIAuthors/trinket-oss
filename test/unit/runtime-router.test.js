@@ -45,6 +45,33 @@ describe('chooseRuntime', () => {
   });
 });
 
+describe('workerVPython (opt-in worker path for VPython)', () => {
+  it('routes VPython to the worker when the flag is on', () => {
+    const r = chooseRuntime('from vpython import *\nsphere()', { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.runtime).toBe('worker');
+    expect(r.reason).toMatch(/vpython.*worker|workerVPython/i);
+  });
+  it('flag off → VPython stays on main (D2 unchanged)', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: false });
+    expect(r.runtime).toBe('main');
+  });
+  it('?runtime=main beats the flag (escape hatch)', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true, queryRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+  });
+  it('?runtime=worker does NOT enable the vpython path by URL', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: false, queryRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+  });
+  it('marks the decision so the kernel can install the wheel', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.vpython).toBe(true);
+  });
+  it('a non-vpython program is not marked', () => {
+    expect(chooseRuntime('print(1)', OPTS).vpython).toBeFalsy();
+  });
+});
+
 describe('hasUnawaitableCall', () => {
   it('flags input() inside a list comprehension', () => {
     expect(hasUnawaitableCall('xs = [input() for _ in range(3)]')).toBe(true);

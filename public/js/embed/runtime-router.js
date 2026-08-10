@@ -55,9 +55,17 @@
     return false;
   }
 
-  // options: { usesVPython, workerEnabled, queryRuntime }
+  // options: { usesVPython, workerEnabled, workerVPython, queryRuntime }
   function chooseRuntime(source, options) {
     var opts = options || {};
+
+    // Opt-in (spec 2026-08-10 V1/V2): vpython-jupyter in the worker. The FLAG is
+    // the only gate — ?runtime=worker must not opt a class in by URL — but
+    // ?runtime=main still escapes, so it is checked inline here rather than by
+    // the query rules below, which this rule sits above.
+    if (opts.usesVPython && opts.workerVPython && opts.queryRuntime !== 'main') {
+      return { runtime: 'worker', vpython: true, reason: 'vpython: workerVPython flag routes to the worker runtime' };
+    }
 
     // VPython first: its bridge does `from js import sphere, box, rate, …`,
     // binding synchronously to the window realm. No query parameter can

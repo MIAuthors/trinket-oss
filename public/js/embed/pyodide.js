@@ -2153,7 +2153,9 @@ function handleWorkerFigure(msg) {
   }
 }
 
-function runInWorker(program, files, serialized) {
+// `decision` is the runtime-router result for this program; `decision.vpython`
+// marks the opt-in worker VPython path so the kernel can install the wheel.
+function runInWorker(program, files, serialized, decision) {
   workerRunError = null;
   mplFigures = {};              // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
@@ -2174,7 +2176,10 @@ function runInWorker(program, files, serialized) {
   });
   if (!graphicWidth) { graphicWidth = Math.round(window.innerWidth / 2); }
 
-  return workerClient.run(program, files, { graphicWidth: graphicWidth }).then(function() {
+  return workerClient.run(program, files, {
+    graphicWidth: graphicWidth,
+    vpython: !!(decision && decision.vpython)
+  }).then(function() {
     finishRun(serialized, workerRunError);
 
     // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here
@@ -2277,6 +2282,7 @@ function startRun() {
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+    workerVPython : !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython),
     queryRuntime  : (api._queryString || {}).runtime
   });
   window.__trinketRuntime       = decision.runtime;   // read by the browser specs
@@ -2284,7 +2290,7 @@ function startRun() {
 
   if (decision.runtime === 'worker') {
     running = true;
-    return runInWorker(workerProgram, workerFiles, serializedCode);
+    return runInWorker(workerProgram, workerFiles, serializedCode, decision);
   }
 
   if (!pyodideReady) {

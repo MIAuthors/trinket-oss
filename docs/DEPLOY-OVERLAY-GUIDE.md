@@ -165,6 +165,35 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 2. **Cold start after a stop.** The next run boots a fresh worker, so it is
    slower than a run that follows a normal finish.
 
+## Optional: run Web VPython off the main thread (`features.workerVPython`)
+
+Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
+VPython programs run through the `vpython-jupyter` package inside the Web Worker
+and GlowScript draws the scene on the page. The animation becomes killable — the
+page cannot freeze, and Stop halts a VPython loop the same way it halts any other
+worker program.
+
+```yaml
+features:
+  workerVPython: true
+```
+
+**The flag is the only gate.** `?runtime=worker` does **not** opt a program into
+this path — it cannot be enabled per-trinket by URL. `?runtime=main` still
+escapes it, sending the program back to the untouched main-thread bridge.
+
+**What changes when this is on:**
+
+| | |
+|---|---|
+| a VPython animation loop | stoppable; the page stays responsive |
+| Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen; it is not resumable |
+| Python state | persists across runs; the **scene does not** — each run starts a fresh scene |
+| `pause()` / `waitfor()` / widgets | not yet supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
+
+With the flag off, VPython behaves exactly as it always has (main thread,
+`from js import …` bridge) — that path is untouched.
+
 ## Example — prod-only infra in `config/local-production.yaml`
 
 ```yaml
