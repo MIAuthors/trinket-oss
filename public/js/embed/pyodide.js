@@ -2405,7 +2405,15 @@ function runInWorker(program, files, serialized, decision) {
     // interpreter; a Run that discards it owes the same explanation, or `x` is
     // simply undefined at the next prompt for no visible reason. resetOutput()
     // has already cleared the console, so this is the first line they see.
-    if (hadInterpreter && replActive) {
+    //
+    // replUsesWorker() is the third condition and it is not redundant:
+    // `replActive` only means a prompt is up, and the REPL follows
+    // `workerRuntime`, NOT `workerVPython` (see replUsesWorker). With
+    // workerVPython on and workerRuntime off the console session lives in the
+    // page's own pyodide.globals, which this discard does not touch — so the
+    // message would tell the student their session was reset when it was not.
+    // A false statement in the console is worse than no statement.
+    if (hadInterpreter && replActive && replUsesWorker()) {
       writeOut('[console session reset — a VPython run starts a fresh interpreter]\n');
     }
   }

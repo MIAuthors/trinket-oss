@@ -133,3 +133,30 @@ pacing-ownership and `solicited`-flag design.
   interactive program (`scene.bind('click', f)` then end-of-file) works because
   the front-end **self-flushes an event when no tick has happened within 100 ms**
   instead of queueing it for a clock that will never come round again (T9).
+- **The factory's shipped API is wider than V2 and the Ownership bullet pin.**
+  Built: `createGlowFrontend({container, send, glow})` →
+  `{handle, tick, poll, pacingStopped, reset, destroy, _objs}`. Two of those
+  matter to V2's host-agnostic purpose and are not in the spec's
+  `{handle(opsObject), reset(), destroy()}`:
+  - `glow` (optional, defaults to `globalThis`) — the GlowScript constructor
+    registry is injected rather than read off the window, which is what lets a
+    node unit test drive the factory against a stub and what would let a second
+    scene, or a host that namespaces glow, work at all.
+  - **`pacingStopped()` is a HOST OBLIGATION, not a convenience.** The clock
+    belongs to the run (see the Built shape note), so when the host stops ticking
+    it must *tell* the front-end, or queued events sit forever waiting for a tick
+    that will never come. Any future VS Code/Colab host has to call it — a host
+    that implements `{container, send}` and `handle/reset/destroy` to the letter
+    and skips this will drop the archetypal `scene.bind('click', f)` program's
+    events. `tick()`/`poll()` are the same seam from the other side: the host
+    decides *when*, the front-end decides *what*.
+- **The Errors section quotes a deferral message that was never shipped, and it
+  names an escape that does not exist.** The spec has *"…not supported in the
+  worker runtime yet — run without `?runtime=worker` (or ask your instructor to
+  disable workerVPython) to use it."* `?runtime=worker` has never been the way
+  into this path (the flag is the only gate — see the router rule above), so that
+  advice would send a student to a URL parameter that changes nothing. What
+  actually ships, in `trinket_worker.py`'s `_DEFER`, is:
+  *"{name} is not supported in the worker runtime yet — run without the
+  workerVPython flag to use it."* The shipped text is the correct one; the spec's
+  is corrected here rather than in the code.

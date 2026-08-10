@@ -171,21 +171,43 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 
 > ⚠️ **Experimental — for a trial, not a production deploy.** The path is joined
 > up end to end and browser-tested: static scenes, `rate()` animations, Stop,
-> `scene.bind(...)` mouse/key handlers, camera interaction, `gcurve`/`gdots`
-> graphs and re-runs all work. What still gates it is validation, not plumbing —
+> `scene.bind('click', …)` mouse handlers, camera interaction, `gcurve`/`gdots`
+> graphs and re-runs all work. (Key events — `bind('keydown', …)` — are wired on
+> the same path as mouse events but have **no test behind them**; treat them as
+> plausible, not verified.) What still gates it is validation, not plumbing —
 > a representative set of M&I programs (to be picked with Todd) has to render and
 > animate identically to the main-thread path first. Three things to know before
 > you turn it on:
 >
 > 1. **Every Run boots a fresh interpreter, so the Python namespace does NOT
->    carry over between Runs.** This is deliberate (design decision V7a), not a
->    limitation: pressing Run here means "run this program from the top", which is
->    exactly what the main-thread VPython bridge and WebVPython do — there is no
->    persistent namespace between runs on either. It is also the one place
->    `workerVPython` behaves differently from `workerRuntime`, where python3
->    worker runs *do* accumulate state across Runs. The REPL session lives in that
->    same interpreter, so a VPython Run also resets the console session and says
->    so on the console rather than leaving it to be discovered.
+>    carry over between Runs — and this is a real, deliberate behaviour change
+>    from the main-thread path.** Read this one before you enable the flag.
+>
+>    trinket's *product model* has no persistent-namespace concept: pressing Run
+>    means "run this program from the top". That is the whole difference from
+>    Jupyter, Colab and VS Code, which keep one kernel alive across cell
+>    executions, and it is why the fresh interpreter is the right semantics here
+>    (design decision V7a).
+>
+>    But the main-thread *implementation* does not enforce that model. Every
+>    main-thread run executes in the same page-level `pyodide.globals`, so a name
+>    left behind by an earlier Run is still visible to the next one — an artifact
+>    of how that path was built, not a promise it makes, but observable all the
+>    same. `workerRuntime` python3 runs preserve it deliberately (decision V7).
+>
+>    So the concrete difference a deployer must know: **a program that only works
+>    because a previous Run left a variable behind works on the main thread and
+>    raises `NameError` under `workerVPython`.** That is the intended behaviour —
+>    the worker path matches the product model and the main-thread path does not —
+>    but it is a change, and a student who has been leaning on it will notice.
+>
+>    One knock-on, *only if `workerRuntime` is also on*: the interactive console
+>    then shares that same worker interpreter, so a VPython Run resets the console
+>    session too, and says so on the console rather than leaving it to be
+>    discovered. With `workerVPython` alone, the console runs on the page and a
+>    VPython Run does not touch it — the REPL follows `workerRuntime`, not this
+>    flag.
+>
 > 2. **Each Run therefore pays a cold boot — about 4 seconds** from click to
 >    rendered scene on the dev stack (measured: 4.1 s on the first run, 3.9 s on
 >    the second), being a fresh Pyodide plus the VPython wheel install. Pyodide's
@@ -193,6 +215,7 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    wheel does not** — `app.js` sends `no-store` on every response it serves, so
 >    the wheel is refetched in full on every Run. That is cheap on localhost and
 >    not cheap over the internet; it is the first follow-up below.
+>
 > 3. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
 >    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
 >    (`wvpython/vpython/core_funcs.py` forwards constructor kwargs straight to
@@ -229,8 +252,8 @@ escapes it, sending the program back to the untouched main-thread bridge.
 | Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen, so it can still be orbited; it is not resumable |
 | Run pressed during a running animation | restarts the program from the top (the same fresh interpreter as any other Run) |
 | a re-run | replaces the scene and renders normally — no page reload needed, no objects stacking up from the previous run |
-| Python state | does **not** carry over between Runs — each Run is a fresh interpreter (see caveat 1). Unlike `workerRuntime` python3 runs, which do |
-| mouse / keys / camera | `scene.bind('click', …)` and friends fire, and orbit/zoom/pan work |
+| Python state | does **not** carry over between Runs — each Run is a fresh interpreter. This differs from **both** the main-thread VPython path *and* `workerRuntime` python3 runs, where variables from an earlier Run stay visible. Deliberate — see caveat 1 |
+| mouse / camera | `scene.bind('click', …)` and friends fire, and orbit/zoom/pan work. Key bindings ride the same path but are untested |
 | `gcurve` / `gdots` | plot — but `size=` at construction is ignored (see caveat 3) |
 | `pause()` / `waitfor()` / widgets | not supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
 
@@ -258,13 +281,17 @@ With the flag off, VPython behaves exactly as it always has (main thread,
    `import time; time.sleep(1)` is untouched and is the workaround. The fix
    belongs in the shared `_async_transform.py`, which has its own 35-test suite
    and an obligation to stay in sync upstream.
-4. **A REPL statement in flight during a live VPython run can wedge the restart.**
-   `worker-client.js` tracks a single in-flight `current` slot, so a console
-   statement submitted mid-animation overwrites the run's resolver; a Run pressed
-   at that moment settles the REPL promise instead of the run, `finishRun()` never
-   fires, `rerunQueued` stays set and the Stop button keeps showing. Needs the
-   console open *and* a statement in flight during an animation. Pre-existing
-   shape, newly reachable now that Run-during-a-run restarts.
+4. **A REPL statement in flight during a live VPython run may wedge the restart —
+   reasoned from the code, NOT reproduced.** `worker-client.js` tracks a single
+   in-flight `current` slot, so a console statement submitted mid-animation
+   overwrites the run's resolver; a Run pressed at that moment would settle the
+   REPL promise instead of the run, `finishRun()` would never fire, `rerunQueued`
+   would stay set and the Stop button would keep showing. It needs all three
+   conditions at once: **`workerRuntime` on as well** (otherwise the REPL never
+   goes through the worker at all — `pushRepl` is unreachable), the console open
+   with a statement in flight, and a live animation. Pre-existing shape, newly
+   reachable now that Run-during-a-run restarts. Recorded as a hypothesis with a
+   clear mechanism; it should be reproduced before it is fixed.
 5. **Widgets and `scene.pause()` / `scene.waitfor()` remain deferred** (design
    decision V5). They raise a clear `NotImplementedError` naming the feature —
    deliberately loud, because a `pause()` that does not pause changes what the
