@@ -272,7 +272,7 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    criterion for this path was "renders and animates identically to the main
 >    path"; it is now **"animates correctly"**. The worker matches upstream
 >    desktop VPython, which is what a student's program was written against, and
->    GlowScript's flat `rate()` is **to be filed** as its own bug against the
+>    GlowScript's flat `rate()` is **filed as [vpython/rsWVPRunner#4](https://github.com/vpython/rsWVPRunner/issues/4)** as its own bug against the
 >    main-thread path rather than treated as something the worker should
 >    imitate. The *physics* is
 >    unaffected either way — M&I programs integrate with their own fixed `dt` —
