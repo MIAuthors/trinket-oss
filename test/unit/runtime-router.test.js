@@ -67,6 +67,15 @@ describe('workerVPython (opt-in worker path for VPython)', () => {
     const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true });
     expect(r.vpython).toBe(true);
   });
+  // The two flags are independent: workerVPython is not "workerRuntime, plus
+  // VPython". A deploy may run python3 on the main thread and still opt VPython
+  // into the worker. This is the direction that matters — it fails if the rule
+  // is ever moved BELOW the `workerEnabled` check.
+  it('does not require workerRuntime — the vpython flag stands alone', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true, workerEnabled: false });
+    expect(r.runtime).toBe('worker');
+    expect(r.vpython).toBe(true);
+  });
   it('a non-vpython program is not marked', () => {
     expect(chooseRuntime('print(1)', OPTS).vpython).toBeFalsy();
   });

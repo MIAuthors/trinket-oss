@@ -167,6 +167,15 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 
 ## Optional: run Web VPython off the main thread (`features.workerVPython`)
 
+> ⛔ **Experimental — not yet functional. Do not enable on any deploy.** The flag
+> and its routing exist, but the pieces behind them do not: the worker does not
+> install the VPython wheel yet and the page has no shim to draw the scene, so
+> turning this on today sends VPython programs to a worker that cannot run them
+> — they fail instead of animating. It is documented here so the flag is not a
+> surprise when it appears in `config/default.yaml`. **The task that completes the
+> path end to end must delete this caveat** — if you can enable it and a scene
+> renders, this paragraph is stale.
+
 Default **`false`**. Opt-in follow-on to `workerRuntime`: when enabled, Web
 VPython programs run through the `vpython-jupyter` package inside the Web Worker
 and GlowScript draws the scene on the page. The animation becomes killable — the
