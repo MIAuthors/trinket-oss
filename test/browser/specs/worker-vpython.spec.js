@@ -143,12 +143,24 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       // glow does not ask for preserveDrawingBuffer, so a read taken outside the
       // drawing frame sees a cleared buffer (measured: 0). The shipped assertion
       // reads inside a rAF callback; `direct` is kept only to document that.
+      //
+      // The read RETRIES across frames rather than sampling one. A single rAF
+      // read assumes glow has drawn by the time the 1500 ms wait is up, which is
+      // usually true and was observed false once, on a loaded machine running
+      // this file's other 9 specs first (SwiftShader was logging "GPU stall due
+      // to ReadPixels" at the time): `inFrame` came back 0 while every other
+      // assertion in this test passed, and the same test passed alone
+      // immediately after. Waiting for the frame asserts the same thing — a red
+      // sphere rasterised — without asserting it happened by an arbitrary
+      // deadline.
       let direct = -1, inFrame = -1, readErr = null;
       try { direct = readRed(); } catch (e) { readErr = String(e); }
       try {
-        inFrame = await new Promise((res, rej) => {
-          requestAnimationFrame(() => { try { res(readRed()); } catch (e) { rej(e); } });
-        });
+        const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+        for (let i = 0; i < 120 && inFrame <= 100; i++) {   // ~2 s at 60 fps
+          await nextFrame();
+          inFrame = readRed();
+        }
       } catch (e) { readErr = String(e); }
 
       return {
@@ -1060,5 +1072,79 @@ test.describe('Worker VPython (vpython-jupyter adoption)', () => {
       window.__vpythonScene.frontend
         ? window.__vpythonScene.frontend._objs().filter(Boolean).length : 0),
       'nothing was drawn before the deferral').toBeGreaterThan(1);
+  });
+
+  // The console-reset message must not be a LIE. Two sites say "console session
+  // reset" when the worker interpreter is discarded — a VPython Run, and Stop.
+  // Both are correct only when the REPL is in that same worker, and it usually
+  // is NOT: the REPL follows `workerRuntime`, while a VPython run reaches the
+  // worker under `workerVPython`. In the workerVPython-only config the console
+  // session lives in the page's own pyodide, which terminate() never touches.
+  //
+  // This dev stack runs both flags, so the spec MAKES the single-flag config in
+  // the page: replUsesWorker() reads window.trinket.config at CALL time, so
+  // setting workerRuntime false before the Run is exactly the deploy shape. That
+  // is also why this needs no second stack — the earlier claim that it did was
+  // wrong.
+  const CONSOLE_RESET = 'console session reset';
+
+  test('with workerRuntime off, neither a VPython Run nor Stop claims to reset the console',
+       async ({ page }) => {
+    test.setTimeout(300_000);   // two cold Pyodide boots (page REPL + worker) plus the wheel
+
+    const consoleText = () => page.evaluate(() =>
+      document.querySelector('#console-output')?.innerText || '');
+
+    await skipUnlessWorkerVPython(page);        // leaves us on /embed/python3
+    await expect(page.locator('.ace_editor').first()).toBeVisible({ timeout: 30_000 });
+    await page.evaluate(() => { window.trinket.config.workerRuntime = false; });
+
+    // Arm the REPL — `replActive` is the precondition both messages are gated
+    // on, so without this the spec would pass for the wrong reason. The banner
+    // is the page's own Pyodide booting, which is the whole point: this session
+    // is NOT in the worker.
+    await page.evaluate(() => (window.jQuery || window.$)(document).trigger('trinket.code.console'));
+    await expect(async () => {
+      expect(await consoleText(), 'the page REPL never armed').toContain('on Pyodide');
+    }).toPass({ timeout: 180_000 });
+
+    const runProgram = async (src) => {
+      await page.evaluate((code) => {
+        document.querySelector('.ace_editor').env.editor.setValue(code, 1);
+      }, src);
+      await page.locator('.run-it').first().click();
+    };
+
+    const sceneUp = async () => {
+      await expect(async () => {
+        expect(await page.evaluate(() =>
+          document.querySelectorAll('#vpython-scene canvas').length)).toBeGreaterThan(0);
+      }).toPass({ timeout: 180_000 });
+    };
+
+    // Run 1 gives the page a live worker interpreter...
+    await runProgram(STATIC_SPHERE);
+    await sceneUp();
+
+    // ...so run 2 is the one that DISCARDS one, which is what the Run-path
+    // message is gated on (`hadInterpreter`). An animation, so Stop has
+    // something to kill below.
+    await runProgram(ANIMATION);
+    await expect(page.locator('.stop-it')).toBeVisible({ timeout: 180_000 });
+    await sceneUp();
+
+    expect(await consoleText(),
+      'the Run told the student their console session was reset — it was not, ' +
+      'the REPL is on the page under workerRuntime:false').not.toContain(CONSOLE_RESET);
+
+    // Stop discards the same interpreter and has the same duty of honesty.
+    await page.locator('.stop-it').first().click();
+    await expect(async () => {
+      expect(await consoleText(), 'Stop said nothing at all').toContain('[stopped');
+    }).toPass({ timeout: 60_000 });
+
+    expect(await consoleText(),
+      'Stop told the student their console session was reset — it was not')
+      .not.toContain(CONSOLE_RESET);
   });
 });

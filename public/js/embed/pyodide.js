@@ -2718,7 +2718,14 @@ function stopCode() {
     // With the explorer on, an empty table would read as "your program defined
     // nothing" — say why instead, in the console the student is already reading.
     // (#debug-note belongs to the step debugger, which may not be enabled.)
-    if (replActive) {
+    // replUsesWorker() and not `replActive` alone: a prompt being up does NOT
+    // mean the session lives in the worker we just killed. The REPL follows
+    // `workerRuntime`, while a VPython run reaches this branch under
+    // `workerVPython` — so in the workerVPython-only config the console session
+    // is in the page's own pyodide, untouched by terminate(). Claiming it was
+    // reset would be false, and re-arming would print a second banner over a
+    // prompt that was never consumed.
+    if (replActive && replUsesWorker()) {
       // Terminating discards the interpreter, so the console session's variables
       // are gone. Say so rather than letting a student wonder why `x` vanished.
       writeOut('\n[stopped — console session reset]\n');

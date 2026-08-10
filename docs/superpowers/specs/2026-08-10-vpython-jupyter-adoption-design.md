@@ -69,7 +69,7 @@ The spike's page-side `setInterval` pacing loop is **removed**: the ported front
 
 - Wheel install/import failures → the existing stderr → #107-filtered traceback path.
 - Front-end JS exceptions → console line + existing `collectErrorData` telemetry.
-- Deferred features (`pause`, `waitfor`, widgets) → raise `NotImplementedError` with: *"scene.pause() is not supported in the worker runtime yet — run without ?runtime=worker (or ask your instructor to disable workerVPython) to use it."* A normal traceback shows the student the offending line. No silent no-ops: a pause that doesn't pause corrupts program meaning.
+- Deferred features (`pause`, `waitfor`, widgets) → raise `NotImplementedError` with: *"scene.pause() is not supported in the worker runtime yet — run without ?runtime=worker (or ask your instructor to disable workerVPython) to use it."* ⚠️ **This wording was never shipped and its `?runtime=worker` advice is wrong — see the implementation notes at the end for what `trinket_worker.py` actually says.** A normal traceback shows the student the offending line. No silent no-ops: a pause that doesn't pause corrupts program meaning.
 
 ## Testing
 
@@ -142,14 +142,22 @@ pacing-ownership and `solicited`-flag design.
     registry is injected rather than read off the window, which is what lets a
     node unit test drive the factory against a stub and what would let a second
     scene, or a host that namespaces glow, work at all.
-  - **`pacingStopped()` is a HOST OBLIGATION, not a convenience.** The clock
-    belongs to the run (see the Built shape note), so when the host stops ticking
-    it must *tell* the front-end, or queued events sit forever waiting for a tick
-    that will never come. Any future VS Code/Colab host has to call it — a host
-    that implements `{container, send}` and `handle/reset/destroy` to the letter
-    and skips this will drop the archetypal `scene.bind('click', f)` program's
-    events. `tick()`/`poll()` are the same seam from the other side: the host
-    decides *when*, the front-end decides *what*.
+  - **`pacingStopped()` is a HOST OBLIGATION, not a convenience** — and the
+    reason is narrower than "events would be lost", because they would not be.
+    The clock belongs to the run, so the front-end already self-flushes any event
+    arriving more than `PACING_GRACE_MS` (~100 ms) after the last tick; that is
+    the backstop for a host that forgets, and it is what makes the bullet above
+    true. What the backstop cannot cover is the window it defines: an event
+    arriving **within** that ~100 ms still looks like it has a tick coming, so it
+    is queued for one that never arrives and sits there until some later event
+    happens to flush it. Only the host knows the clock has stopped, so only the
+    host can close that window — `pacing_stopped()` sets `last_tick = -Infinity`
+    and flushes. A VS Code or Colab host that implements `{container, send}` and
+    `handle/reset/destroy` to the letter and skips this does not lose a click; it
+    **delays** one landing in that window, indefinitely and invisibly, which is
+    the worse bug to diagnose. The 100 ms grace is a backstop, not the contract.
+    `tick()`/`poll()` are the same seam from the other side: the host decides
+    *when*, the front-end decides *what*.
 - **The Errors section quotes a deferral message that was never shipped, and it
   names an escape that does not exist.** The spec has *"…not supported in the
   worker runtime yet — run without `?runtime=worker` (or ask your instructor to
