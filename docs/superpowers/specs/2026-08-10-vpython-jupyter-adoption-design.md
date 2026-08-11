@@ -79,7 +79,18 @@ The spike's page-side `setInterval` pacing loop is **removed**: the ported front
 
 ## Rollout and success criterion
 
-Flag off everywhere by default; trials enable it in untracked `local.yaml`. Success: a representative set of M&I programs — **to be picked with Todd** — renders and **animates correctly** on both trials, and Stop kills each of them mid-animation. Only then does "should this become the default" become a question, and it is not this spec's question.
+Flag off everywhere by default; trials enable it in untracked `local.yaml`. Success: a representative set of programs renders and **animates correctly** on both trials, and Stop kills each of them mid-animation. Only then does "should this become the default" become a question, and it is not this spec's question.
+
+**Which programs — corrected 2026-08-11 (Steve).** This flag engages *only* on the `python3` / `pyodide` type: `usesVPython()` lives in `pyodide.js`, and the `glowscript` type never loads that file (it runs RapydScript + `RSrun.min.js`). So the acceptance set is **Python trinkets that import the `vpython` module**, not the Web VPython corpus.
+
+Steve's priority, verbatim in effect: *"Ultimately I think glowscript trinkets will want to use this path, but it's not urgent. Our more urgent need is for the python/pyodide trinkets to be able to use the vpython module in the worker context."*
+
+Two consequences:
+
+1. **The urgent need is what this spec built.** A Python trinket using `vpython` now runs off the main thread, animates under `rate()`, and is stoppable — which the main-thread bridge could never offer.
+2. **Routing the `glowscript` type through this path is the eventual destination, and is out of scope here.** It is a much larger change than a flag: that type has no Pyodide at all today, so it would mean running a Python interpreter where RapydScript transpilation runs now. Recorded so the direction is not lost, not planned.
+
+⚠️ **This changes what decision V5's deferrals cost.** V5 scoped v1 to "M&I core" and deferred `compound()`, `text()`, `extrusion()`, `scene.mouse.pick()`, `obj.clone()`, widgets and `pause`/`waitfor` on the grounds that the M&I course corpus rarely uses them. That justification was about *Web VPython course material*. The actual audience is general Python-trinket authors using `vpython`, whose usage profile is not the same — `text()` and `compound()` in particular are ordinary things to reach for. The deferrals remain **loud** (a clear `NotImplementedError`, never a silent failure or a hang), so nothing is unsafe; but which of them to implement next should be decided against this audience rather than against the M&I corpus.
 
 > **Amended 2026-08-10.** This read "animates identically to the main path" until implementing `rate()` compensation showed the main path is the one that paces wrongly: GlowScript's own `rate()` sleeps a flat `1000/N` ms regardless of what the loop body cost, so a heavy loop runs slow there and at its requested rate here (measured: 38.0 Hz vs 54.6 Hz for `rate(60)` with an 8 ms body). Holding the worker to "identical" would have meant reproducing that bug deliberately. The worker matches upstream desktop VPython, which is what a student's program was written against; GlowScript's flat `rate()` is **to be filed** separately against the main-thread path. See caveat 5 in `docs/DEPLOY-OVERLAY-GUIDE.md` for the full measurements.
 
