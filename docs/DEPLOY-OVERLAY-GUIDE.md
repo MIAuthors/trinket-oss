@@ -379,6 +379,25 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    bespoke package's `__all__`, which changes what `from vpython import *` means
 >    on the default runtime — a product call, deliberately left to Steve rather
 >    than folded into the seeding removal.
+>
+>    🚫 **Do not "fix" this by stripping the imports from vpython-jupyter**
+>    (`vpython/__init__.py:53-56`, `from math import *` / `from numpy import
+>    arange` / `from random import random`). That was considered and rejected,
+>    and the reason is the distinction this whole caveat rests on:
+>
+>    * A module importing things into **its own namespace** is ordinary Python.
+>      `import vpython as vp` still requires `vp.random` — nothing has been done
+>      to the script's namespace. A developer who writes `from vpython import *`
+>      has explicitly asked for whatever that module exposes.
+>    * What WebVPython's interpreter does — and what trinket copied — is inject
+>      names into **the running script's own namespace, before the script runs**.
+>      The script never asked. *That* is the thing this rule forbids, and it is
+>      what was removed above.
+>
+>    So vpython-jupyter is not violating the rule and needs no change; removing
+>    those lines would break `from vpython import *` for every notebook and
+>    desktop user of the published PyPI package, to fix something that is not a
+>    problem.
 
 Default **`false`**. When enabled, Web VPython programs run through the
 `vpython-jupyter` package inside the Web Worker and GlowScript draws the scene on
