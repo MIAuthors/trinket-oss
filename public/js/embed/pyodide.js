@@ -818,19 +818,25 @@ function setupGlowScene() {
   return glowScene;
 }
 
-// Fetch + unpack the vpython package into Pyodide's FS and import it (plus the
-// math/random star-imports VPython programs assume). Memoized; assumes Pyodide
-// is ready and GlowScript globals exist. Mirrors wmWVPRunner's run sequence.
+// Fetch + unpack the vpython package into Pyodide's FS so `import vpython`
+// resolves. Memoized; assumes Pyodide is ready and GlowScript globals exist.
+//
+// NOTHING IS IMPORTED INTO THE USER'S NAMESPACE HERE — that is the rule, not an
+// omission (Steve's ruling, 2026-08-10; docs/DEPLOY-OVERLAY-GUIDE.md known-gap 7).
+// This used to run `from math import *`, `from random import *` and
+// `from vpython import *` before every program usesVPython() matched, a sequence
+// copied from wmWVPRunner. wmWVPRunner is a WEB VPYTHON runner, where those names
+// ARE the environment (the RapydScript compiler makes `from vpython import *` the
+// default). Here the trinket is a PLAIN PYTHON trinket that merely mentions
+// vpython, and seeding it shadowed builtins with names the student never imported
+// — propping up programs (`import vpython as vp`, then a bare `color.red`) that
+// fail in desktop VPython, in a notebook and in plain Python. A python3 trinket
+// now gets exactly what it imports, on both runtimes.
 function ensureVpython() {
   if (vpythonLoading) return vpythonLoading;
   vpythonLoading = fetch(VPYTHON_ZIP_URL)
     .then(function(r) { return r.arrayBuffer(); })
-    .then(function(buf) {
-      pyodide.unpackArchive(buf, 'zip');
-      return pyodide.runPythonAsync('from math import *');
-    })
-    .then(function() { return pyodide.runPythonAsync('from random import *'); })
-    .then(function() { return pyodide.runPythonAsync('from vpython import *'); });
+    .then(function(buf) { pyodide.unpackArchive(buf, 'zip'); });
   return vpythonLoading;
 }
 
@@ -870,19 +876,35 @@ function runVpython(prog) {
     return ensureVpython();
   }).then(function() {
     // The bridge binds `scene` and `rate` to window.* at import time (once).
-    // Re-point them in Python before the user code imports them:
+    // Re-point them ON THE MODULE before the user code imports anything:
     //  - scene: the canvas was rebuilt above, so target the fresh one.
-    //  - rate:  bind to the cancellation-wrapped window.rate so a re-run can
-    //           interrupt the loop (the import-time binding caught the
-    //           unwrapped rate, defeating cancellation otherwise).
+    //  - rate:  bind to the cancellation-wrapped window.rate so a re-run (or
+    //           Stop) can interrupt the loop.
+    //
+    // MODULE ATTRIBUTES ONLY — no bare `scene = …` / `rate = …` globals. Those
+    // were removed with the star-imports above (known-gap 7): a python3 trinket
+    // gets only what it imports. The re-pointing is unaffected, because
+    // `import vpython as _vpy` binds THE module object in sys.modules — the very
+    // same object a student's own `from vpython import *` then reads from, and it
+    // reads at import time, i.e. after these two assignments. Both names are in
+    // vpython's `__all__`, so a student who writes that import still receives the
+    // WRAPPED rate and the CURRENT scene. Proven by poisoning it: setting
+    // `_vpy.rate = None` makes her `rate(30)` raise TypeError, so this really is
+    // the channel her namespace is filled from.
+    //
+    // `_vpy.scene` is load-bearing every run — setupGlowScene() destroyed the old
+    // canvas, so without it a re-run draws into a dead one. `_vpy.rate` is
+    // currently belt-and-braces: installRateCancellation() above wraps
+    // window.rate BEFORE ensureVpython() is awaited, so core_funcs' import-time
+    // `from js import rate` already captured the wrapped one, and removing this
+    // line does not break Stop today (measured). Keep it anyway — it is what pins
+    // the guarantee if that ordering is ever changed. Not dead code.
     return pyodide.runPythonAsync(
       'import vpython as _vpy\n' +
       'from js import scene as _js_scene\n' +
       'from js import rate as _wrapped_rate\n' +
       '_vpy.scene = _vpy.canvas(jsObj=_js_scene)\n' +
-      '_vpy.rate = _wrapped_rate\n' +
-      'scene = _vpy.scene\n' +
-      'rate = _wrapped_rate\n'
+      '_vpy.rate = _wrapped_rate\n'
     );
   }).then(function() {
     // Load bundled packages the program imports (numpy, matplotlib, …).
@@ -896,10 +918,15 @@ function runVpython(prog) {
       return pyodide.runPythonAsync(MATPLOTLIB_SETUP_CODE);
     }
   }).then(function() {
-    // Everything in globals now is library/bootstrap (the vpython/math/random
-    // star-imports, scene, rate, …). Fold it into the explorer baseline once so
-    // those names are hidden — but only once, so vars created by earlier runs
-    // stay visible on re-runs.
+    // Everything in globals now is library/bootstrap, not the student's. Since
+    // the star-imports went (known-gap 7) that is a much shorter list: the
+    // `_vpy` module handle, the `_js_scene` / `_wrapped_rate` js handles, and
+    // whatever `import vpython` / the matplotlib setup left behind (`matplotlib`
+    // itself; MATPLOTLIB_SETUP_CODE dels its own `_plt`). Fold it into the
+    // explorer baseline once so those names are hidden — but only once, so vars
+    // created by earlier runs stay visible on re-runs. Still needed even though
+    // the underscore trio is also in VARS_HELPER's _SKIP: _SKIP does not know
+    // about the module-level names an import drags in.
     if (!vpythonBaselineCaptured) {
       try { pyodide.runPython('__trinket_baseline__ |= set(globals().keys())'); } catch (e) {}
       vpythonBaselineCaptured = true;

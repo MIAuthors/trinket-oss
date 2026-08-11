@@ -292,17 +292,22 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    through the property setter and works on both paths too.
 >
 > 7. **No hidden star-imports — a python3 trinket gets nothing it did not
->    import.** The main-thread path runs `from math import *`,
->    `from random import *` and `from vpython import *` before the student's code
->    whenever `usesVPython(source)` matches (`pyodide.js:830-833`, in
->    `ensureVpython()`). The worker path does not, and deliberately so.
+>    import.** ✅ **CLOSED 2026-08-10 — this is no longer a divergence.** Both
+>    runtimes now obey the rule. It is written up here as a *behaviour change to
+>    the default runtime*, which is what it is, rather than as a gap.
 >
->    The consequence is visible: a program that says `import vpython as vp` and
->    then uses a bare `color.red`, `sqrt(2)` or `random()` runs on the main
->    thread and raises `NameError` under `workerVPython`. **The worker is
->    right.** That program has a real bug — paste it into desktop VPython, a
->    Jupyter notebook or plain Python and it fails there too. The main-thread
->    path is propping it up.
+>    It used to be one. The main-thread path ran `from math import *`,
+>    `from random import *` and `from vpython import *` before the student's code
+>    whenever `usesVPython(source)` matched (in `ensureVpython()`), and seeded
+>    bare `scene` / `rate` globals on top of that in `runVpython()`. The worker
+>    path never did, deliberately.
+>
+>    The consequence was visible: a program that says `import vpython as vp` and
+>    then uses a bare `color.red`, `sqrt(2)` or `random()` ran on the main thread
+>    and raised `NameError` under `workerVPython`. **The worker was right.** That
+>    program has a real bug — paste it into desktop VPython, a Jupyter notebook or
+>    plain Python and it fails there too. The main-thread path was propping it up.
+>    Both paths now raise the same `NameError` on the same line.
 >
 >    The rule this follows, by trinket type:
 >
@@ -312,14 +317,68 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    | **Python** (`python3` / `pyodide`) | **Explicit imports only.** A Python trinket is a Python trinket, whatever library it happens to use. |
 >
 >    The seeding in `ensureVpython()` was copied from wmWVPRunner, which *is* a
->    Web VPython runner, so it was right there and wrong here: it applies to a
->    plain Python trinket whose source merely mentions vpython, and it shadows
+>    Web VPython runner, so it was right there and wrong here: it applied to a
+>    plain Python trinket whose source merely mentions vpython, and it shadowed
 >    builtins with `math`, `random` and `vpython` names the student never asked
->    for. Fixing the main-thread path is a live-behaviour change to the default
->    runtime, so it is tracked separately rather than done under this flag.
+>    for.
+>
+>    **What survived the removal, and why it had to.** `runVpython()` still runs,
+>    before the student's code:
+>
+>    ```python
+>    import vpython as _vpy
+>    from js import scene as _js_scene
+>    from js import rate as _wrapped_rate
+>    _vpy.scene = _vpy.canvas(jsObj=_js_scene)   # the canvas rebuilt for THIS run
+>    _vpy.rate  = _wrapped_rate                  # the cancellation-wrapped rate
+>    ```
+>
+>    Those are **module attributes, not globals**, so they seed nothing. They
+>    still reach a student who writes `from vpython import *` herself, because
+>    `import vpython as _vpy` binds the module object in `sys.modules` — the same
+>    object her star-import reads from, at the moment it runs, which is after
+>    these assignments — and both names are in vpython's `__all__`. Verified by
+>    poisoning it: setting `_vpy.rate = None` makes her `rate(30)` raise
+>    `TypeError: 'NoneType' object is not callable`, so that assignment is
+>    demonstrably the channel her namespace is filled from.
+>
+>    (For `rate` specifically the assignment is currently belt-and-braces:
+>    `installRateCancellation()` wraps `window.rate` *before* `ensureVpython()` is
+>    awaited, so `core_funcs`' import-time `from js import rate` already captures
+>    the wrapped one. Removing the line does not break Stop today. It is kept
+>    because it is what pins the guarantee against a future reordering — the code
+>    comment there says so.)
 >
 >    **What a student does about it:** add `from vpython import *`, or prefix the
 >    names (`vp.color.red`, `vp.rate(100)`) — either is correct and portable.
+>
+>    Covered by `test/browser/specs/vpython-namespace.spec.js`, which runs the
+>    correct and the buggy form of the same real program on **both** runtimes, and
+>    guards the Stop-kills-a-`rate()`-loop behaviour on the main thread.
+>
+>    ⚠️ **One divergence remains, in the opposite direction, and it is OPEN.**
+>    `from vpython import *` supplies **math/random names on the worker but not on
+>    the main thread** — measured, both runtimes, on the dev stack:
+>
+>    | name | main thread | worker |
+>    |---|---|---|
+>    | `sqrt`, `pi`, `sin`, `cos`, `random` | **ABSENT** | **PRESENT** (`sqrt(4)` → `2.0`) |
+>    | `vector`, `color`, `scene`, `rate` | PRESENT | PRESENT |
+>
+>    The two paths run different vpython packages: the bespoke
+>    `public/js/embed/wvpython/vpython/__init__.py` declares a restrictive
+>    `__all__` of VPython names only; the worker's upstream `vpython-7.6.5` wheel
+>    declares no top-level `__all__` and so leaks the math/random names its
+>    submodules imported. The worker therefore matches **desktop VPython** (same
+>    package), and the main thread is now *stricter than desktop VPython* — so
+>    `from vpython import *` followed by `sqrt(2)` runs in a notebook, runs under
+>    `workerVPython`, and raises `NameError` on the default runtime.
+>
+>    This is a packaging difference, not the namespace rule: nothing is being
+>    seeded either way. Aligning them means adding the math/random names to the
+>    bespoke package's `__all__`, which changes what `from vpython import *` means
+>    on the default runtime — a product call, deliberately left to Steve rather
+>    than folded into the seeding removal.
 
 Default **`false`**. When enabled, Web VPython programs run through the
 `vpython-jupyter` package inside the Web Worker and GlowScript draws the scene on

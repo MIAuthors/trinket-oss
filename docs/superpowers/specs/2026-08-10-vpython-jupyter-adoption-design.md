@@ -85,10 +85,11 @@ Flag off everywhere by default; trials enable it in untracked `local.yaml`. Succ
 
 ## Namespace rule (added 2026-08-10, Steve's ruling)
 
-The worker path runs student code with **no implicit imports**. The main-thread
-path does not: `ensureVpython()` (`pyodide.js:830-833`) runs `from math import *`,
+Both paths run student code with **no implicit imports**. The main-thread path
+did not, until this was fixed: `ensureVpython()` ran `from math import *`,
 `from random import *` and `from vpython import *` before any program that
-`usesVPython()` matches — seeding copied from wmWVPRunner.
+`usesVPython()` matched — seeding copied from wmWVPRunner — and `runVpython()`
+seeded bare `scene` / `rate` globals on top.
 
 The rule, stated by trinket type rather than by source contents:
 
@@ -106,8 +107,17 @@ main-thread path props it up.
 
 Found by running a real program of Steve's, which is also why it was missed: every
 spec in this plan writes `from vpython import *` explicitly, so none of them
-exercise the seeded namespace. Removing the seeding from the main-thread path is a
-live-behaviour change to the default runtime and is tracked separately.
+exercised the seeded namespace.
+
+**Done 2026-08-10.** The seeding is gone from the main-thread path: the three
+star-imports and the two bare globals. What stays is the module re-pointing
+(`_vpy.scene = _vpy.canvas(...)`, `_vpy.rate = _wrapped_rate`) — module
+attributes seed nothing, and they are how a student's own `from vpython import *`
+still receives the current canvas and the cancellation-wrapped `rate`, which is
+what keeps Stop able to kill a main-thread animation. This is a live-behaviour
+change to the DEFAULT runtime, independent of the `workerVPython` flag; see
+known-gap 7 in `docs/DEPLOY-OVERLAY-GUIDE.md` for the deploy-facing write-up and
+`test/browser/specs/vpython-namespace.spec.js` for the contract.
 
 ---
 
