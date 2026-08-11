@@ -203,19 +203,31 @@
 
   {% if config.features.stepDebugger %}
   /* --- Step-through debugger (record & replay) ---------------------------- */
-  /* Foundation makes <label> display:block (full width), which would push the
-     debug controls onto their own line — lay the toolbar out as one flex row
-     instead, with the controls pinned right. */
+  /* Two stacked rows: step controls on top, options beneath. They shared one
+     flex row until Phases 2-3 added the slider and the breakpoint chevrons —
+     at which point the controls and the "Show functions & classes" label were
+     fighting for the same width and the buttons crowded together. Giving the
+     controls their own full-width row lets the slider breathe. */
   #embed_content_python #variables-toolbar {
+    display: block;
+  }
+  #embed_content_python #variables-toolbar .variables-toolbar-row {
     display: flex;
     align-items: center;
   }
+  #embed_content_python #variables-toolbar #variables-toolbar-steps + #variables-toolbar-options {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid #ededed;
+  }
+  /* Foundation makes <label> display:block (full width); keep it inline so the
+     checkbox row doesn't stretch. */
   #embed_content_python #variables-toolbar label {
     flex: 0 0 auto;
     margin: 0;
   }
-  #embed_content_python #variables-toolbar #debug-launch,
-  #embed_content_python #variables-toolbar #debug-controls {
+  /* Push the exit "x" to the far right of its own row. */
+  #embed_content_python #variables-toolbar #debug-exit {
     margin-left: auto;
   }
   #embed_content_python #variables-toolbar .debug-btn {
@@ -226,6 +238,18 @@
     -webkit-user-select: none; -moz-user-select: none; user-select: none;
   }
   #embed_content_python #variables-toolbar .debug-btn:hover { color: #14435f; }
+  /* Step-through shortcut in the output pane, sitting left of the clear-output
+     icon (which is right:5px in embed/_python.scss). */
+  #embed_content_python #debug-start-alt {
+    position: absolute;
+    top: 5px;
+    right: 34px;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: #2b6c9e;
+    cursor: pointer;
+  }
+  #embed_content_python #debug-start-alt:hover { color: #14435f; }
   #embed_content_python #variables-toolbar .debug-start {
     border: 1px solid #c6d8e4;
     border-radius: 3px;
@@ -243,11 +267,14 @@
     margin: 0 6px;
   }
   #embed_content_python #variables-toolbar #debug-recording { color: #b06000; }
-  /* Phase 2: step scrubber. Foundation styles input[type=range] minimally;
-     keep it compact so the toolbar stays one line. */
+  /* Phase 2: step scrubber. Foundation styles input[type=range] minimally. */
   #embed_content_python #variables-toolbar #debug-slider {
     display: inline-block;
-    width: 110px;
+    /* Grows into the space freed by giving the controls their own row, but
+       flex-shrinks in a narrow embed so the buttons never get pushed off. */
+    flex: 0 1 auto;
+    width: 170px;
+    min-width: 70px;
     margin: 0 6px;
     vertical-align: middle;
     cursor: pointer;
@@ -393,6 +420,13 @@
       <div id="console-wrap" class="hide">
         <div id="console-output" aria-live="assertive" aria-label="Code Output"></div>
         <a id="reset-output" title="clear output"><i class="fa fa-ban"></i></a>
+        {% if config.features.variableExplorer and config.features.stepDebugger %}
+        {# Second entry point for Step through. The launcher itself lives in the
+           Variables panel, which a student has to know to open first — this puts
+           it where they already are after clicking Run. Switches to Variables
+           and starts recording, so both routes end in the same place. #}
+        <a id="debug-start-alt" role="button" tabindex="0" title="Step through this program line by line"><i class="fa fa-step-forward"></i></a>
+        {% endif %}
       </div>
     </div>
 
@@ -400,8 +434,8 @@
     <div id="variables-wrap" class="hide" aria-label="Variables">
       <div id="variables-inner">
         <div id="variables-toolbar">
-          <label><input type="checkbox" id="variables-show-callables"> Show functions &amp; classes</label>
           {% if config.features.stepDebugger %}
+          <div class="variables-toolbar-row" id="variables-toolbar-steps">
           <span id="debug-launch">
             <span id="debug-start" class="debug-btn debug-start" role="button" tabindex="0" title="Records your program running from scratch (as a standalone script — nothing carries over from earlier runs), then lets you step through it"><i class="fa fa-step-forward"></i> Step through</span>
             <span id="debug-recording" class="hide">recording&hellip; <span id="debug-cancel" class="debug-btn" role="button" tabindex="0" title="Cancel">cancel</span></span>
@@ -418,7 +452,11 @@
             <span id="debug-note"></span>
             <span id="debug-exit" class="debug-btn" role="button" tabindex="0" title="Exit step-through"><i class="fa fa-times"></i></span>
           </span>
+          </div>
           {% endif %}
+          <div class="variables-toolbar-row" id="variables-toolbar-options">
+            <label><input type="checkbox" id="variables-show-callables"> Show functions &amp; classes</label>
+          </div>
         </div>
         <div id="variables-scroll" aria-live="polite">
           <table id="variables-table">

@@ -2512,6 +2512,13 @@ window.TrinketAPI = {
           };
         };
         $('#debug-start').on('click keydown', debugActivate(runStepThrough));
+        // Same action from the output pane, where a student lands after Run —
+        // show the Variables panel first so the step controls are on screen
+        // rather than recording behind a tab they haven't opened.
+        $('#debug-start-alt').on('click keydown', debugActivate(function() {
+          showVariables();
+          runStepThrough();
+        }));
         $('#debug-cancel').on('click keydown', debugActivate(function() { debugCancelled = true; }));
         $('#debug-first').on('click keydown', debugActivate(function() { debugStepTo(0); }));
         $('#debug-back').on('click keydown', debugActivate(function() { debugStepTo(debugIdx - 1); }));
