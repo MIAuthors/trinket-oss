@@ -316,6 +316,14 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    | **Web VPython** (`glowscript`) | VPython names available by construction — the RapydScript compiler treats `from vpython import *` as the default (`GScompiler.js:503`) and delegates `random` to RapydScript-NG. Nothing to change; that is the environment those students expect. |
 >    | **Python** (`python3` / `pyodide`) | **Explicit imports only.** A Python trinket is a Python trinket, whatever library it happens to use. |
 >
+>    **Who this can break, in practice: almost nobody** (Steve, 2026-08-11).
+>    Using `vpython` inside a *Python* trinket is a capability added only weeks
+>    ago and barely known; the few people using it are not generally writing
+>    `from vpython import *` either. So the population at risk is small and
+>    recent, which is why this shipped as a straight fix rather than behind a
+>    deprecation. Web VPython trinkets — where the seeded namespace *is* the
+>    expected environment — are untouched: that type never reaches `pyodide.js`.
+>
 >    The seeding in `ensureVpython()` was copied from wmWVPRunner, which *is* a
 >    Web VPython runner, so it was right there and wrong here: it applied to a
 >    plain Python trinket whose source merely mentions vpython, and it shadowed
