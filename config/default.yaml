@@ -404,6 +404,19 @@ app:
   hideGeneratedCode:
     - blocks
     - glowscript-blocks
+  # Trinket types whose embed honours ?runtime= (#108). Only the Pyodide-backed
+  # embed consults the runtime router; skulpt `python`, glowscript, java, html,
+  # blocks, music and R ignore the parameter entirely, so the share dialog must
+  # not offer a runtime choice for them.
+  runtimeOption:
+    - python3
+    - pyodide
+  # Trinket types that support the calculator layout (runMode=calculator): the
+  # output front and centre with the code behind a toggle. Implemented in the
+  # glowscript embed only (lib/views/embed/glowscript.html, public/js/embed/
+  # glowscript.js), so the share dialog offers it there and nowhere else.
+  calculatorOption:
+    - glowscript
   runOption:
     python:
       - run
