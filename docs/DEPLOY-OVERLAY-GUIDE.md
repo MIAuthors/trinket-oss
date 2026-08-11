@@ -290,6 +290,36 @@ day-to-day testing set the flag in `config/local.yaml` instead.
 >    upstream vpython-jupyter bug, not trinket's. `radius=` is honoured on both
 >    paths and is the workaround. Setting `.size` *after* construction goes
 >    through the property setter and works on both paths too.
+>
+> 7. **No hidden star-imports — a python3 trinket gets nothing it did not
+>    import.** The main-thread path runs `from math import *`,
+>    `from random import *` and `from vpython import *` before the student's code
+>    whenever `usesVPython(source)` matches (`pyodide.js:830-833`, in
+>    `ensureVpython()`). The worker path does not, and deliberately so.
+>
+>    The consequence is visible: a program that says `import vpython as vp` and
+>    then uses a bare `color.red`, `sqrt(2)` or `random()` runs on the main
+>    thread and raises `NameError` under `workerVPython`. **The worker is
+>    right.** That program has a real bug — paste it into desktop VPython, a
+>    Jupyter notebook or plain Python and it fails there too. The main-thread
+>    path is propping it up.
+>
+>    The rule this follows, by trinket type:
+>
+>    | trinket type | namespace |
+>    |---|---|
+>    | **Web VPython** (`glowscript`) | VPython names available by construction — the RapydScript compiler treats `from vpython import *` as the default (`GScompiler.js:503`) and delegates `random` to RapydScript-NG. Nothing to change; that is the environment those students expect. |
+>    | **Python** (`python3` / `pyodide`) | **Explicit imports only.** A Python trinket is a Python trinket, whatever library it happens to use. |
+>
+>    The seeding in `ensureVpython()` was copied from wmWVPRunner, which *is* a
+>    Web VPython runner, so it was right there and wrong here: it applies to a
+>    plain Python trinket whose source merely mentions vpython, and it shadows
+>    builtins with `math`, `random` and `vpython` names the student never asked
+>    for. Fixing the main-thread path is a live-behaviour change to the default
+>    runtime, so it is tracked separately rather than done under this flag.
+>
+>    **What a student does about it:** add `from vpython import *`, or prefix the
+>    names (`vp.color.red`, `vp.rate(100)`) — either is correct and portable.
 
 Default **`false`**. When enabled, Web VPython programs run through the
 `vpython-jupyter` package inside the Web Worker and GlowScript draws the scene on

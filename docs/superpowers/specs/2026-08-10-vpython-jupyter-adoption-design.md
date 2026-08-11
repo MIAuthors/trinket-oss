@@ -83,6 +83,34 @@ Flag off everywhere by default; trials enable it in untracked `local.yaml`. Succ
 
 > **Amended 2026-08-10.** This read "animates identically to the main path" until implementing `rate()` compensation showed the main path is the one that paces wrongly: GlowScript's own `rate()` sleeps a flat `1000/N` ms regardless of what the loop body cost, so a heavy loop runs slow there and at its requested rate here (measured: 38.0 Hz vs 54.6 Hz for `rate(60)` with an 8 ms body). Holding the worker to "identical" would have meant reproducing that bug deliberately. The worker matches upstream desktop VPython, which is what a student's program was written against; GlowScript's flat `rate()` is **to be filed** separately against the main-thread path. See caveat 5 in `docs/DEPLOY-OVERLAY-GUIDE.md` for the full measurements.
 
+## Namespace rule (added 2026-08-10, Steve's ruling)
+
+The worker path runs student code with **no implicit imports**. The main-thread
+path does not: `ensureVpython()` (`pyodide.js:830-833`) runs `from math import *`,
+`from random import *` and `from vpython import *` before any program that
+`usesVPython()` matches — seeding copied from wmWVPRunner.
+
+The rule, stated by trinket type rather than by source contents:
+
+* **Web VPython (`glowscript`)** — VPython names by construction. The RapydScript
+  compiler treats `from vpython import *` as the default (`GScompiler.js:503`)
+  and hands `random` to RapydScript-NG. Correct as-is; that is the environment.
+* **Python (`python3` / `pyodide`)** — explicit imports only. A Python trinket is
+  a Python trinket whatever library it uses.
+
+So the worker's strictness is **not a regression to be patched for parity** — it
+is the rule arriving by accident, and the main-thread seeding is the defect. A
+program relying on the seeding (`import vpython as vp`, then a bare `color.red`)
+fails in desktop VPython, in a notebook and in plain Python; only trinket's
+main-thread path props it up.
+
+Found by running a real program of Steve's, which is also why it was missed: every
+spec in this plan writes `from vpython import *` explicitly, so none of them
+exercise the seeded namespace. Removing the seeding from the main-thread path is a
+live-behaviour change to the default runtime and is tracked separately.
+
+---
+
 ## Non-goals
 
 Widgets; `pause`/`waitfor`; JSPI fast path; changing the default path or removing the bespoke bridge; slim wheel (the 3.5 MB wheel bundles textures + a redundant glow — worth trimming later); wasm `cyvector` (perf, recipe exists in webvpython AGENTS.md); actual VS Code/Colab host shims (the factory API just must not preclude them); upstreaming the packaging changes to PyPI (Bruce/John conversation, separate).
