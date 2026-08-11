@@ -104,6 +104,44 @@
       elem.text(newText);
     });
 
+    // #108: the runtime override. Separate from .runOptions because it is
+    // orthogonal to Run-vs-Console — an author can pick one, the other, or both.
+    $(':input.runtimeOptions').change(function(event) {
+      var target    = $(event.target);
+      var shareType = $(target).data('type');
+      var shareVal  = $(target).val();
+      var elem      = $('#' + shareType);
+      var elemText  = elem.text();
+      var shortCode = $(target).data('trinket-shortCode');
+      var shareParams = [];
+      var paramStr    = '';
+      var queryRe, closeQuote, newText;
+
+      if (shareType === 'shareUrl') {
+        queryRe = new RegExp(shortCode + '.*');
+        closeQuote = '';
+      }
+      else {
+        queryRe = new RegExp(shortCode + '[^"]*"');
+        closeQuote = '"';
+      }
+
+      shareQueryParams.runtime = shareVal;
+      shareQueryParams.runMode = $(target).data('trinket-runMode') || "";
+
+      for (var key in shareQueryParams) {
+        if (shareQueryParams[key]) {
+          shareParams.push(key + '=' + shareQueryParams[key]);
+        }
+      }
+      if (shareParams.length) {
+        paramStr = '?' + shareParams.join('&');
+      }
+
+      newText = elemText.replace(queryRe, shortCode + paramStr + closeQuote);
+      elem.text(newText);
+    });
+
     $(':input.displayOptions').change(function(event) {
       var target    = $(event.target);
       var shareType = $(target).data('type');
@@ -152,6 +190,7 @@
       outputOnly        : "",
       toggleCode        : "",
       runOption         : "",
+      runtime           : "",
       start             : "",
       runMode           : "",
       hideGeneratedCode : "",

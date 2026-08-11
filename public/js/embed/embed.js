@@ -1533,12 +1533,21 @@ $('document').ready(function() {
         $('#displayOptionLink').data('trinket-shortCode', trinket.shortCode);
         $('#displayOptionLink').data('trinket-runMode',   self.runMode);
 
+        $('#runtimeOptionLink').data('trinket-shortCode', trinket.shortCode);
+        $('#runtimeOptionLink').data('trinket-runMode',   self.runMode);
+
         if ($('#displayOptionLink').val()) {
           shareParams.push($('#displayOptionLink').val() + '=true');
         }
 
         if ($('#runOptionLink').val()) {
           shareParams.push('runOption=' + $('#runOptionLink').val());
+        }
+
+        // #108: the runtime override, present only for trinket types whose embed
+        // reads it (see shareModals.html).
+        if ($('#runtimeOptionLink').val()) {
+          shareParams.push('runtime=' + $('#runtimeOptionLink').val());
         }
 
         // if in console mode

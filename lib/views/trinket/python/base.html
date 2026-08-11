@@ -19,7 +19,7 @@
   <div id="trinket-row" class="preserve">
     <div id="trinket-container" style="height: {% block trinket_height %}500{% endblock %}px">
     {% block trinket_content %}
-      <iframe id="trinket-iframe" src="/embed/{% block trinket_type %}python{% endblock %}{% if trinket.id %}/{{trinket.id}}{% endif %}?sharePage=true&start=result&category={% block trinket_category %}python{% endblock %}&shareType={% block trinket_share_type %}python{% endblock %}{% if outputOnly %}&outputOnly=true{% endif %}{% if toggleCode %}&toggleCode=true{% endif %}{% if runOption %}&runOption={{runOption}}{% endif %}{% if runMode %}&runMode={{runMode}}{% endif %}{% if showInstructions %}&showInstructions=true{% endif %}{% if font %}&font={{font}}{% endif %}" width="100%" height="100%" frameborder="0" marginwidth="0" marginheight="0" allowfullscreen></iframe>
+      <iframe id="trinket-iframe" src="/embed/{% block trinket_type %}python{% endblock %}{% if trinket.id %}/{{trinket.id}}{% endif %}?sharePage=true&start=result&category={% block trinket_category %}python{% endblock %}&shareType={% block trinket_share_type %}python{% endblock %}{% if outputOnly %}&outputOnly=true{% endif %}{% if toggleCode %}&toggleCode=true{% endif %}{% if runOption %}&runOption={{runOption}}{% endif %}{% if runMode %}&runMode={{runMode}}{% endif %}{% if runtime %}&runtime={{runtime}}{% endif %}{% if showInstructions %}&showInstructions=true{% endif %}{% if font %}&font={{font}}{% endif %}" width="100%" height="100%" frameborder="0" marginwidth="0" marginheight="0" allowfullscreen></iframe>
     {% endblock %}
     </div>
 

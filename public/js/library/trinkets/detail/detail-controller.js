@@ -35,6 +35,7 @@ TrinketIO.export('library.trinkets.detail.controller', [
   $scope.outputOnlyOption = false;
   $scope.toggleCodeOption = false;
   $scope.runOption        = "";
+  $scope.runtimeOption    = false;
   $scope.runMode          = "";
   $scope.trinketInFolder  = false;
   $scope.downloadable     = false;
@@ -81,10 +82,12 @@ TrinketIO.export('library.trinkets.detail.controller', [
     shareRunOption     : '',
     embedConsoleOption : '',
     shareConsoleOption : '',
+    shareRuntimeWorker : '',
 
     embedRunMenu       : '',
     embedDisplayMenu   : '',
     shareRunMenu       : '',
+    shareRuntimeMenu   : '',
     shareDisplayMenu   : ''
   };
 
@@ -274,6 +277,15 @@ TrinketIO.export('library.trinkets.detail.controller', [
       $('#shareRunOption').hide();
     }
 
+    // #108: only the Pyodide-backed embed reads ?runtime=. The library page
+    // renders one share modal for every trinket type, so the choice is shown or
+    // hidden here per trinket rather than at render time.
+    if ($scope.runtimeOption) {
+      $('#shareRuntimeOption').show();
+    } else {
+      $('#shareRuntimeOption').hide();
+    }
+
     $('#showInstructionsShareToggle').attr('checked', false);
     if ($scope.trinket.lang === 'music') {
       $('#showInstructionsShareToggle').hide();
@@ -286,6 +298,10 @@ TrinketIO.export('library.trinkets.detail.controller', [
     $('#runOptionLink').data('trinket-shortCode', $scope.trinket.shortCode);
     $('#runOptionLink').data('trinket-runMode',   $scope.runMode);
     $('#runOptionLink').val('');
+
+    $('#runtimeOptionLink').data('trinket-shortCode', $scope.trinket.shortCode);
+    $('#runtimeOptionLink').data('trinket-runMode',   $scope.runMode);
+    $('#runtimeOptionLink').val('');
 
     $('#displayOptionLink').data('trinket-shortCode', $scope.trinket.shortCode);
     $('#displayOptionLink').data('trinket-runMode',   $scope.runMode);
@@ -566,6 +582,9 @@ TrinketIO.export('library.trinkets.detail.controller', [
   $scope.$watch('info.shareRunMenu', function(newValue, oldValue) {
     generateShareUrl('runOption');
   });
+  $scope.$watch('info.shareRuntimeMenu', function(newValue, oldValue) {
+    generateShareUrl('runtimeOption');
+  });
 
   function generateEmbedCode(calledFor) {
     var src         = $scope.embedUrl,
@@ -647,6 +666,14 @@ TrinketIO.export('library.trinkets.detail.controller', [
         }
       }
 
+      if (calledFor === 'runtimeOption') {
+        $scope.info.shareRuntimeWorker = '';
+
+        if ($scope.info.shareRuntimeMenu) {
+          $scope.info[$scope.info.shareRuntimeMenu] = true;
+        }
+      }
+
       if ($scope.info.shareOutputOnly) {
         params.push('outputOnly=true');
       }
@@ -659,6 +686,14 @@ TrinketIO.export('library.trinkets.detail.controller', [
       }
       else if ($scope.info.shareConsoleOption) {
         params.push('runOption=console');
+      }
+
+      // #108. Guarded by runtimeOption as well as the selection: the fieldset is
+      // hidden for trinket types that ignore ?runtime=, and a hidden control must
+      // never contribute a parameter — a stale selection carried over from a
+      // previously-viewed trinket would otherwise leak into this URL.
+      if ($scope.runtimeOption && $scope.info.shareRuntimeWorker) {
+        params.push('runtime=worker');
       }
 
       if ($scope.runMode) {
@@ -723,6 +758,12 @@ TrinketIO.export('library.trinkets.detail.controller', [
     if (config.get('runOption')[trinket.lang]) {
       $scope.runOption = config.get('runOption')[trinket.lang];
     }
+    // #108: offer the runtime choice only where the embed actually reads
+    // ?runtime=. Assigned rather than conditionally set to true, so switching
+    // from a python3 trinket to (say) a glowscript one hides it again.
+    $scope.runtimeOption = (config.get('runtimeOption') || []).indexOf(trinket.lang) >= 0;
+    $scope.info.shareRuntimeMenu   = '';
+    $scope.info.shareRuntimeWorker = '';
     $scope.extraOptions = $scope.autorunOption || $scope.outputOnlyOption || $scope.toggleCodeOption;
 
     if (config.get('downloadable').indexOf(trinket.lang) >= 0) {
@@ -739,6 +780,7 @@ TrinketIO.export('library.trinkets.detail.controller', [
 
     $('#runOptionLink').val('');
     $('#runOptionEmbed').val('');
+    $('#runtimeOptionLink').val('');
 
     $('#displayOptionLink').val('');
     $('#displayOptionEmbed').val('');

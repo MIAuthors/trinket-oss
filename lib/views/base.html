@@ -79,6 +79,7 @@
         downloadable      : ["{{ config.app.downloadable | join('","') | safe }}"],
         uploadable        : ["{{ config.app.uploadable   | join('","') | safe }}"],
         hideGeneratedCode : ["{{ config.app.hideGeneratedCode | join('","') | safe }}"],
+        runtimeOption     : ["{{ config.app.runtimeOption | join('","') | safe }}"],
         runOption         : {{ config.app.runOption      | json        | safe }},
         emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
         assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},

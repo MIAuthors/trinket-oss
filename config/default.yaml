@@ -404,6 +404,13 @@ app:
   hideGeneratedCode:
     - blocks
     - glowscript-blocks
+  # Trinket types whose embed honours ?runtime= (#108). Only the Pyodide-backed
+  # embed consults the runtime router; skulpt `python`, glowscript, java, html,
+  # blocks, music and R ignore the parameter entirely, so the share dialog must
+  # not offer a runtime choice for them.
+  runtimeOption:
+    - python3
+    - pyodide
   runOption:
     python:
       - run
