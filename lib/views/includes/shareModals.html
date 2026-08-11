@@ -42,6 +42,18 @@
                 </select>
               </div>
               {% endif %}
+              {# The calculator layout (runMode=calculator). Rendered only for the
+                 types that implement it (config.app.calculatorOption); on the
+                 library page `lang` is unknown at render time, so it is shown or
+                 hidden per trinket by linkModal(). #}
+              {% if calculatorOption or (config.app.calculatorOption and config.app.calculatorOption.indexOf(lang) >= 0) %}
+              <div id="shareCalculatorOption">
+                <select id="calculatorOptionLink" name="calculatorOptionLink" class="calculatorOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">
+                  <option value="">Standard layout</option>
+                  <option value="calculator">Calculator layout &mdash; show the output first, with the code behind a toggle</option>
+                </select>
+              </div>
+              {% endif %}
               {% if displayOption %}
               <div id="shareDisplayOptions">
                 <select id="displayOptionLink" name="displayOptionLink" class="displayOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">

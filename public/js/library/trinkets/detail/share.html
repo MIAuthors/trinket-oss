@@ -46,5 +46,18 @@
       </div>
     </div>
   </fieldset>
+  <!-- Shown only for trinket types that implement the calculator layout
+       (config.app.calculatorOption). -->
+  <fieldset ng-show="calculatorOption">
+    <legend>Layout Options</legend>
+    <div class="row collapse">
+      <div class="small-10">
+        <select name="calculatorOptionLink" ng-model="info.shareLayoutMenu">
+          <option value="">Standard layout</option>
+          <option value="shareCalculator">Calculator layout &mdash; show the output first, with the code behind a toggle</option>
+        </select>
+      </div>
+    </div>
+  </fieldset>
 </form>
 

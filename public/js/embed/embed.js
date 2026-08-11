@@ -1550,8 +1550,16 @@ $('document').ready(function() {
           shareParams.push('runtime=' + $('#runtimeOptionLink').val());
         }
 
+        $('#calculatorOptionLink').data('trinket-shortCode', trinket.shortCode);
+        $('#calculatorOptionLink').data('trinket-runMode',   self.runMode);
+
+        // The calculator layout is itself a runMode, so an explicit choice
+        // replaces the mode this embed happens to be running in.
+        if ($('#calculatorOptionLink').val()) {
+          shareParams.push('runMode=' + $('#calculatorOptionLink').val());
+        }
         // if in console mode
-        if (self.runMode) {
+        else if (self.runMode) {
           shareParams.push('runMode=' + self.runMode);
         }
 
