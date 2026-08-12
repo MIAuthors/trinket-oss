@@ -30,6 +30,18 @@ async function getTrinket(id) {
   return flow.lastResponse.body.data;
 }
 
+// config/api_routes.js: POST /api/trinkets/{trinketId}/forks trinket.createFork
+// (spec D2). createFork builds `new Trinket(request.payload)` — it does NOT
+// copy `settings` from the parent server-side, so unlike `lang` (always taken
+// from the parent) inheritance is a CLIENT behavior: the real Fork button
+// sends the parent's current settings in the payload (see python3.js's
+// serialize(), which includes `settings: this._trinket.settings` alongside
+// `code`). `code` is Joi-required on this route regardless of what's forked.
+async function forkTrinket(id, payload) {
+  await flow.post('/api/trinkets/' + id + '/forks', payload || {});
+  return flow.lastResponse.body.data;
+}
+
 // The draft assignment site (lib/controllers/trinket.js's `draft` handler,
 // Draft.findOneAndUpdate) is the whole reason sanitizeSettings exists: that
 // path does NOT run mongoose validators, so the schema enum alone would not
@@ -102,6 +114,21 @@ describe('settings.runtime validation', () => {
     const got = (await getTrinket(t.id)).settings;
     expect(got.runtime).toBe('main');
     expect(got.testsEnabled).toBe(true);
+  });
+
+  // A fork inherits the stored runtime when the payload carries it — exactly
+  // what the real Fork button sends (see forkTrinket's comment above). This is
+  // the `/forks` route specifically: createFork takes a different code path
+  // (`new Trinket(request.payload)`, no sanitizeSettings call) than the
+  // autosave/.save() site the earlier tests in this file exercise, so a valid
+  // value passing through it is not otherwise proven.
+  it('a fork inherits the stored runtime (spec D2)', async () => {
+    const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+    await updateTrinket(t.id, { settings: { runtime: 'worker' } });
+    const parent = await getTrinket(t.id);
+
+    const forked = await forkTrinket(t.id, { code: parent.code, settings: parent.settings });
+    expect((await getTrinket(forked.id)).settings.runtime).toBe('worker');
   });
 
   // The DRAFT path specifically: Draft.findOneAndUpdate skips mongoose
