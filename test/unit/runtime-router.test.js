@@ -1,7 +1,7 @@
 'use strict';
 // #108: chooseRuntime decides, per program, whether to run in the Web Worker or
 // on the main thread. It is pure so the rules can be tested without a browser.
-const { chooseRuntime, hasUnawaitableCall } = require('../../public/js/embed/runtime-router.js');
+const { chooseRuntime, hasUnawaitableCall, runtimeNotice } = require('../../public/js/embed/runtime-router.js');
 
 const OPTS = { usesVPython: false, workerEnabled: true, queryRuntime: undefined };
 
@@ -91,5 +91,58 @@ describe('hasUnawaitableCall', () => {
 
   it('does not over-match across separate statements', () => {
     expect(hasUnawaitableCall('name = input()\nys = [x for x in y]')).toBe(false);
+  });
+});
+
+// The console line that says which runtime a program got. Both paths print an
+// identical "Loading Python (Pyodide)…", so without this a program routed AWAY
+// from the worker it asked for was indistinguishable from one that got it.
+describe('runtimeNotice', () => {
+  // q must reach BOTH calls: the router routes on it, and the notice compares
+  // against it. Passing it to only one fabricates an ignored request.
+  const notice = (src, opts, q) =>
+    runtimeNotice(chooseRuntime(src, { ...opts, queryRuntime: q }), q);
+
+  it('says nothing for the ordinary main-thread run', () => {
+    // A deploy with the flag off must not gain a new line on every single run.
+    expect(notice('print(1)', { ...OPTS, workerEnabled: false })).toBe('');
+  });
+
+  it('announces the worker, and why it matters', () => {
+    const out = notice('print(1)', OPTS);
+    expect(out).toMatch(/off the main thread/);
+    expect(out).toMatch(/Stop always works/);
+  });
+
+  it('THE CASE THAT PROMPTED IT: ?runtime=worker overridden by VPython', () => {
+    const out = notice('import vpython as vp', { ...OPTS, usesVPython: true }, 'worker');
+    expect(out).toMatch(/on the main thread/);
+    expect(out).toMatch(/Web VPython draws on the page/);
+    expect(out).toMatch(/\?runtime=worker could not be honoured/);
+  });
+
+  it('explains a program the transform cannot rewrite', () => {
+    const out = notice('print([input() for _ in range(2)])', OPTS);
+    expect(out).toMatch(/on the main thread/);
+    expect(out).toMatch(/lambda or comprehension/);
+  });
+
+  it('stays quiet when ?runtime=main is honoured, since nothing was ignored', () => {
+    expect(notice('print(1)', OPTS, 'main')).toBe('');
+  });
+
+  it('reports an ignored ?runtime=main', () => {
+    // Not reachable through chooseRuntime today; asserted so the ignored-request
+    // branch cannot rot if a future rule forces the worker.
+    const out = runtimeNotice({ runtime: 'worker', reason: 'default' }, 'main');
+    expect(out).toMatch(/\?runtime=main could not be honoured/);
+  });
+
+  it('tolerates a missing decision', () => {
+    expect(runtimeNotice(null, 'worker')).toBe('');
+  });
+
+  it('ends with a newline whenever it speaks', () => {
+    expect(notice('print(1)', OPTS).endsWith('\n')).toBe(true);
   });
 });

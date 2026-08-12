@@ -80,7 +80,51 @@
     return { runtime: 'worker', reason: 'default' };
   }
 
-  var router = { chooseRuntime: chooseRuntime, hasUnawaitableCall: hasUnawaitableCall };
+  // Why a program ended up where it did, in words a student can act on. Only
+  // the reasons worth explaining appear here; the rest carry no parenthetical.
+  var NOTES = {
+    'vpython: bridge requires the window realm'             : 'Web VPython draws on the page',
+    'config: worker runtime disabled'                       : 'the stoppable runtime is off for this site',
+    'await cannot be inserted in a lambda or comprehension' : 'input(), sleep() or rate() inside a lambda or comprehension'
+  };
+
+  // The console line announcing the runtime. Both paths print an identical
+  // "Loading Python (Pyodide)…", so a program that ASKED for the worker and was
+  // routed to the main thread anyway — VPython, or a call the async transform
+  // cannot rewrite — looked exactly like one that got what it asked for. That
+  // ambiguity cost a real debugging session.
+  //
+  // Deliberately quiet: it says nothing for the ordinary main-thread run that
+  // every deploy with the flag off does today. It speaks only when the answer
+  // is not the obvious one.
+  function runtimeNotice(decision, queryRuntime) {
+    if (!decision) return '';
+    var asked   = (queryRuntime === 'worker' || queryRuntime === 'main');
+    var ignored = asked && queryRuntime !== decision.runtime;
+
+    var worthSaying = decision.runtime === 'worker'
+                   || ignored
+                   || decision.reason === 'await cannot be inserted in a lambda or comprehension';
+    if (!worthSaying) return '';
+
+    var line = decision.runtime === 'worker'
+      ? 'Running off the main thread — Stop always works.'
+      : 'Running on the main thread.';
+
+    var why = NOTES[decision.reason];
+    if (why) line = line.replace(/\.$/, '') + ' (' + why + ').';
+
+    // The case that prompted this: the URL asked and did not get it.
+    if (ignored) line += '\n?runtime=' + queryRuntime + ' could not be honoured here.';
+
+    return line + '\n';
+  }
+
+  var router = {
+    chooseRuntime      : chooseRuntime,
+    hasUnawaitableCall : hasUnawaitableCall,
+    runtimeNotice      : runtimeNotice
+  };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = router;
   if (root && root.TrinketIO && root.TrinketIO.export) root.TrinketIO.export('embed.runtimeRouter', router);
