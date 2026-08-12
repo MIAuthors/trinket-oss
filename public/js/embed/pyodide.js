@@ -2241,10 +2241,33 @@ function startRun() {
   var workerProgram = workerFiles[mainFile] || '';
 
   var queryRuntime = (api._queryString || {}).runtime;
+
+  // #128: the trinket's own setting. Whitelisted here as well as on the server
+  // (lib/controllers/trinket.js) because this value is client-supplied data that
+  // also renders back into the settings modal — a value that predates or bypasses
+  // server validation must degrade to "no preference", not reach the rules.
+  //
+  // Read from api._trinket, not window.trinket: window.trinket is a DIFFERENT
+  // global (the `{config: {...}}` object embed/base.html's inline <script>
+  // creates) that never carries the trinket's settings. api._trinket is the live
+  // TrinketApp instance's trinket data (set by setTrinket() before initialize()
+  // runs, and already read the same way elsewhere in this file, e.g.
+  // api._trinket.description) — verified live against a stored
+  // settings.runtime='worker' trinket, where window.trinket.settings was
+  // undefined and api._trinket.settings was {runtime: 'worker'}.
+  var storedRuntime = '';
+  try {
+    var settings = (api._trinket && api._trinket.settings) || {};
+    if (settings.runtime === 'worker' || settings.runtime === 'main') {
+      storedRuntime = settings.runtime;
+    }
+  } catch (e) { storedRuntime = ''; }
+
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-    queryRuntime  : queryRuntime
+    queryRuntime  : queryRuntime,
+    storedRuntime : storedRuntime
   });
   window.__trinketRuntime       = decision.runtime;   // read by the browser specs
   window.__trinketRuntimeReason = decision.reason;
