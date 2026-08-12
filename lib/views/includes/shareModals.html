@@ -37,9 +37,9 @@
               {% if runtimeOption or (config.app.runtimeOption and config.app.runtimeOption.indexOf(lang) >= 0) %}
               <div id="shareRuntimeOption">
                 <select id="runtimeOptionLink" name="runtimeOptionLink" class="runtimeOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">
-                  <option value="">Use this site's default runtime</option>
-                  <option value="worker">Stoppable &mdash; recommended for programs with loops</option>
-                  <option value="main">Original &mdash; for a program the stoppable runtime can't run</option>
+                  <option value="">Use this trinket's setting</option>
+                  <option value="worker">Stoppable &mdash; override for this link</option>
+                  <option value="main">Original &mdash; override for this link</option>
                 </select>
               </div>
               {% endif %}
