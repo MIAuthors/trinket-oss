@@ -363,15 +363,16 @@ At the call site in `public/js/embed/pyodide.js`, replace the `decision` block:
   });
 ```
 
-- [ ] **Step 2: Verify the value is actually reachable**
+- [x] **Step 2: Verify the value is actually reachable** — DONE, and the plan was wrong
 
-Before trusting `window.trinket.settings`, confirm it exists at this point. In the running local stack, open a python3 embed and evaluate in the console:
+`window.trinket` carries only `.config`, never `.settings`. Verified live in a
+browser against a real trinket whose `settings.runtime` was `'worker'`:
+`window.trinket.settings` was `undefined`; `window.TrinketApp._trinket.settings`
+was `{ runtime: 'worker' }`.
 
-```js
-window.trinket && window.trinket.settings
-```
-
-Expected: an object including `runtime`. **If it is undefined**, the settings are not on that object — find where the embed receives the trinket (`unescapeJSON(trinketObject)` in `embed.js`, `this._trinket`) and read from there instead, keeping the same whitelist. Record what you used in your report; Task 6's browser test will confirm it end to end.
+**The real source is `api._trinket.settings`**, where `api` is `window.TrinketApp`
+— the same access already used elsewhere in `pyodide.js` for
+`api._trinket.description`. Task 6's browser tests should expect that.
 
 - [ ] **Step 3: Commit**
 
@@ -643,6 +644,17 @@ choice can never permanently break a trinket for everyone who opens it.
 ```
 
 - [ ] **Step 4: Full suites**
+
+Before running the browser suite, CONFIRM WHICH CHECKOUT THE LOCAL STACK SERVES:
+
+```bash
+docker inspect trinket-gcr --format '{{range .Mounts}}{{if eq .Destination "/usr/local/node/trinket"}}{{.Source}}{{end}}{{end}}'
+```
+
+It bind-mounts a checkout directory, which is NOT necessarily this worktree. It
+has been pointed at this branch, but verify rather than assume — a browser suite
+run against the wrong checkout passes or fails for reasons that have nothing to
+do with your code.
 
 Run the unit suite in the container and the browser suite against the local
 stack. Both must be green, with counts no lower than before this plan started.
