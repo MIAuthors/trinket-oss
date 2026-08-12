@@ -148,6 +148,12 @@ parameter wins over the flag either way, and it works on **both** the embed URL
 and the trinket page URL — the page carries it through to the iframe it builds.
 Any other value is ignored rather than reflected back.
 
+**Telling which runtime a program got:** the console says so when the answer
+isn't the obvious one — when a program runs in the worker, when a request like
+`?runtime=worker` could *not* be honoured (Web VPython, or `input()`/`sleep()`/
+`rate()` inside a lambda or comprehension), and otherwise stays silent. An
+ordinary main-thread run on a deploy with the flag off prints nothing new.
+
 Authors don't have to hand-edit URLs for this: **Share ▸ Link** offers the
 choice on python3 and pyodide trinkets, so a deploy can leave the flag off and
 still let one program that needs a stoppable `while True:` opt in.

@@ -2240,13 +2240,19 @@ function startRun() {
   var workerFiles   = editor.getAllFiles();
   var workerProgram = workerFiles[mainFile] || '';
 
+  var queryRuntime = (api._queryString || {}).runtime;
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-    queryRuntime  : (api._queryString || {}).runtime
+    queryRuntime  : queryRuntime
   });
   window.__trinketRuntime       = decision.runtime;   // read by the browser specs
   window.__trinketRuntimeReason = decision.reason;
+
+  // Say which runtime this program got, before the loading line that looks the
+  // same either way. Empty for the ordinary main-thread run — see runtimeNotice.
+  var notice = runtimeRouter.runtimeNotice(decision, queryRuntime);
+  if (notice) writeOut(notice);
 
   if (decision.runtime === 'worker') {
     running = true;
