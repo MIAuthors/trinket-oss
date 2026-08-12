@@ -78,7 +78,14 @@
     // A STORED setting must not be able to select a runtime that cannot run the
     // program — it affects every student who opens the trinket, permanently.
     // So the guard sits above it, and below the URL. #128 D3.
-    if (hasUnawaitableCall(source)) {
+    //
+    // The guard only matters when the worker is actually a possibility: either
+    // the deploy enables it, or this trinket asked for it. On a deploy with the
+    // worker off and no stored preference, the honest reason is the flag, and
+    // the notice must stay silent as it always has.
+    var workerPossible = (stored === 'worker') || !!opts.workerEnabled;
+
+    if (workerPossible && hasUnawaitableCall(source)) {
       return { runtime: 'main', reason: 'await cannot be inserted in a lambda or comprehension' };
     }
 
