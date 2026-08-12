@@ -59,6 +59,14 @@ describe('settings.runtime validation', () => {
     expect((await getTrinket(t.id)).settings.runtime).toBe('worker');
   });
 
+  // NOTE: on this (.save()) site, mongoose's own schema validator is what
+  // rejects these two writes, not sanitizeSettings — 'nonsense' fails the
+  // enum and { $ne: null } fails the string cast, so .save() rejects the
+  // whole document and nothing changes (GET still shows the prior ''). These
+  // two are kept to document the enum's behavior, but they pass identically
+  // with sanitizeSettings removed from the autosave call site — they are NOT
+  // evidence the sanitizer does anything here. See "code survives an invalid
+  // runtime" below for a test that actually discriminates on this site.
   it('rejects a value outside the enum, storing the empty default', async () => {
     const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
     await updateTrinket(t.id, { settings: { runtime: 'nonsense' } });
@@ -69,6 +77,23 @@ describe('settings.runtime validation', () => {
     const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
     await updateTrinket(t.id, { settings: { runtime: { $ne: null } } });
     expect((await getTrinket(t.id)).settings.runtime).toBe('');
+  });
+
+  // What sanitizeSettings actually buys on the .save() site: without it, an
+  // invalid runtime makes mongoose reject the WHOLE document — any code (or
+  // other field) bundled into the same autosave payload is lost along with
+  // it. With it, runtime degrades to '' and the rest of the payload is saved.
+  // This is the one that discriminates: remove sanitizeSettings from the
+  // autosave branch and this fails (the code change never persists).
+  it('sanitizes runtime without losing the rest of the payload', async () => {
+    const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+    await updateTrinket(t.id, {
+      code: 'print("distinctive-marker-128")',
+      settings: { runtime: 'nonsense' },
+    });
+    const got = await getTrinket(t.id);
+    expect(got.settings.runtime).toBe('');
+    expect(got.code).toBe('print("distinctive-marker-128")');
   });
 
   it('leaves the other settings untouched', async () => {
