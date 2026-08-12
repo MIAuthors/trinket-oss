@@ -61,6 +61,44 @@ test.describe('Share dialog: runtime option (#108)', () => {
     await expect(shareUrl).not.toContainText('runtime=');
   });
 
+  // The other direction. It does nothing on a deploy with the flag off (the main
+  // thread is already the default), but once a deploy turns the worker ON this is
+  // the only escape hatch an author has that isn't hand-editing the URL.
+  test('writes runtime=main, the escape hatch for a worker-enabled deploy', async ({ page }) => {
+    const shortCode = await createTrinket(page, 'python3', 'print("share runtime main")');
+    await openLinkModal(page, shortCode);
+
+    const choice   = page.locator('#runtimeOptionLink');
+    const shareUrl = page.locator('#shareUrl');
+    await expect(choice).toBeVisible();
+
+    await choice.selectOption('main');
+    await expect(shareUrl).toContainText('runtime=main');
+    expect(await shareUrl.innerText()).not.toContain('runtime=worker');
+
+    // Switching between the two must replace the value, not accumulate params.
+    await choice.selectOption('worker');
+    await expect(shareUrl).toContainText('runtime=worker');
+    expect(await shareUrl.innerText()).not.toContain('runtime=main');
+
+    await choice.selectOption('');
+    await expect(shareUrl).not.toContainText('runtime=');
+  });
+
+  test('runtime=main on the trinket page reaches the embed too', async ({ page }) => {
+    const shortCode = await createTrinket(page, 'python3', 'print("forced main")');
+
+    await page.goto('/python3/' + shortCode + '?runtime=main');
+    const src = await page.locator('#trinket-iframe').getAttribute('src');
+    expect(src, 'the iframe src allowlist must carry runtime=main').toContain('runtime=main');
+
+    const frame = await embedFrame(page);
+    await runInEmbed(frame);
+
+    expect(await frame.evaluate(() => window.__trinketRuntime)).toBe('main');
+    expect(await frame.evaluate(() => window.__trinketRuntimeReason)).toMatch(/query/i);
+  });
+
   test('the choice is hidden for a trinket type that ignores it (glowscript)', async ({ page }) => {
     // ?runtime= is read only by the Pyodide embed. Offering it on glowscript
     // would be a control that silently does nothing.
