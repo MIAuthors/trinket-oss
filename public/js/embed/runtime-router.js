@@ -55,26 +55,39 @@
     return false;
   }
 
-  // options: { usesVPython, workerEnabled, queryRuntime }
+  // options: { usesVPython, workerEnabled, queryRuntime, storedRuntime }
   function chooseRuntime(source, options) {
     var opts = options || {};
+    var stored = (opts.storedRuntime === 'worker' || opts.storedRuntime === 'main')
+      ? opts.storedRuntime : '';
 
     // VPython first: its bridge does `from js import sphere, box, rate, …`,
-    // binding synchronously to the window realm. No query parameter can
+    // binding synchronously to the window realm. No choice of any kind can
     // override that — off-thread it would simply fail to import.
     if (opts.usesVPython) {
       return { runtime: 'main', reason: 'vpython: bridge requires the window realm' };
     }
 
+    // The URL is a deliberate, temporary act by whoever is holding it, and it
+    // is allowed to override the guard below: the guard over-matches on purpose
+    // (see hasUnawaitableCall), so an author needs an escape from a false
+    // positive. #128 D3.
     if (opts.queryRuntime === 'main')   return { runtime: 'main',   reason: 'query: runtime=main' };
     if (opts.queryRuntime === 'worker') return { runtime: 'worker', reason: 'query: runtime=worker' };
 
-    if (!opts.workerEnabled) {
-      return { runtime: 'main', reason: 'config: worker runtime disabled' };
-    }
-
+    // A STORED setting must not be able to select a runtime that cannot run the
+    // program — it affects every student who opens the trinket, permanently.
+    // So the guard sits above it, and below the URL. #128 D3.
     if (hasUnawaitableCall(source)) {
       return { runtime: 'main', reason: 'await cannot be inserted in a lambda or comprehension' };
+    }
+
+    if (stored) {
+      return { runtime: stored, reason: 'trinket setting: runtime=' + stored };
+    }
+
+    if (!opts.workerEnabled) {
+      return { runtime: 'main', reason: 'config: worker runtime disabled' };
     }
 
     return { runtime: 'worker', reason: 'default' };
@@ -85,7 +98,9 @@
   var NOTES = {
     'vpython: bridge requires the window realm'             : 'Web VPython draws on the page',
     'config: worker runtime disabled'                       : 'the stoppable runtime is off for this site',
-    'await cannot be inserted in a lambda or comprehension' : 'input(), sleep() or rate() inside a lambda or comprehension'
+    'await cannot be inserted in a lambda or comprehension' : 'input(), sleep() or rate() inside a lambda or comprehension',
+    'trinket setting: runtime=worker'                       : "this trinket's setting",
+    'trinket setting: runtime=main'                         : "this trinket's setting"
   };
 
   // The console line announcing the runtime. Both paths print an identical
@@ -104,7 +119,8 @@
 
     var worthSaying = decision.runtime === 'worker'
                    || ignored
-                   || decision.reason === 'await cannot be inserted in a lambda or comprehension';
+                   || decision.reason === 'await cannot be inserted in a lambda or comprehension'
+                   || decision.reason.indexOf('trinket setting:') === 0;
     if (!worthSaying) return '';
 
     var line = decision.runtime === 'worker'

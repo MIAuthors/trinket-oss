@@ -146,3 +146,62 @@ describe('runtimeNotice', () => {
     expect(notice('print(1)', OPTS).endsWith('\n')).toBe(true);
   });
 });
+
+// #128: a runtime stored on the trinket. Ordering matters more than any single
+// rule here — see spec §3. The table below is the spec's worked-cases table.
+describe('chooseRuntime with a stored trinket setting', () => {
+  const LAMBDA = 'f = lambda: input()\nprint(f())';
+
+  it('stored worker opts one trinket in on a flag-off deploy', () => {
+    const r = chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('worker');
+    expect(r.reason).toMatch(/trinket setting/);
+  });
+
+  it('stored main opts one trinket out on a flag-on deploy', () => {
+    const r = chooseRuntime('print(1)', { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/trinket setting/);
+  });
+
+  it('the URL beats the stored value in both directions', () => {
+    expect(chooseRuntime('print(1)', { ...OPTS, storedRuntime: 'worker', queryRuntime: 'main' }).runtime).toBe('main');
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'main', queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+
+  it('VPython still beats a stored worker — the bridge cannot run off-thread', () => {
+    const r = chooseRuntime('import vpython as vp', { ...OPTS, usesVPython: true, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/vpython/i);
+  });
+
+  it('THE D3 RULE: a stored worker does NOT override the unawaitable guard', () => {
+    // A saved setting affects every student who opens the trinket, so it must
+    // not be able to select a runtime that cannot run the program.
+    const r = chooseRuntime(LAMBDA, { ...OPTS, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/lambda or comprehension/);
+  });
+
+  it('THE D3 RULE: a URL still may override the guard, for a false positive', () => {
+    // The detector over-matches on purpose, so authors need this escape.
+    expect(chooseRuntime(LAMBDA, { ...OPTS, queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+
+  it('an empty or unknown stored value is simply no preference', () => {
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: '' }).runtime).toBe('main');
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'nonsense' }).runtime).toBe('main');
+  });
+});
+
+describe('runtimeNotice with a stored setting', () => {
+  it('names the trinket setting as the reason, not the flag', () => {
+    const d = chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'worker' });
+    expect(runtimeNotice(d, undefined)).toMatch(/this trinket's setting/);
+  });
+
+  it('speaks for a stored main, which is otherwise an ordinary main-thread run', () => {
+    const d = chooseRuntime('print(1)', { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(runtimeNotice(d, undefined)).toMatch(/this trinket's setting/);
+  });
+});
