@@ -155,8 +155,11 @@ isn't the obvious one — when a program runs in the worker, when a request like
 ordinary main-thread run on a deploy with the flag off prints nothing new.
 
 Authors don't have to hand-edit URLs for this: **Share ▸ Link** offers the
-choice on python3 and pyodide trinkets, so a deploy can leave the flag off and
-still let one program that needs a stoppable `while True:` opt in.
+choice on python3 and pyodide trinkets, in both directions. With the flag
+**off**, "Stoppable" opts a single program that needs a stoppable `while True:`
+into the worker. With the flag **on** — where the worker is the default —
+"Original" sends one program back to the main thread, which is what a program
+the async transform cannot rewrite needs.
 
 The choice rides on the link, not on the trinket — a second embed of the same
 program, a fork, or an LTI launch each builds its own URL and starts from the

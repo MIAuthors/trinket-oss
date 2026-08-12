@@ -84,6 +84,7 @@ TrinketIO.export('library.trinkets.detail.controller', [
     embedConsoleOption : '',
     shareConsoleOption : '',
     shareRuntimeWorker : '',
+    shareRuntimeMain   : '',
     shareCalculator    : '',
 
     embedRunMenu       : '',
@@ -685,6 +686,7 @@ TrinketIO.export('library.trinkets.detail.controller', [
 
       if (calledFor === 'runtimeOption') {
         $scope.info.shareRuntimeWorker = '';
+        $scope.info.shareRuntimeMain   = '';
 
         if ($scope.info.shareRuntimeMenu) {
           $scope.info[$scope.info.shareRuntimeMenu] = true;
@@ -719,6 +721,13 @@ TrinketIO.export('library.trinkets.detail.controller', [
       // previously-viewed trinket would otherwise leak into this URL.
       if ($scope.runtimeOption && $scope.info.shareRuntimeWorker) {
         params.push('runtime=worker');
+      }
+      // The other direction, which matters once a deploy turns the worker on and
+      // it becomes the default: without this the control could only ask for what
+      // the site already does. A program the async transform cannot rewrite needs
+      // a way back to the main thread that isn't hand-editing the URL.
+      else if ($scope.runtimeOption && $scope.info.shareRuntimeMain) {
+        params.push('runtime=main');
       }
 
       // The calculator layout IS a runMode, so it takes the place of the one the
@@ -794,6 +803,7 @@ TrinketIO.export('library.trinkets.detail.controller', [
     $scope.runtimeOption = (config.get('runtimeOption') || []).indexOf(trinket.lang) >= 0;
     $scope.info.shareRuntimeMenu   = '';
     $scope.info.shareRuntimeWorker = '';
+    $scope.info.shareRuntimeMain   = '';
     // Same shape for the calculator layout: offered only where it is implemented,
     // and cleared here so a choice cannot follow the user to another trinket.
     $scope.calculatorOption = (config.get('calculatorOption') || []).indexOf(trinket.lang) >= 0;
