@@ -79,11 +79,38 @@ it sits **between** the two explicit choices:
 ```
 1. usesVPython              -> main      hard; no choice overrides it
 2. queryRuntime (URL)       -> honoured  may override the guard  (D3)
-3. hasUnawaitableCall       -> main      hard for everything below (D3)
+3. hasUnawaitableCall       -> main      hard for everything below (D3),
+                                         but ONLY when the worker was
+                                         actually reachable — see below
 4. storedRuntime            -> honoured  beats the deploy flag    (D1)
 5. workerRuntime flag off   -> main
 6. default                  -> worker
 ```
+
+**Rule 3 is conditional.** The guard applies only when the worker was a real
+possibility for this program:
+
+```js
+var workerPossible = (stored === 'worker') || !!opts.workerEnabled;
+if (workerPossible && hasUnawaitableCall(source)) { ... }
+```
+
+Without that condition, putting the guard above rule 5 changes the *reason* for
+a case that was previously reported by rule 5 — a guard-tripping program on a
+deploy with the worker **off**, with no stored value and no query. The runtime
+is `main` either way, but the reason flips from `config: worker runtime
+disabled` to the guard's, and because `runtimeNotice()` speaks for the guard and
+is silent for the flag, a student on a deploy that does not even enable the
+worker would start seeing an explanation about a worker limitation. Every
+deploy currently has the flag off, so this is the common case, not a corner.
+
+With the condition, rule 6 of the table below still hits the guard — a stored
+`worker` means the author asked for it and is owed the explanation — while the
+no-stored, flag-off case stays with rule 5 and stays silent, exactly as before.
+
+*(Found in review of Task 2; the original wording of this section claimed the
+reordering was behaviour-preserving without qualification, which was true of
+the chosen runtime but not of the reason or the notice.)*
 
 Every branch returns a `reason` string, as today.
 
