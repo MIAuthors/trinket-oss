@@ -370,7 +370,7 @@ $('document').ready(function() {
     $('#shareUrl').click($.proxy(this.onShareFocus, this));
     $('#embedCode').click($.proxy(this.onEmbedFocus, this));
 
-    $(document).on('change', 'input[data-trinket-settings]', $.proxy(this.settingsChange, this));
+    $(document).on('change', 'input[data-trinket-settings], select[data-trinket-settings]', $.proxy(this.settingsChange, this));
     $('#lineWrapping').on('change', $.proxy(this.lineWrappingChange, this));
     $('#indentationAmount').on('change', $.proxy(this.indentChange, this));
 
@@ -2117,6 +2117,10 @@ $('document').ready(function() {
         settingsValue = $(event.target).is(":checked");
       }
       else if (settingsType === "range" || settingsType === "hidden") {
+        settingsValue = $(event.target).val();
+      }
+      // A <select> reports type "select-one". #128 added the first one.
+      else if (settingsType === "select-one") {
         settingsValue = $(event.target).val();
       }
 

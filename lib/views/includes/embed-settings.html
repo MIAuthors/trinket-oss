@@ -22,6 +22,18 @@
         <h5 class="left">Enable Editor Autofocus</h5>
       </div>
     </div>
+    {% if config.app.runtimeOption and config.app.runtimeOption.indexOf(trinket.lang) >= 0 %}
+    <div class="row">
+      <div class="small-12 columns">
+        <h5 class="left">Runtime</h5>
+        <select id="runtime" name="runtime" data-trinket-settings>
+          <option value=""       {% if not ((draft and draft.settings.runtime) or (not draft and trinket.settings.runtime)) %}selected{% endif %}>Site default</option>
+          <option value="worker" {% if (draft and draft.settings.runtime == 'worker') or (not draft and trinket.settings.runtime == 'worker') %}selected{% endif %}>Stoppable &mdash; recommended for programs with loops</option>
+          <option value="main"   {% if (draft and draft.settings.runtime == 'main') or (not draft and trinket.settings.runtime == 'main') %}selected{% endif %}>Original &mdash; for a program the stoppable runtime can't run</option>
+        </select>
+      </div>
+    </div>
+    {% endif %}
     {% if not user.settings.disableAceEditor %}
     <h3><strong>Global Settings</strong></h3>
     <div class="row">
