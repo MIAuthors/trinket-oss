@@ -1,5 +1,7 @@
 const flow     = require('../../helpers/flow.cjs');
 const defaults = require('../../helpers/defaults');
+const Draft    = require('../../../lib/models/draft');
+const User     = require('../../../lib/models/user');
 
 // Reset the per-user cookie jar before each test — the 2a harness drops and
 // recreates the DB per test, so any cached session would point at a dead user.
@@ -26,6 +28,21 @@ async function updateTrinket(id, payload) {
 async function getTrinket(id) {
   await flow.get('/api/trinkets/' + id);
   return flow.lastResponse.body.data;
+}
+
+// The draft assignment site (lib/controllers/trinket.js's `draft` handler,
+// Draft.findOneAndUpdate) is the whole reason sanitizeSettings exists: that
+// path does NOT run mongoose validators, so the schema enum alone would not
+// catch a bad value there. GET /api/trinkets/{id} reads the Trinket document,
+// not the Draft collection, so it can't see this path — read the Draft back
+// through the model instead, same as the controller does.
+async function saveDraft(trinketId, payload) {
+  await flow.post('/api/trinkets/' + trinketId + '/draft', payload);
+  return flow.lastResponse.body;
+}
+
+async function getDraft(trinketId, userId) {
+  return Draft.findOne({ trinket: trinketId, user: userId });
 }
 
 // #128: settings.runtime is client-supplied and reaches storage wholesale.
@@ -60,5 +77,36 @@ describe('settings.runtime validation', () => {
     const got = (await getTrinket(t.id)).settings;
     expect(got.runtime).toBe('main');
     expect(got.testsEnabled).toBe(true);
+  });
+
+  // The DRAFT path specifically: Draft.findOneAndUpdate skips mongoose
+  // validators, so unlike the .save() site above, the schema enum gives this
+  // path no protection at all — sanitizeSettings is the only thing standing
+  // between a bad value and storage here. Read back via the Draft model
+  // directly, since GET /api/trinkets/{id} only ever sees the Trinket doc.
+  describe('on the draft path (Draft.findOneAndUpdate, bypasses mongoose validators)', () => {
+    let userId;
+
+    beforeEach(async () => {
+      userId = (await User.findOne({ email: defaults.user.email })).id;
+    });
+
+    it('stores a valid value', async () => {
+      const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+      await saveDraft(t.id, { settings: { runtime: 'worker' } });
+      expect((await getDraft(t.id, userId)).settings.runtime).toBe('worker');
+    });
+
+    it('rejects a value outside the enum, storing the empty default', async () => {
+      const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+      await saveDraft(t.id, { settings: { runtime: 'nonsense' } });
+      expect((await getDraft(t.id, userId)).settings.runtime).toBe('');
+    });
+
+    it('rejects a non-string just as firmly', async () => {
+      const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+      await saveDraft(t.id, { settings: { runtime: { $ne: null } } });
+      expect((await getDraft(t.id, userId)).settings.runtime).toBe('');
+    });
   });
 });
