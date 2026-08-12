@@ -142,10 +142,19 @@ features:
   comprehension**, where `await` cannot be inserted. They keep working exactly as
   they do today; they just do not gain the freeze protection.
 
-**Per-trinket override:** `?runtime=main` forces the main thread, `?runtime=worker`
-forces the worker even when the flag is off. Note the embed rewrites its own URL,
-so a query parameter typed into the address bar does **not** survive — for
-day-to-day testing set the flag in `config/local.yaml` instead.
+**Per-link override:** `?runtime=worker` forces the worker even when the flag is
+off; `?runtime=main` forces the main thread even when it is on. The query
+parameter wins over the flag either way, and it works on **both** the embed URL
+and the trinket page URL — the page carries it through to the iframe it builds.
+Any other value is ignored rather than reflected back.
+
+Authors don't have to hand-edit URLs for this: **Share ▸ Link** offers the
+choice on python3 and pyodide trinkets, so a deploy can leave the flag off and
+still let one program that needs a stoppable `while True:` opt in.
+
+The choice rides on the link, not on the trinket — a second embed of the same
+program, a fork, or an LTI launch each builds its own URL and starts from the
+deploy default again. Moving it onto the trinket itself is issue #128.
 
 **What changes for a student when this is on**
 
