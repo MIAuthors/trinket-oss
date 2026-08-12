@@ -137,6 +137,35 @@ describe('buildInfo.publicInfo commit precedence', () => {
     delete process.env.COMMIT_ID;
   });
 
+  // Found by smoke-testing the real endpoint: a DETACHED checkout (how the
+  // deploy worktrees run) has no branch, so the old fallback reported the branch
+  // of a different, older commit beside a correct fresh one.
+  describe('branch never comes from a different source than the commit', () => {
+    const SHA = 'ec1732d1db27260b6fe8709dccc8038d2bcf490f';
+
+    it('uses the checkout branch when the checkout supplies the commit', () => {
+      expect(buildInfo.resolveBranch(null, { commit: SHA, branch: 'trial/convergence' }, 'stale-branch'))
+        .toBe('trial/convergence');
+    });
+
+    it("says 'detached' rather than borrowing the build file's branch", () => {
+      expect(buildInfo.resolveBranch(null, { commit: SHA, branch: null }, 'spike/109-pyodide-repl'))
+        .toBe('detached');
+    });
+
+    it('falls back to the build file only when there is no checkout', () => {
+      expect(buildInfo.resolveBranch(null, null, 'deploy-mandi')).toBe('deploy-mandi');
+    });
+
+    it('lets GIT_BRANCH win, matching the commit precedence', () => {
+      expect(buildInfo.resolveBranch('override', { commit: SHA, branch: 'x' }, 'y')).toBe('override');
+    });
+
+    it('degrades to unknown with nothing to go on', () => {
+      expect(buildInfo.resolveBranch(null, null, null)).toBe('unknown');
+    });
+  });
+
   it('names where the commit came from', () => {
     delete process.env.COMMIT_ID;
     const info = buildInfo.publicInfo();
