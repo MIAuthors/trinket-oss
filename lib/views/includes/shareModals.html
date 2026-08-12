@@ -28,6 +28,33 @@
                 </select>
               </div>
               {% endif %}
+              {# #108: the per-trinket runtime override. Only the Pyodide-backed
+                 embed reads ?runtime=, so this is offered only for the types in
+                 config.app.runtimeOption. On the library page `lang` is unknown
+                 at render time (one page serves every type), so it is rendered
+                 and then shown/hidden per trinket by linkModal(), exactly as
+                 #shareRunOption is. #}
+              {% if runtimeOption or (config.app.runtimeOption and config.app.runtimeOption.indexOf(lang) >= 0) %}
+              <div id="shareRuntimeOption">
+                <select id="runtimeOptionLink" name="runtimeOptionLink" class="runtimeOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">
+                  <option value="">Use this site's default runtime</option>
+                  <option value="worker">Stoppable &mdash; recommended for programs with loops</option>
+                  <option value="main">Original &mdash; for a program the stoppable runtime can't run</option>
+                </select>
+              </div>
+              {% endif %}
+              {# The calculator layout (runMode=calculator). Rendered only for the
+                 types that implement it (config.app.calculatorOption); on the
+                 library page `lang` is unknown at render time, so it is shown or
+                 hidden per trinket by linkModal(). #}
+              {% if calculatorOption or (config.app.calculatorOption and config.app.calculatorOption.indexOf(lang) >= 0) %}
+              <div id="shareCalculatorOption">
+                <select id="calculatorOptionLink" name="calculatorOptionLink" class="calculatorOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">
+                  <option value="">Standard layout</option>
+                  <option value="calculator">Calculator layout &mdash; show the output first, with the code behind a toggle</option>
+                </select>
+              </div>
+              {% endif %}
               {% if displayOption %}
               <div id="shareDisplayOptions">
                 <select id="displayOptionLink" name="displayOptionLink" class="displayOptions" data-type="shareUrl" data-trinket-shortCode="" data-trinket-runMode="">

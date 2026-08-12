@@ -88,6 +88,13 @@ stock config (your values win) and shadows any view/asset by matching relative p
 > ⚠️ The "`local.yaml` poisons tests" caveat applies to the **root** `config/local.yaml`,
 > *not* an overlay's `local.yaml`: tests never set `TRINKET_DEPLOY`, so the overlay
 > (and its `local.yaml`) is inert during test runs.
+>
+> ⚠️ **A self-host (docker compose) production deploy must set `NODE_ENV=production`
+> in its `.env`.** `docker-compose.yml` defaults it to `development` so a plain
+> `docker compose up` stays a dev stack — but that means `local-production.yaml`
+> **never loads** on a compose deploy that doesn't set it, view caching stays off,
+> and `enable: false` route gating is inert. `deploy-cloudrun.sh` sets it for you;
+> compose does not. Check a running deploy with `GET /version` (`nodeEnv`).
 
 ---
 
@@ -97,6 +104,7 @@ stock config (your values win) and shadows any view/asset by matching relative p
 app:
   siteName: 'Example Trinket'
   logo: '/img/brand/logo.png'          # your file in deploys/<name>/public/img/brand/
+  logoIcon: '/img/brand/icon.png'      # ⚠️ SET THIS TOO — see below
   announcement: '⚠️ Test server — data may be wiped.'   # shows in preview too
   branding:
     lead: 'A browser-based coding platform for computational physics.'
@@ -113,6 +121,68 @@ features:
     # pyodide: true   # …or re-enable a separate Pyodide button
 ```
 
+## Optional: run Python off the main thread (`features.workerRuntime`)
+
+Default **`false`**. When enabled, python3 programs run in a Web Worker, so the
+page cannot freeze and **Stop always works** — including for `while True: pass`,
+which nothing on the main thread can interrupt, because a loop with no pause
+point never lets the page run to notice the click.
+
+```yaml
+features:
+  workerRuntime: true
+```
+
+**Programs that stay on the main thread regardless of this flag:**
+
+- **Web VPython / GlowScript.** Its bridge binds `from js import sphere, box,
+  rate, …` to the browser window, which does not exist in a worker. Unchanged,
+  deliberately: Stop already works there via `rate()`.
+- Programs calling `input()`, `sleep()` or `rate()` inside a **lambda or a
+  comprehension**, where `await` cannot be inserted. They keep working exactly as
+  they do today; they just do not gain the freeze protection.
+
+**Per-link override:** `?runtime=worker` forces the worker even when the flag is
+off; `?runtime=main` forces the main thread even when it is on. The query
+parameter wins over the flag either way, and it works on **both** the embed URL
+and the trinket page URL — the page carries it through to the iframe it builds.
+Any other value is ignored rather than reflected back.
+
+**Telling which runtime a program got:** the console says so when the answer
+isn't the obvious one — when a program runs in the worker, when a request like
+`?runtime=worker` could *not* be honoured (Web VPython, or `input()`/`sleep()`/
+`rate()` inside a lambda or comprehension), and otherwise stays silent. An
+ordinary main-thread run on a deploy with the flag off prints nothing new.
+
+Authors don't have to hand-edit URLs for this: **Share ▸ Link** offers the
+choice on python3 and pyodide trinkets, in both directions. With the flag
+**off**, "Stoppable" opts a single program that needs a stoppable `while True:`
+into the worker. With the flag **on** — where the worker is the default —
+"Original" sends one program back to the main thread, which is what a program
+the async transform cannot rewrite needs.
+
+The choice rides on the link, not on the trinket — a second embed of the same
+program, a fork, or an LTI launch each builds its own URL and starts from the
+deploy default again. Moving it onto the trinket itself is issue #128.
+
+**What changes for a student when this is on**
+
+| | |
+|---|---|
+| `while True: pass` | page stays responsive; Stop halts it |
+| matplotlib | interactive, with the usual toolbar (home / pan / zoom / save) |
+| `input()` | works; the prompt is answered through the console |
+| the interactive console (REPL) | a runaway statement is stoppable |
+
+**Two consequences worth knowing before you enable it:**
+
+1. **Stop discards the interpreter.** That is what makes it unconditional. So
+   after a stop there is no variable snapshot to show, and a stopped REPL loses
+   its session — both are said plainly in the console rather than left to be
+   guessed at.
+2. **Cold start after a stop.** The next run boots a fresh worker, so it is
+   slower than a run that follows a normal finish.
+
 ## Example — prod-only infra in `config/local-production.yaml`
 
 ```yaml
@@ -128,6 +198,16 @@ aws:
 ```
 
 Every block is optional — anything you leave out inherits the stock value.
+
+> ⚠️ **`logo` and `logoIcon` are a pair — override both.** `logo` is the wide
+> mark; `logoIcon` is the compact one used where that doesn't fit, notably the
+> **embed header at medium-down widths** — which is exactly what an embedded
+> trinket box inside course text is. Override only `logo` and your branding
+> appears in full screen while **every small embed still shows the stock Trinket
+> mark** (issue #47). If you have no separate icon, point `logoIcon` at the same
+> file rather than leaving it to inherit.
+>
+> Check a running deploy: `curl -s https://<host>/embed/python3 | grep 'show-for-medium-down'`.
 
 ---
 

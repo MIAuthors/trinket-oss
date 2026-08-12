@@ -1,0 +1,311 @@
+const { test, expect } = require('@playwright/test');
+
+// RUNTIME PINNED. These tests were written against the in-window Pyodide and
+// assert its behaviour (cooperative stop, synchronous console.input(), the REPL
+// on the main thread). A dev box may enable features.workerRuntime in its
+// untracked local.yaml, which would silently route them off-thread and change
+// what they are testing. #108's own behaviour is covered by worker-runtime.spec.js.
+
+// SPIKE (#109): does a Pyodide-backed REPL actually work when wired to jq-console?
+// These run against a live stack because that is the only way to answer it —
+// PyodideConsole's behaviour through a PyProxy cannot be checked by inspection.
+//
+// The last two tests are the ones that matter most: they assert the spike did not
+// disturb the two systems it sits next to (console.input(), and the ordinary
+// Run-a-program path that owns VPython rate() cancellation).
+test.describe('Pyodide REPL (#109 spike)', () => {
+  async function replPrompt(page) {
+    await expect(page.locator('#console-output')).toBeVisible({ timeout: 90_000 });
+    // The banner is written once Pyodide has booted and the prompt is armed.
+    await expect(async () => {
+      const text = await page.evaluate(() => document.querySelector('#console-output')?.innerText || '');
+      expect(text).toContain('on Pyodide');
+    }).toPass({ timeout: 90_000 });
+  }
+
+  async function typeLine(page, line) {
+    await page.locator('#console-output').click();
+    await page.keyboard.type(line);
+    await page.keyboard.press('Enter');
+  }
+
+  async function consoleText(page) {
+    return page.evaluate(() => document.querySelector('#console-output')?.innerText || '');
+  }
+
+  test('evaluates an expression and prints its repr', async ({ page }) => {
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, '6*7');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('42');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('keeps state between statements', async ({ page }) => {
+    // The point of a REPL: the namespace persists.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'x = 5');
+    await typeLine(page, 'x + 1');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('6');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('continues a multi-line block instead of executing it early', async ({ page }) => {
+    // Exercises the continuation callback (codeop.compile_command): `for` alone
+    // must NOT execute, and the loop must run once the blank line closes it.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'for i in range(3):');
+    await typeLine(page, '    print("n", i)');
+    await typeLine(page, '');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain('n 0');
+      expect(text).toContain('n 2');
+      expect(text).not.toContain('SyntaxError');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('reports an error without killing the prompt', async ({ page }) => {
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'int("hi")');
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('ValueError');
+    }).toPass({ timeout: 60_000 });
+
+    await typeLine(page, '1+1');   // prompt must still be alive
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('2');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('REGRESSION: console.input() still works at the prompt', async ({ page }) => {
+    // console.input() drives jqconsole.Input(), which cannot coexist with an
+    // ACTIVE jqconsole.Prompt. The loop is designed so the prompt is consumed
+    // before evaluation begins — this proves that holds in practice.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'import console');
+    await typeLine(page, 'name = console.input("who? ")');
+    await page.waitForTimeout(1500);      // let the input field open
+    await typeLine(page, 'Ada');
+    await typeLine(page, 'name');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain('who?');
+      expect(text).toContain('Ada');
+    }).toPass({ timeout: 90_000 });
+  });
+
+  test('REGRESSION: the ordinary Run path is unaffected', async ({ page }) => {
+    // Without runMode=console nothing about the normal editor/Run flow changes —
+    // this is the path that owns VPython rate() cancellation and the async
+    // transform, neither of which the REPL touches.
+    await page.goto('/embed/python3?runtime=main');
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('print("ordinary run", 1+1)', 1);
+    });
+    await page.locator('.run-it').first().click();
+
+    await expect(async () => {
+      const text = await page.evaluate(() => document.querySelector('#outputContainer')?.innerText || '');
+      expect(text).toContain('ordinary run 2');
+    }).toPass({ timeout: 90_000 });
+  });
+
+  test('the Share dialog\'s "Interactive console only" option reaches the REPL', async ({ page }) => {
+    // The dialog emits runOption=console (NOT runMode=console): the server keeps
+    // it as runOption, so its runMode fallback never fires. If the REPL keyed on
+    // runMode alone, the dialog's option would still be dead — which is the
+    // complaint in #109. This asserts the advertised control actually works.
+    await page.goto('/embed/python3?runOption=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, '2**10');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('1024');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  // --- Found by Steve's manual smoke test of the console on 3001 -------------
+  // Three separate defects, all in what the REPL PRINTS rather than what it
+  // evaluates, which is why the earlier tests (all of which check evaluation)
+  // stayed green through every one of them.
+
+  test('output is legible: the light-background console palette is applied', async ({ page }) => {
+    // `.jqconsole-output` is WHITE by default — that is the palette for the dark
+    // console a running program draws into. The light REPL palette lives behind
+    // `.console-mode`, which the Skulpt REPL sets and this one did not, leaving
+    // white text on the #f9f9f9 REPL background.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    expect(await page.evaluate(() =>
+      document.getElementById('console-output').classList.contains('console-mode')
+    )).toBe(true);
+
+    const color = await page.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.className = 'jqconsole-output';
+      document.querySelector('.jqconsole').appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    });
+    expect(color).not.toBe('rgb(255, 255, 255)');
+  });
+
+  test('a traceback hides Pyodide internals and names the console frame', async ({ page }) => {
+    // The REPL wrote raw err.message, so it bypassed the #107 traceback filter
+    // entirely: a one-line mistake produced a dozen frames of console.py and
+    // _base.py above the line that mattered.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'int("hi")');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain("ValueError: invalid literal for int()");
+      expect(text).not.toMatch(/_pyodide|python\d*\.zip|codeop|CodeRunner|_base\.py|console\.py/);
+      // <stdin> and <module> must SURVIVE rendering — see the escaping test below.
+      expect(text).toContain('File "<stdin>", line 1, in <module>');
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('angle brackets in output survive rendering (repr, scope names)', async ({ page }) => {
+    // The console wrote unescaped HTML, so every <...> in Python text was parsed
+    // as a tag and vanished: `File "<console>", line 1, in <module>` rendered as
+    // `File "", line 1, in ` — and an object's repr disappeared completely.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'class Foo: pass');
+    await page.keyboard.press('Enter');          // blank line closes the block
+    await typeLine(page, 'Foo()');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toMatch(/<__main__\.Foo object at 0x[0-9a-f]+>/);
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test('markup in an exception message is shown, not executed', async ({ page }) => {
+    // Same unescaped write, seen as an injection rather than a rendering bug.
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'raise ValueError(\'<img src=x onerror="window.__pwned=1">\')');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('<img src=x onerror="window.__pwned=1">');
+    }).toPass({ timeout: 60_000 });
+
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+    // the only <img> in the console is the Trinket logo in the header
+    expect(await page.evaluate(() =>
+      document.querySelectorAll('.jqconsole img:not(#powered-by-trinket)').length
+    )).toBe(0);
+  });
+
+  test('incomplete input reports SyntaxError, not a Pyodide internal name', async ({ page }) => {
+    await page.goto('/embed/python3?runMode=console&start=result&runtime=main');
+    await replPrompt(page);
+
+    await typeLine(page, 'print("helo');
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text).toContain('SyntaxError');
+      expect(text).not.toContain('_IncompleteInputError');
+    }).toPass({ timeout: 60_000 });
+  });
+
+
+  // --- The Run menu (Steve: "I don't see console in the run menu?") -----------
+  // config.runOption.python3 is [run, console], and python.html/R.html render a
+  // dropdown offering both — but pyodide.html never defined the run_options block,
+  // so on a python3 trinket the REPL was reachable only by URL or by the Share
+  // dialog. These cover the menu path end to end.
+
+  async function pickRunOption(page, button) {
+    await page.evaluate((b) => {
+      $('.run-it [data-dropdown="run-options"]').trigger('click');
+      $('#run-options a[data-button="' + b + '"]').trigger('click');
+    }, button);
+  }
+
+  test('the Run menu offers Console, and it opens the REPL', async ({ page }) => {
+    await page.goto('/embed/python3?runtime=main');
+
+    expect(await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#run-options a')).map(a => a.getAttribute('data-button'))
+    )).toEqual(['run', 'console']);
+    // the caret that opens it — Foundation renders it from the `split` class
+    expect(await page.evaluate(() => document.querySelector('.run-it').classList.contains('split'))).toBe(true);
+
+    await pickRunOption(page, 'console');
+
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+    expect(await page.evaluate(() =>
+      document.querySelector('.run-it label').textContent.trim()
+    )).toBe('Console');
+  });
+
+  test('re-selecting Console keeps the session instead of resetting it', async ({ page }) => {
+    // consoleResult originally called showResult(), which calls runCode() — so
+    // choosing Console RAN the program, resetting the console and destroying the
+    // REPL's transcript and namespace.
+    await page.goto('/embed/python3?runtime=main');
+    await pickRunOption(page, 'console');
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+
+    await typeLine(page, 'x = 6*7');
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('x = 6*7');
+    }).toPass({ timeout: 30_000 });
+
+    await pickRunOption(page, 'console');          // again, with a live session
+
+    await expect(async () => {
+      const text = await consoleText(page);
+      expect(text, 'the session must survive').toContain('x = 6*7');
+      expect(text.match(/on Pyodide/g) || [], 'exactly one banner').toHaveLength(1);
+    }).toPass({ timeout: 30_000 });
+  });
+
+  test('REGRESSION: switching back to Run still runs the program', async ({ page }) => {
+    // showResult() was refactored to share its pane-switch with the REPL; every
+    // run path in the file goes through it.
+    await page.goto('/embed/python3?runtime=main');
+    await pickRunOption(page, 'console');
+    await expect(page.locator('.jqconsole-prompt').first()).toBeVisible({ timeout: 90_000 });
+
+    await page.evaluate(() => {
+      document.querySelector('.ace_editor').env.editor.setValue('print("ran ok")', 1);
+    });
+    await pickRunOption(page, 'run');
+
+    await expect(async () => {
+      expect(await consoleText(page)).toContain('ran ok');
+    }).toPass({ timeout: 90_000 });
+    expect(await page.evaluate(() =>
+      document.querySelector('.run-it label').textContent.trim()
+    )).toBe('Run');
+  });
+
+});

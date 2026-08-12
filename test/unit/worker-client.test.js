@@ -1,0 +1,265 @@
+'use strict';
+// #108: the client's lifecycle logic — correlation ids, stop, and the promise
+// contract. A fake Worker constructor is injected so this stays a node test;
+// real execution is covered by the browser spec.
+const { createWorkerClient } = require('../../public/js/embed/worker-client.js');
+
+function fakeWorkerFactory() {
+  const made = [];
+  function FakeWorker() {
+    this.posted = [];
+    this.terminated = false;
+    this.postMessage = (m) => { this.posted.push(m); };
+    this.terminate = () => { this.terminated = true; };
+    made.push(this);
+  }
+  return { FakeWorker, made };
+}
+
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+// The worker answers `run` with "Python is not ready yet" until Pyodide has
+// booted, so the client holds runs until `ready`. Tests that exercise runs must
+// therefore boot the fake worker first — that is the real sequence.
+async function bootedClient(extra) {
+  const h = newClient(extra);
+  h.made[0].onmessage({ data: { type: 'ready', v: 1 } });
+  await tick();
+  return h;
+}
+
+function newClient(extra) {
+  const { FakeWorker, made } = fakeWorkerFactory();
+  const events = { stdout: [], stderr: [], errors: [] };
+  const client = createWorkerClient(Object.assign({
+    workerUrl: '/js/embed/pyodide-worker.js',
+    pyodideUrl: 'https://cdn/pyodide.js',
+    WorkerCtor: FakeWorker,
+    onStdout: (t) => events.stdout.push(t),
+    onStderr: (t) => events.stderr.push(t),
+    onError:  (t) => events.errors.push(t)
+  }, extra || {}));
+  return { client, made, events };
+}
+
+describe('createWorkerClient', () => {
+  it('sends init on construction', () => {
+    const { made } = newClient();
+    expect(made[0].posted[0].type).toBe('init');
+  });
+
+  it('is not running before a run starts', () => {
+    const { client } = newClient();
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it('posts a run message with a correlation id, and reports running', async () => {
+    const { client, made } = await bootedClient();
+    client.run('print(1)');
+    await tick();
+    const runMsg = made[0].posted.find(m => m.type === 'run');
+    expect(runMsg.source).toBe('print(1)');
+    expect(typeof runMsg.id).toBe('string');
+    expect(client.isRunning()).toBe(true);
+  });
+
+  it('forwards stdout to the callback', async () => {
+    const { client, made, events } = await bootedClient();
+    client.run('print(1)');
+    await tick();
+    made[0].onmessage({ data: { type: 'stdout', text: 'hello\n' } });
+    expect(events.stdout).toEqual(['hello\n']);
+  });
+
+  it('resolves the run promise on done', async () => {
+    const { client, made } = await bootedClient();
+    const p = client.run('print(1)');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+    made[0].onmessage({ data: { type: 'done', id } });
+    await expect(p).resolves.toBeUndefined();
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it('reports an error and still settles the run', async () => {
+    const { client, made, events } = await bootedClient();
+    const p = client.run('boom');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+    made[0].onmessage({ data: { type: 'error', id, traceback: 'ValueError: x' } });
+    await p;
+    expect(events.errors).toEqual(['ValueError: x']);
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it('ignores replies whose id does not match the current run (a stale worker)', async () => {
+    const { client, made, events } = await bootedClient();
+    client.run('print(1)');
+    await tick();
+    made[0].onmessage({ data: { type: 'error', id: 'not-the-current-id', traceback: 'stale' } });
+    expect(events.errors).toEqual([]);
+    expect(client.isRunning()).toBe(true);
+  });
+
+  it('stop() terminates the worker and settles the in-flight run', async () => {
+    const { client, made } = await bootedClient();
+    const p = client.run('while True: pass');
+    await tick();
+    client.stop();
+    expect(made[0].terminated).toBe(true);
+    await expect(p).resolves.toBeUndefined();
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it('spawns a replacement worker after stop, so the next run works', async () => {
+    const { client, made } = await bootedClient();
+    client.run('while True: pass');
+    await tick();
+    client.stop();
+    client.run('print(2)');
+    await tick();
+    expect(made.length).toBe(2);
+    expect(made[1].posted[0].type).toBe('init');
+  });
+
+  it('stop() with nothing running is harmless', () => {
+    const { client } = newClient();
+    expect(() => client.stop()).not.toThrow();
+  });
+
+  it('does NOT post a run before the worker reports ready', async () => {
+    // Booting Pyodide takes seconds; a run posted first is answered
+    // "Python is not ready yet". Found by the browser spec, not by unit tests.
+    const { client, made } = newClient();
+    client.run('print(1)');
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'run')).toBeUndefined();
+
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'run')).toBeTruthy();
+  });
+
+  it('surfaces a boot failure, which carries no run id', async () => {
+    // The worker posts {type:'error', id:null} if Pyodide fails to load. The
+    // id check would drop it and the page would wait forever on `ready`.
+    const { client, made, events } = newClient();
+    const p = client.run('print(1)');
+    made[0].onmessage({ data: { type: 'error', id: null, traceback: 'Failed to start Python: boom' } });
+    await expect(p).resolves.toBeUndefined();
+    expect(events.errors).toEqual(['Failed to start Python: boom']);
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it('a reply from a REPLACED worker cannot settle the new run', async () => {
+    // The dangerous case: stop() then run() again, and the dead worker's last
+    // message arrives late. Ids are unique per run, so it must be ignored.
+    const { client, made } = await bootedClient();
+    client.run('first');
+    await tick();
+    const firstId = made[0].posted.find(m => m.type === 'run').id;
+    client.stop();
+    client.run('second');
+    await tick();
+
+    made[0].onmessage({ data: { type: 'done', id: firstId } });
+    expect(client.isRunning()).toBe(true);
+  });
+});
+
+describe('input() over the channel', () => {
+  it('asks the page for input and posts the reply back', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    let asked = null;
+    const client = createWorkerClient({
+      workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker,
+      onInputRequest: (prompt) => { asked = prompt; return Promise.resolve('Ada'); }
+    });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('name = input("who? ")');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+
+    made[0].onmessage({ data: { type: 'input-request', id, prompt: 'who? ' } });
+    await tick();
+    await tick();
+
+    expect(asked).toBe('who? ');
+    const reply = made[0].posted.find(m => m.type === 'stdin-reply');
+    expect(reply).toEqual({ type: 'stdin-reply', id, value: 'Ada' });
+  });
+
+  it('does not answer an input request from a stale run', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({
+      workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker,
+      onInputRequest: () => Promise.resolve('x')
+    });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('input()');
+    await tick();
+
+    made[0].onmessage({ data: { type: 'input-request', id: 'stale', prompt: '?' } });
+    await tick();
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'stdin-reply')).toBeUndefined();
+  });
+
+  it('answers with an empty string when the page has no input handler', async () => {
+    // Better than hanging the program forever on a prompt nobody can answer.
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.run('input()');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+
+    made[0].onmessage({ data: { type: 'input-request', id, prompt: '?' } });
+    await tick();
+    await tick();
+    expect(made[0].posted.find(m => m.type === 'stdin-reply').value).toBe('');
+  });
+});
+
+describe('variable snapshot over the channel', () => {
+  it('requests a snapshot and resolves with the parsed array', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+
+    const p = client.snapshot();
+    await tick();
+    const req = made[0].posted.find(m => m.type === 'snapshot');
+    expect(req).toBeTruthy();
+
+    made[0].onmessage({ data: { type: 'snapshot-result', id: req.id, json: '[{"name":"x","value":"42"}]' } });
+    await expect(p).resolves.toEqual([{ name: 'x', value: '42' }]);
+  });
+
+  it('resolves to an empty array when the worker reports a failure', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    const p = client.snapshot();
+    await tick();
+    const req = made[0].posted.find(m => m.type === 'snapshot');
+    made[0].onmessage({ data: { type: 'snapshot-result', id: req.id, json: null } });
+    await expect(p).resolves.toEqual([]);
+  });
+
+  it('resolves to an empty array if the worker is gone (stopped)', async () => {
+    // Terminating discards the namespace, so a snapshot request after a stop can
+    // never be answered. It must not hang the caller.
+    const { FakeWorker, made } = fakeWorkerFactory();
+    const client = createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    client.stop();
+    await expect(client.snapshot()).resolves.toEqual([]);
+  });
+});

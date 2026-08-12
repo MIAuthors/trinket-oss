@@ -6,6 +6,17 @@
   <i class="fa {{'fa-terminal' if runOption and runOption == 'console' else 'fa-play'}}"></i>
   <label>{{'Run' if not runOption or runOption == 'run' else 'Console'}}</label>
 </button>
+{# Stop: shown by the runner only while a cancellable run is in flight (#108).
+   Cancellation is cooperative — the program unwinds at its next yield point
+   (rate() or time.sleep()). A loop with no yield point freezes the tab outright,
+   in which case this button can never be clicked anyway. #}
+<a class="stop-it menu-button item allow-original hide"
+   data-action="code.stop"
+   title="Stop the running program."
+   aria-label="Stop">
+  <i class="fa fa-stop"></i>
+  <label class="show-for-medium-up">Stop</label>
+</a>
 <a class="check-it menu-button item allow-original {{'' if trinket.settings.testsEnabled else 'hide'}}"
    data-action="code.check"
    title="Check your code.">
