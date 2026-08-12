@@ -960,9 +960,17 @@ $('document').ready(function() {
       zip = new JSZip();
       zip.file("zipCode", JSON.stringify(data.code));
 
+      // POST as JSON, not form-encoded: postData carries assets (array) and
+      // settings (object, now including #128's runtime), which $.post's form
+      // encoding flattens into bracket-notation keys like "settings[runtime]"
+      // instead of a nested object. The route's Joi schema requires settings
+      // to be an object, so a mis-shaped payload isn't rejected -- it's just
+      // silently treated as absent, and the draft saves everything except
+      // settings. Same failure mode as the fork() dead-MD5 bug (see the JSON
+      // comment on fork(), above); fixed the same way.
       zip.generateAsync({ type: "base64", compression: "DEFLATE", compressionOptions: { level: 9 } }).then(function(content) {
         postData.zipCode = content;
-        $.post(url, postData)
+        $.ajax({ url : url, type : 'POST', contentType : 'application/json', data : JSON.stringify(postData) })
         .done(function(result) {
           if (result.success) {
             self._viewingDraft = true;
@@ -975,8 +983,8 @@ $('document').ready(function() {
           }
         });
       }, function(err) {
-        postData.code = data.code;
-        $.post(url, postData)
+        postData.code = JSON.stringify(data.code);
+        $.ajax({ url : url, type : 'POST', contentType : 'application/json', data : JSON.stringify(postData) })
         .done(function(result) {
           if (result.success) {
             self._viewingDraft = true;
