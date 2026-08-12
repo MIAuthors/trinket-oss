@@ -512,30 +512,97 @@ Create `test/browser/specs/runtime-setting.spec.js`, following the helper style 
 `embedFrame`, `runInEmbed` verbatim rather than reinventing them):
 
 ```js
+const { test, expect } = require('@playwright/test');
+
+// #128: the runtime stored ON the trinket, as opposed to on a share link. The
+// point of every test here is that NO query parameter is involved except where
+// one is being tested explicitly.
 test.describe('Per-trinket runtime setting (#128)', () => {
+  // Copy createTrinket / embedFrame / runInEmbed verbatim from
+  // specs/share-runtime-option.spec.js — same helpers, same harness.
+
+  async function openSettings(page, lang, shortCode) {
+    await page.goto('/embed/' + lang + '/' + shortCode);
+    await page.locator('.ace_editor').first().waitFor({ state: 'visible', timeout: 60_000 });
+    await page.locator('[data-interface="settings"], a:has-text("Settings")').first().click();
+    await expect(page.locator('#settingsModal')).toBeVisible();
+  }
+
+  async function setRuntime(page, lang, shortCode, value) {
+    await openSettings(page, lang, shortCode);
+    await page.locator('#runtime').selectOption(value);
+    // The change handler marks the trinket dirty; give the save a beat to land.
+    await expect(async () => {
+      const res = await page.request.get('/api/trinkets/' + shortCode);
+      const body = await res.json();
+      expect((body.data || body).settings.runtime).toBe(value);
+    }).toPass({ timeout: 30_000 });
+  }
+
   test('the row is offered for python3 and hidden for glowscript', async ({ page }) => {
-    // ... open Trinket Settings on each; #runtime visible, then absent
+    const py = await createTrinket(page, 'python3', 'print("settings row")');
+    await openSettings(page, 'python3', py);
+    await expect(page.locator('#runtime')).toBeVisible();
+
+    const gs = await createTrinket(page, 'glowscript', 'from vpython import *\nsphere()\n');
+    await openSettings(page, 'glowscript', gs);
+    // Hidden, not merely absent from view: the whole row must not render.
+    await expect(page.locator('#runtime')).toHaveCount(0);
+    // The modal itself rendered, proving the assertion above is about the gate.
+    await expect(page.locator('#autofocusEnabled')).toBeVisible();
   });
 
   test('a stored setting routes the run with NO query parameter present', async ({ page }) => {
-    // set 'worker', save, reload the embed with a bare URL,
-    // run, expect window.__trinketRuntime === 'worker'
-    // and __trinketRuntimeReason to match /trinket setting/
+    const shortCode = await createTrinket(page, 'python3', 'print("stored routing")');
+    await setRuntime(page, 'python3', shortCode, 'worker');
+
+    await page.goto('/embed/python3/' + shortCode);   // bare URL, no ?runtime=
+    const frame = page;
+    await frame.locator('.ace_editor').first().waitFor({ state: 'visible', timeout: 60_000 });
+    await frame.locator('.run-it').first().click();
+    await expect(async () => {
+      expect(await frame.evaluate(() => window.__trinketRuntime)).toBeTruthy();
+    }).toPass({ timeout: 120_000 });
+
+    expect(await frame.evaluate(() => window.__trinketRuntime)).toBe('worker');
+    // The REASON proves the stored setting did it, not the deploy flag.
+    expect(await frame.evaluate(() => window.__trinketRuntimeReason)).toMatch(/trinket setting/);
   });
 
   test('a URL parameter still beats the stored setting', async ({ page }) => {
-    // stored 'worker' + ?runtime=main -> main, reason matches /query/
+    const shortCode = await createTrinket(page, 'python3', 'print("url wins")');
+    await setRuntime(page, 'python3', shortCode, 'worker');
+
+    await page.goto('/embed/python3/' + shortCode + '?runtime=main');
+    await page.locator('.ace_editor').first().waitFor({ state: 'visible', timeout: 60_000 });
+    await page.locator('.run-it').first().click();
+    await expect(async () => {
+      expect(await page.evaluate(() => window.__trinketRuntime)).toBeTruthy();
+    }).toPass({ timeout: 120_000 });
+
+    expect(await page.evaluate(() => window.__trinketRuntime)).toBe('main');
+    expect(await page.evaluate(() => window.__trinketRuntimeReason)).toMatch(/query/i);
   });
 
   test('the setting survives a fork', async ({ page }) => {
-    // fork the trinket, open the copy, expect the same stored value
+    const shortCode = await createTrinket(page, 'python3', 'print("fork me")');
+    await setRuntime(page, 'python3', shortCode, 'worker');
+
+    const res = await page.request.post('/api/trinkets/' + shortCode + '/fork');
+    expect(res.ok(), 'fork should succeed').toBeTruthy();
+    const forked = (await res.json()).data;
+
+    const got = await page.request.get('/api/trinkets/' + forked.shortCode);
+    expect(((await got.json()).data).settings.runtime).toBe('worker');
   });
 });
 ```
 
-Fill each body in using the existing spec's idioms. Every test must assert on
-`window.__trinketRuntime` **and** `window.__trinketRuntimeReason`, so a pass
-proves *why* the runtime was chosen, not merely which one.
+If the fork endpoint's path or payload differs from the guess above, find the
+real one (`config/routes.js`, search `fork`) and use it — the assertion is what
+matters, not the route spelling. Every routing test asserts on
+`window.__trinketRuntime` **and** `__trinketRuntimeReason`, so a pass proves
+*why* the runtime was chosen, not merely which one.
 
 - [ ] **Step 2: Prove the field round-trips on BOTH backends**
 
