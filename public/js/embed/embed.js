@@ -1069,9 +1069,21 @@ $('document').ready(function() {
           zip = new JSZip();
           zip.file("zipCode", JSON.stringify(data.code));
 
+          // POST as JSON, not form-encoded: postData carries assets (array) and
+          // settings (object, now including #128's runtime), which $.post's
+          // form encoding flattens into bracket-notation keys like
+          // "settings[runtime]" instead of a nested object. routeParser.js
+          // wraps every plain-object validate.payload schema (this route's
+          // included) in Joi.object(schema).unknown(true), so a mis-shaped
+          // payload isn't rejected with a 400 -- the flattened key is just an
+          // allowed "unknown" field, silently ignored, and the autosave
+          // persists everything except settings. Same failure mode as
+          // _updateDraft (see its comment) and fork()'s dead-MD5 bug; fixed
+          // the same way.
           zip.generateAsync({ type: "base64", compression: "DEFLATE", compressionOptions: { level: 9 } }).then(function(content) {
             postData.zipCode = content;
-            $.post(url, postData).done(function(result) {
+            $.ajax({ url : url, type : 'POST', contentType : 'application/json', data : JSON.stringify(postData) })
+            .done(function(result) {
               if (result.success) {
                 self.$draftMessage.fadeOut('slow', function() {
                   self.$draftMessage.text('Saved').fadeIn('slow');
@@ -1089,7 +1101,8 @@ $('document').ready(function() {
             });
           }, function(err) {
             postData.code = data.code;
-            $.post(url, postData).done(function(result) {
+            $.ajax({ url : url, type : 'POST', contentType : 'application/json', data : JSON.stringify(postData) })
+            .done(function(result) {
               if (result.success) {
                 self.$draftMessage.fadeOut('slow', function() {
                   self.$draftMessage.text('Saved').fadeIn('slow');
