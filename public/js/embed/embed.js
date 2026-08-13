@@ -983,7 +983,7 @@ $('document').ready(function() {
           }
         });
       }, function(err) {
-        postData.code = JSON.stringify(data.code);
+        postData.code = data.code;
         $.ajax({ url : url, type : 'POST', contentType : 'application/json', data : JSON.stringify(postData) })
         .done(function(result) {
           if (result.success) {
