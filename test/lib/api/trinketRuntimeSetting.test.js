@@ -131,6 +131,35 @@ describe('settings.runtime validation', () => {
     expect((await getTrinket(forked.id)).settings.runtime).toBe('worker');
   });
 
+  // The route the whole-branch review flagged: PUT /api/trinkets/{id}/code is
+  // bound to trinket.update() (config/api_routes.js), which is the embed
+  // Save button's route AND the only path by which a stored runtime reaches
+  // the shared Trinket document — draft writes a separate Draft document, and
+  // autosave (exercised above) already called sanitizeSettings. update() did
+  // not, until now: trinket.set(request.payload) applied the whole payload,
+  // settings included, with no whitelist. On Firestore (no mongoose
+  // validators) a bad value stores verbatim as an unmatched, unclearable
+  // <option>; on Mongo the schema enum rejects the whole .save(), and the
+  // client's save() swallows the error, so the author's code change is lost
+  // silently. This test drives the real route, not the controller function.
+  describe('on the code route (PUT /api/trinkets/{id}/code, trinket.update)', () => {
+    async function saveCode(id, payload) {
+      await flow.put('/api/trinkets/' + id + '/code', payload);
+      return flow.lastResponse.body;
+    }
+
+    it('sanitizes an invalid runtime without losing the rest of the payload', async () => {
+      const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
+      await saveCode(t.id, {
+        code: 'print("distinctive-marker-128-code-route")',
+        settings: { runtime: 'nonsense' },
+      });
+      const got = await getTrinket(t.id);
+      expect(got.settings.runtime).toBe('');
+      expect(got.code).toBe('print("distinctive-marker-128-code-route")');
+    });
+  });
+
   // The DRAFT path specifically: Draft.findOneAndUpdate skips mongoose
   // validators, so unlike the .save() site above, the schema enum gives this
   // path no protection at all — sanitizeSettings is the only thing standing
