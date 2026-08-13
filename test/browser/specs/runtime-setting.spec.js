@@ -125,24 +125,74 @@ test.describe('Per-trinket runtime setting (#128)', () => {
   // Trinket(request.payload)` with no server-side copy of the parent's
   // `settings` — inheritance is a CLIENT behavior: python3.js's serialize()
   // (public/js/embed/python3.js) includes `settings: this._trinket.settings`
-  // in every fork payload, same as `code`. So the payload below (code +
-  // settings) mirrors exactly what a real Fork click sends; `code` is
-  // Joi-required on this route regardless.
+  // in every fork payload, same as `code`.
+  //
+  // This test drives that real client mechanism rather than hand-building the
+  // payload: it reads `window.TrinketApp.serialize()` -- the exact function
+  // the actual Fork button's click handler calls (embed.js's fork()/
+  // _createCopy()) -- and posts exactly what it returns. That proves
+  // serialize() itself carries settings forward; it stops short of clicking
+  // the real Fork/Remix button in the left menu, whose visibility and
+  // data-action wiring depend on ownership/upgrade state not otherwise
+  // exercised in this file, so the POST to /forks below is still made
+  // directly rather than through a UI click.
   test('the setting survives a fork', async ({ page }) => {
     const shortCode = await createTrinket(page, 'python3', 'print("fork me")');
     await setRuntime(page, 'python3', shortCode, 'worker');
+
+    const serialized = await page.evaluate(function() {
+      return window.TrinketApp.serialize();
+    });
+    expect(serialized.settings.runtime, 'serialize() should carry the stored setting').toBe('worker');
 
     const parentRes = await page.request.get('/api/trinkets/' + shortCode);
     const parent = (await parentRes.json()).data;
 
     const res = await page.request.post('/api/trinkets/' + parent.id + '/forks', {
-      data: { code: parent.code, settings: parent.settings },
+      data: { code: serialized.code, settings: serialized.settings },
     });
     expect(res.ok(), 'fork should succeed').toBeTruthy();
     const forked = (await res.json()).data;
 
     const got = await page.request.get('/api/trinkets/' + forked.shortCode);
     expect(((await got.json()).data).settings.runtime).toBe('worker');
+  });
+
+  // Item 3(a) of the whole-branch review: nothing in this file (or anywhere
+  // else) drives _updateDraft's own transport (POST .../draft). Every test
+  // above goes through setRuntime, which clicks the real Save button (PUT
+  // .../code) and only ever checks the persisted Trinket -- reverting
+  // _updateDraft back to $.post form-encoding would leave all of them green,
+  // because Save was never form-encoded; only the draft route was. This test
+  // changes the runtime WITHOUT touching Save, waits for the debounced draft
+  // save to land (the "Draft saved" banner text is the completion signal --
+  // draftTextTemplate in lib/views/embed/base.html), and checks both ends:
+  // the raw Trinket (GET /api/trinkets/{id}) must still show the OLD value,
+  // and reloading the same URL as the owning user must re-select the NEW
+  // value in #runtime -- the server only does that by merging the Draft into
+  // the initial render (lib/views/includes/embed-settings.html's `draft`
+  // parameter), so that can only happen if the Draft document actually holds
+  // it.
+  test('changing a setting without Save lands in the Draft, not the Trinket', async ({ page }) => {
+    const shortCode = await createTrinket(page, 'python3', 'print("draft only")');
+
+    await openSettings(page, 'python3', shortCode);
+    await page.locator('#runtime').selectOption('worker');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    // draftDebounce defaults to 1000ms (config/default.yaml); "Draft saved"
+    // only appears once the POST .../draft round trip actually completes.
+    await expect(page.locator('#draftMessage')).toContainText('Draft saved', { timeout: 15_000 });
+
+    const res = await page.request.get('/api/trinkets/' + shortCode);
+    expect((await res.json()).data.settings.runtime, 'must not be on the Trinket yet').not.toBe('worker');
+
+    // Reload as the same (owning) user: the server merges the Draft into the
+    // initial render only when one exists for this user+trinket.
+    await openSettings(page, 'python3', shortCode);
+    await expect(page.locator('#draftMessage')).toContainText('Viewing Draft');
+    await expect(page.locator('#runtime')).toHaveValue('worker');
   });
 
   // Item 1 of the whole-branch review, the blocking one: _updateDraft's

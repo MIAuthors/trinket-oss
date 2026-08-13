@@ -116,13 +116,18 @@ describe('settings.runtime validation', () => {
     expect(got.testsEnabled).toBe(true);
   });
 
-  // A fork inherits the stored runtime when the payload carries it — exactly
-  // what the real Fork button sends (see forkTrinket's comment above). This is
-  // the `/forks` route specifically: createFork takes a different code path
-  // (`new Trinket(request.payload)`, no sanitizeSettings call) than the
-  // autosave/.save() site the earlier tests in this file exercise, so a valid
-  // value passing through it is not otherwise proven.
-  it('a fork inherits the stored runtime (spec D2)', async () => {
+  // What this proves, and what it doesn't: the `/forks` route (createFork,
+  // `new Trinket(request.payload)`, no sanitizeSettings call — a different
+  // code path than the autosave/.save() site the earlier tests exercise)
+  // copies `settings` from whatever the caller sends, unmangled. It does NOT
+  // prove that a real Fork click sends settings — this flow.cjs harness has
+  // no browser and can't call the client's serialize(), so `payload` below is
+  // hand-built, not the client's actual mechanism. That claim (settings
+  // flow from serialize() into the fork payload) is proven instead by
+  // test/browser/specs/runtime-setting.spec.js's "the setting survives a
+  // fork", which reads window.TrinketApp.serialize() directly. This test is
+  // the route-level half of that pair.
+  it('the /forks route copies settings the caller sends (spec D2, route only — see browser spec for the client mechanism)', async () => {
     const t = await createTrinket({ lang: 'python3', code: 'print(1)' });
     await updateTrinket(t.id, { settings: { runtime: 'worker' } });
     const parent = await getTrinket(t.id);
