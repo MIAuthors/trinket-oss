@@ -102,6 +102,27 @@
           </select>
         </div>
       {% endif %}
+      {# #108: the per-trinket runtime override, mirrored from #shareRuntimeOption
+         in the link dialog above (same gate, same option labels). #}
+      {% if runtimeOption or (config.app.runtimeOption and config.app.runtimeOption.indexOf(lang) >= 0) %}
+      <div id="embedRuntimeOption">
+        <select id="runtimeOptionEmbed" name="runtimeOptionEmbed" class="runtimeOptions" data-type="embedCode" data-trinket-shortCode="" data-trinket-runMode="">
+          <option value="">Use this site's default runtime</option>
+          <option value="worker">Stoppable &mdash; recommended for programs with loops</option>
+          <option value="main">Original &mdash; for a program the stoppable runtime can't run</option>
+        </select>
+      </div>
+      {% endif %}
+      {# The calculator layout (runMode=calculator), mirrored from
+         #shareCalculatorOption in the link dialog above. #}
+      {% if calculatorOption or (config.app.calculatorOption and config.app.calculatorOption.indexOf(lang) >= 0) %}
+      <div id="embedCalculatorOption">
+        <select id="calculatorOptionEmbed" name="calculatorOptionEmbed" class="calculatorOptions" data-type="embedCode" data-trinket-shortCode="" data-trinket-runMode="">
+          <option value="">Standard layout</option>
+          <option value="calculator">Calculator layout &mdash; show the output first, with the code behind a toggle</option>
+        </select>
+      </div>
+      {% endif %}
       {% if displayOption %}
       <div id="embedDisplayOptions">
         <select id="displayOptionEmbed" name="displayOptionEmbed" class="displayOptions" data-type="embedCode" data-trinket-shortCode="" data-trinket-runMode="">
