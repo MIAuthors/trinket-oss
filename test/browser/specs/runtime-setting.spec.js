@@ -144,4 +144,61 @@ test.describe('Per-trinket runtime setting (#128)', () => {
     const got = await page.request.get('/api/trinkets/' + forked.shortCode);
     expect(((await got.json()).data).settings.runtime).toBe('worker');
   });
+
+  // Item 1 of the whole-branch review, the blocking one: _updateDraft's
+  // postData used to include `assets: data.assets`. Under the OLD
+  // form-encoded $.post that key was harmless -- jQuery flattened it to
+  // bracket-notation keys the draft route's schema didn't recognize, so
+  // request.payload.assets was always undefined and drafts have never
+  // stored assets in the entire history of this code. Once this branch
+  // moved the draft save to JSON, that silently changed: assets would start
+  // reaching Firestore on every debounced draft save, an asset.url can carry
+  // an inline data:image base64 payload large enough to blow Firestore's
+  // 1 MiB/doc limit, and this route's write failure is swallowed
+  // (.catch -> request.success()) -- the "Saving Draft" banner would just
+  // never clear, with no error anywhere. _updateDraft was fixed to stop
+  // sending assets at all; this test pins that and fails if `assets` is
+  // ever re-added to its postData.
+  //
+  // Checked via route interception, not a server-side assertion, because
+  // what's being pinned is what the CLIENT chooses to send -- the draft
+  // route has always accepted an `assets` array (Joi.array().optional()) and
+  // still does; it's the client's job not to send one from a draft save.
+  // The assets feature is off by default in this stack
+  // (config/default.yaml `features.assets: false`), so real asset-upload
+  // plumbing isn't available here; instead this wraps the real serialize()
+  // so its output is exactly what a trinket WITH assets would produce, then
+  // drives the change through the actual #runtime control so the real
+  // debounced _updateDraft code path runs end to end.
+  test('a draft save never sends assets, even when some are present', async ({ page }) => {
+    const shortCode = await createTrinket(page, 'python3', 'print("assets pin")');
+
+    const draftRequests = [];
+    page.on('request', function(req) {
+      if (req.method() === 'POST' && req.url().endsWith('/draft')) {
+        draftRequests.push(req.postDataJSON());
+      }
+    });
+
+    await openSettings(page, 'python3', shortCode);
+
+    await page.evaluate(function() {
+      var real = window.TrinketApp.serialize.bind(window.TrinketApp);
+      window.TrinketApp.serialize = function() {
+        var data = real();
+        data.assets = [{ name: 'x.png', url: 'data:image/png;base64,AAAA' }];
+        return data;
+      };
+    });
+
+    await page.locator('#runtime').selectOption('worker');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect(page.locator('#draftMessage')).toContainText('Draft saved', { timeout: 15_000 });
+
+    expect(draftRequests.length, 'the draft route should have been hit').toBeGreaterThan(0);
+    for (const payload of draftRequests) {
+      expect(payload).not.toHaveProperty('assets');
+    }
+  });
 });

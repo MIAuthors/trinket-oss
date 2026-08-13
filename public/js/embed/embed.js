@@ -952,19 +952,31 @@ $('document').ready(function() {
       // skips the time to fade In/Out messages
       // used in library when leaving page
 
+      // Deliberately NOT sending data.assets here. Under the old form-encoded
+      // $.post, assets flattened to bracket-notation keys the route's schema
+      // didn't recognize, so request.payload.assets was always undefined and
+      // the draft handler (lib/controllers/trinket.js) never stored them --
+      // drafts have never persisted assets, in the entire history of this
+      // code. Moving to JSON (below) would silently change that: an
+      // asset.url can carry an inline data:image base64 payload, Firestore's
+      // hard limit is 1 MiB per document, and this route's write path
+      // swallows rejections (.catch -> request.success()), so an oversized
+      // draft would fail to save with no visible error -- the "Saving
+      // Draft" banner would just never clear. If drafts are ever meant to
+      // persist assets, that should be a deliberate change paired with a
+      // size guard, not a side effect of this JSON conversion.
       postData = {
-          assets   : data.assets
-        , settings : data.settings
+          settings : data.settings
       };
 
       zip = new JSZip();
       zip.file("zipCode", JSON.stringify(data.code));
 
-      // POST as JSON, not form-encoded: postData carries assets (array) and
-      // settings (object, now including #128's runtime), which $.post's form
-      // encoding flattens into bracket-notation keys like "settings[runtime]"
-      // instead of a nested object. The route's Joi schema requires settings
-      // to be an object, so a mis-shaped payload isn't rejected -- it's just
+      // POST as JSON, not form-encoded: postData carries settings (object,
+      // now including #128's runtime), which $.post's form encoding
+      // flattens into bracket-notation keys like "settings[runtime]" instead
+      // of a nested object. The route's Joi schema requires settings to be
+      // an object, so a mis-shaped payload isn't rejected -- it's just
       // silently treated as absent, and the draft saves everything except
       // settings. Same failure mode as the fork() dead-MD5 bug (see the JSON
       // comment on fork(), above); fixed the same way.
@@ -1061,17 +1073,28 @@ $('document').ready(function() {
 
       self.$draftMessage.fadeOut('fast', function() {
         self.$draftMessage.text('Saving ...').fadeIn('slow', function() {
+          // Deliberately NOT sending data.assets, same reasoning as
+          // _updateDraft above: under the old form-encoded $.post, assets
+          // flattened to keys the route's schema didn't recognize, so
+          // request.payload.assets was always undefined and the autosave
+          // handler (lib/controllers/trinket.js) never wrote them to the
+          // trinket -- autosave has never persisted assets, in the entire
+          // history of this code. This route's .save() failure IS surfaced
+          // to the caller (.catch -> reply(err), not swallowed like the
+          // draft route), so the silent-failure risk is smaller here, but
+          // sending assets on every debounced autosave is still a new
+          // behaviour this branch didn't set out to introduce. Keep it out
+          // until that's a deliberate decision, matching _updateDraft.
           postData = {
-              assets   : data.assets
-            , settings : data.settings
+              settings : data.settings
           };
 
           zip = new JSZip();
           zip.file("zipCode", JSON.stringify(data.code));
 
-          // POST as JSON, not form-encoded: postData carries assets (array) and
-          // settings (object, now including #128's runtime), which $.post's
-          // form encoding flattens into bracket-notation keys like
+          // POST as JSON, not form-encoded: postData carries settings
+          // (object, now including #128's runtime), which $.post's form
+          // encoding flattens into bracket-notation keys like
           // "settings[runtime]" instead of a nested object. routeParser.js
           // wraps every plain-object validate.payload schema (this route's
           // included) in Joi.object(schema).unknown(true), so a mis-shaped
