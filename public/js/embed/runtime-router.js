@@ -83,7 +83,15 @@
     // the deploy enables it, or this trinket asked for it. On a deploy with the
     // worker off and no stored preference, the honest reason is the flag, and
     // the notice must stay silent as it always has.
-    var workerPossible = (stored === 'worker') || !!opts.workerEnabled;
+    // #128: when a stored value is set, IT alone decides whether the worker was
+    // ever on the table — not the deploy flag. Before this, `stored === 'main'`
+    // with the flag on still made workerPossible true (via the flag half of the
+    // old `||`), so a guard-tripping program got the guard's reason ("await
+    // cannot be inserted in a lambda or comprehension") even though the author
+    // chose main and nothing was ever going to the worker. The runtime was
+    // still correct (rule 4 below returns `stored` either way), but every
+    // student was told about a worker limitation that never applied to them.
+    var workerPossible = stored ? (stored === 'worker') : !!opts.workerEnabled;
 
     if (workerPossible && hasUnawaitableCall(source)) {
       return { runtime: 'main', reason: 'await cannot be inserted in a lambda or comprehension' };

@@ -222,6 +222,19 @@ describe('chooseRuntime with a stored trinket setting', () => {
     expect(r.reason).toMatch(/lambda or comprehension/);
     expect(runtimeNotice(r, undefined)).not.toBe('');
   });
+
+  // Same asymmetry, the OTHER direction: a stored 'main' must not borrow the
+  // deploy flag to decide workerPossible. Before this test's fix, `stored ===
+  // 'worker' || !!opts.workerEnabled` still evaluated true here (via the flag
+  // half, since the flag is on), so the guard fired first and a program that
+  // was never going to the worker got told about a worker-only limitation —
+  // right runtime (main either way, via rule 4), wrong reason.
+  it('a guard-tripping program with a stored main on a flag-on deploy gives the stored reason, not the guard\'s — nothing was ever going to the worker', () => {
+    const r = chooseRuntime(LAMBDA, { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toBe('trinket setting: runtime=main');
+    expect(r.reason).not.toMatch(/lambda or comprehension/);
+  });
 });
 
 describe('runtimeNotice with a stored setting', () => {
