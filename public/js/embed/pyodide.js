@@ -229,6 +229,13 @@ function consoleWrite(text, cls, escape) {
 // inline input. Exposed on window so Pyodide's `from js import ...` can reach it.
 window.__trinket_console_write = function(text) {
   writeOut(String(text));
+  // The "synchronous" in the contract above is load-bearing, and #142's
+  // coalescing broke it: the one caller is the input() shim, which echoes the
+  // prompt and then calls window.prompt(), blocking the JS thread. A blocked
+  // thread never reaches an animation frame, so a queued echo stays invisible
+  // until the dialog is dismissed — the student sees a bare box with no
+  // question, which is the exact bug this echo was added to fix.
+  flushConsoleNow();
 };
 
 // Inline console input for the `console` module: append the prompt, open a
