@@ -229,6 +229,13 @@ function consoleWrite(text, cls, escape) {
 // inline input. Exposed on window so Pyodide's `from js import ...` can reach it.
 window.__trinket_console_write = function(text) {
   writeOut(String(text));
+  // The buffering added for #142 made writeOut coalesce on animation frames —
+  // but this function's contract is SYNCHRONOUS visibility, and its one caller
+  // echoes the input() prompt immediately before a blocking window.prompt().
+  // A blocked JS thread runs no animation frames, so without this flush the
+  // student gets a bare dialog with the question invisible until dismissed —
+  // the exact bug the prompt echo was added to fix.
+  flushConsoleNow();
 };
 
 // Inline console input for the `console` module: append the prompt, open a
