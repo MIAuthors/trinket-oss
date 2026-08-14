@@ -146,3 +146,109 @@ describe('runtimeNotice', () => {
     expect(notice('print(1)', OPTS).endsWith('\n')).toBe(true);
   });
 });
+
+// #128: a runtime stored on the trinket. Ordering matters more than any single
+// rule here — see spec §3. The table below is the spec's worked-cases table.
+describe('chooseRuntime with a stored trinket setting', () => {
+  const LAMBDA = 'f = lambda: input()\nprint(f())';
+
+  it('stored worker opts one trinket in on a flag-off deploy', () => {
+    const r = chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('worker');
+    expect(r.reason).toMatch(/trinket setting/);
+  });
+
+  it('stored main opts one trinket out on a flag-on deploy', () => {
+    const r = chooseRuntime('print(1)', { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/trinket setting/);
+  });
+
+  it('the URL beats the stored value in both directions', () => {
+    expect(chooseRuntime('print(1)', { ...OPTS, storedRuntime: 'worker', queryRuntime: 'main' }).runtime).toBe('main');
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'main', queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+
+  it('VPython still beats a stored worker — the bridge cannot run off-thread', () => {
+    const r = chooseRuntime('import vpython as vp', { ...OPTS, usesVPython: true, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/vpython/i);
+  });
+
+  it('THE D3 RULE: a stored worker does NOT override the unawaitable guard', () => {
+    // A saved setting affects every student who opens the trinket, so it must
+    // not be able to select a runtime that cannot run the program.
+    const r = chooseRuntime(LAMBDA, { ...OPTS, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/lambda or comprehension/);
+  });
+
+  it('THE D3 RULE: a URL still may override the guard, for a false positive', () => {
+    // The detector over-matches on purpose, so authors need this escape.
+    expect(chooseRuntime(LAMBDA, { ...OPTS, queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+
+  it('an empty or unknown stored value is simply no preference', () => {
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: '' }).runtime).toBe('main');
+    expect(chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'nonsense' }).runtime).toBe('main');
+  });
+
+  it('VPython wins over a stored value and a query parameter asking for the worker, together', () => {
+    // Neither a saved preference nor a deliberate URL override can put the
+    // bridge off-thread; VPython must win even when both are pulling the
+    // other way at once.
+    const r = chooseRuntime('import vpython as vp', {
+      ...OPTS, usesVPython: true, storedRuntime: 'worker', queryRuntime: 'worker'
+    });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/vpython/i);
+  });
+
+  // The guard (hasUnawaitableCall) must only preempt the flag when the worker
+  // was actually on the table for this program — otherwise a deploy with the
+  // worker off surfaces a worker-only limitation to students it cannot affect.
+  // These two pin the asymmetry in both directions.
+  it('a guard-tripping program on a flag-off deploy with no stored value stays silent — the flag is the honest reason, not the guard', () => {
+    const r = chooseRuntime(LAMBDA, { ...OPTS, workerEnabled: false });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/config/);
+    expect(r.reason).not.toMatch(/lambda or comprehension/);
+    expect(runtimeNotice(r, undefined)).toBe('');
+  });
+
+  it('a guard-tripping program with a stored worker on a flag-off deploy explains the guard — the author asked for the worker and is owed why they did not get it', () => {
+    const r = chooseRuntime(LAMBDA, { ...OPTS, workerEnabled: false, storedRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/lambda or comprehension/);
+    expect(runtimeNotice(r, undefined)).not.toBe('');
+  });
+
+  // Same asymmetry, the OTHER direction: a stored 'main' must not borrow the
+  // deploy flag to decide workerPossible. Before this test's fix, `stored ===
+  // 'worker' || !!opts.workerEnabled` still evaluated true here (via the flag
+  // half, since the flag is on), so the guard fired first and a program that
+  // was never going to the worker got told about a worker-only limitation —
+  // right runtime (main either way, via rule 4), wrong reason.
+  it('a guard-tripping program with a stored main on a flag-on deploy gives the stored reason, not the guard\'s — nothing was ever going to the worker', () => {
+    const r = chooseRuntime(LAMBDA, { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toBe('trinket setting: runtime=main');
+    expect(r.reason).not.toMatch(/lambda or comprehension/);
+  });
+});
+
+describe('runtimeNotice with a stored setting', () => {
+  // A stored 'worker' already speaks via the pre-existing `runtime === 'worker'`
+  // branch of worthSaying, so this case alone does not discriminate the new
+  // `trinket setting:` clause — it only pins that the NOTES entry itself
+  // renders the right words when that path is taken.
+  it('renders the NOTES entry for a stored worker as "this trinket\'s setting"', () => {
+    const d = chooseRuntime('print(1)', { ...OPTS, workerEnabled: false, storedRuntime: 'worker' });
+    expect(runtimeNotice(d, undefined)).toMatch(/this trinket's setting/);
+  });
+
+  it('speaks for a stored main, which is otherwise an ordinary quiet main-thread run — this is what actually exercises the new worthSaying clause', () => {
+    const d = chooseRuntime('print(1)', { ...OPTS, workerEnabled: true, storedRuntime: 'main' });
+    expect(runtimeNotice(d, undefined)).toMatch(/this trinket's setting/);
+  });
+});

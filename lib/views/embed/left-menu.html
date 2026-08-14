@@ -32,7 +32,12 @@
       <a class="menu-button" data-action="mode.upload" tabindex="0"><i class="fa fa-upload"></i>Upload</a>
     </li>
     {% endif %}
-    {% if configurable or toggleEditor %}
+    {# Keep this in sync with includes/embed-settings.html's own gate: that
+       macro stops rendering #settingsModal at all when outputOnly is true
+       (now that config is visible inside it via `with context`), so without
+       this clause the menu item survives with nothing left for its click
+       handler (.foundation('reveal','open') on #settingsModal) to open. #}
+    {% if (configurable or toggleEditor) and not outputOnly %}
     <li>
       <a class="menu-button" data-action="code.settings" tabindex="0"><i class="fa fa-cog"></i>Settings</a>
     </li>

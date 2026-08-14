@@ -263,15 +263,49 @@ function writeReplError(err) {
   jqconsole.Write(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
 }
 
+// #128: reads and whitelists the trinket's own stored runtime setting, shared
+// by replUsesWorker() (below) and the Run path (chooseRuntimeDecision()).
+// Whitelisted here as well as on the server (lib/controllers/trinket.js)
+// because this value is client-supplied data that also renders back into the
+// settings modal — a value that predates or bypasses server validation must
+// degrade to "no preference", not reach the rules.
+//
+// Read from api._trinket, not window.trinket: window.trinket is a DIFFERENT
+// global (the `{config: {...}}` object embed/base.html's inline <script>
+// creates) that never carries the trinket's settings. api._trinket is the live
+// TrinketApp instance's trinket data (set by setTrinket() before initialize()
+// runs, and already read the same way elsewhere in this file, e.g.
+// api._trinket.description) — verified live against a stored
+// settings.runtime='worker' trinket, where window.trinket.settings was
+// undefined and api._trinket.settings was {runtime: 'worker'}.
+function getStoredRuntime() {
+  try {
+    var settings = (api._trinket && api._trinket.settings) || {};
+    if (settings.runtime === 'worker' || settings.runtime === 'main') {
+      return settings.runtime;
+    }
+  } catch (e) {}
+  return '';
+}
+
 // Does the REPL run in the worker? A REPL statement has no source to inspect up
 // front, so the decision is made once from config and the query string rather
 // than per statement.
+//
+// #128: MUST pass storedRuntime, same as the Run path — otherwise a trinket
+// with settings.runtime='worker' runs Run in the worker but opens the REPL on
+// a second, main-thread Pyodide (ensurePyodide(), a multi-MB download), and
+// every variable the student's program just defined comes back NameError:
+// the two namespaces live on different threads. The guard cannot trip here
+// (called with an empty source), so this is purely about the stored value
+// reaching the router.
 function replUsesWorker() {
   try {
     return runtimeRouter.chooseRuntime('', {
       usesVPython   : false,
       workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-      queryRuntime  : (api._queryString || {}).runtime
+      queryRuntime  : (api._queryString || {}).runtime,
+      storedRuntime : getStoredRuntime()
     }).runtime === 'worker';
   } catch (e) { return false; }
 }
@@ -2241,10 +2275,14 @@ function startRun() {
   var workerProgram = workerFiles[mainFile] || '';
 
   var queryRuntime = (api._queryString || {}).runtime;
+
+  // #128: the trinket's own setting — see getStoredRuntime() above for why
+  // api._trinket (not window.trinket) and why it's whitelisted client-side too.
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-    queryRuntime  : queryRuntime
+    queryRuntime  : queryRuntime,
+    storedRuntime : getStoredRuntime()
   });
   window.__trinketRuntime       = decision.runtime;   // read by the browser specs
   window.__trinketRuntimeReason = decision.reason;
