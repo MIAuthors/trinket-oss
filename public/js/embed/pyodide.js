@@ -229,12 +229,12 @@ function consoleWrite(text, cls, escape) {
 // inline input. Exposed on window so Pyodide's `from js import ...` can reach it.
 window.__trinket_console_write = function(text) {
   writeOut(String(text));
-  // The buffering added for #142 made writeOut coalesce on animation frames —
-  // but this function's contract is SYNCHRONOUS visibility, and its one caller
-  // echoes the input() prompt immediately before a blocking window.prompt().
-  // A blocked JS thread runs no animation frames, so without this flush the
-  // student gets a bare dialog with the question invisible until dismissed —
-  // the exact bug the prompt echo was added to fix.
+  // The "synchronous" in the contract above is load-bearing, and #142's
+  // coalescing broke it: the one caller is the input() shim, which echoes the
+  // prompt and then calls window.prompt(), blocking the JS thread. A blocked
+  // thread never reaches an animation frame, so a queued echo stays invisible
+  // until the dialog is dismissed — the student sees a bare box with no
+  // question, which is the exact bug this echo was added to fix.
   flushConsoleNow();
 };
 
@@ -361,49 +361,15 @@ function writeReplError(err) {
   consoleWrite(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
 }
 
-// #128: reads and whitelists the trinket's own stored runtime setting, shared
-// by replUsesWorker() (below) and the Run path (chooseRuntimeDecision()).
-// Whitelisted here as well as on the server (lib/controllers/trinket.js)
-// because this value is client-supplied data that also renders back into the
-// settings modal — a value that predates or bypasses server validation must
-// degrade to "no preference", not reach the rules.
-//
-// Read from api._trinket, not window.trinket: window.trinket is a DIFFERENT
-// global (the `{config: {...}}` object embed/base.html's inline <script>
-// creates) that never carries the trinket's settings. api._trinket is the live
-// TrinketApp instance's trinket data (set by setTrinket() before initialize()
-// runs, and already read the same way elsewhere in this file, e.g.
-// api._trinket.description) — verified live against a stored
-// settings.runtime='worker' trinket, where window.trinket.settings was
-// undefined and api._trinket.settings was {runtime: 'worker'}.
-function getStoredRuntime() {
-  try {
-    var settings = (api._trinket && api._trinket.settings) || {};
-    if (settings.runtime === 'worker' || settings.runtime === 'main') {
-      return settings.runtime;
-    }
-  } catch (e) {}
-  return '';
-}
-
 // Does the REPL run in the worker? A REPL statement has no source to inspect up
 // front, so the decision is made once from config and the query string rather
 // than per statement.
-//
-// #128: MUST pass storedRuntime, same as the Run path — otherwise a trinket
-// with settings.runtime='worker' runs Run in the worker but opens the REPL on
-// a second, main-thread Pyodide (ensurePyodide(), a multi-MB download), and
-// every variable the student's program just defined comes back NameError:
-// the two namespaces live on different threads. The guard cannot trip here
-// (called with an empty source), so this is purely about the stored value
-// reaching the router.
 function replUsesWorker() {
   try {
     return runtimeRouter.chooseRuntime('', {
       usesVPython   : false,
       workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-      queryRuntime  : (api._queryString || {}).runtime,
-      storedRuntime : getStoredRuntime()
+      queryRuntime  : (api._queryString || {}).runtime
     }).runtime === 'worker';
   } catch (e) { return false; }
 }
@@ -2392,14 +2358,10 @@ function startRun() {
   var workerProgram = workerFiles[mainFile] || '';
 
   var queryRuntime = (api._queryString || {}).runtime;
-
-  // #128: the trinket's own setting — see getStoredRuntime() above for why
-  // api._trinket (not window.trinket) and why it's whitelisted client-side too.
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
-    queryRuntime  : queryRuntime,
-    storedRuntime : getStoredRuntime()
+    queryRuntime  : queryRuntime
   });
   window.__trinketRuntime       = decision.runtime;   // read by the browser specs
   window.__trinketRuntimeReason = decision.reason;
@@ -2667,13 +2629,6 @@ window.TrinketAPI = {
           };
         };
         $('#debug-start').on('click keydown', debugActivate(runStepThrough));
-        // Same action from the output pane, where a student lands after Run —
-        // show the Variables panel first so the step controls are on screen
-        // rather than recording behind a tab they haven't opened.
-        $('#debug-start-alt').on('click keydown', debugActivate(function() {
-          showVariables();
-          runStepThrough();
-        }));
         $('#debug-cancel').on('click keydown', debugActivate(function() { debugCancelled = true; }));
         $('#debug-first').on('click keydown', debugActivate(function() { debugStepTo(0); }));
         $('#debug-back').on('click keydown', debugActivate(function() { debugStepTo(debugIdx - 1); }));
