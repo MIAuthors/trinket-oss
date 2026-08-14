@@ -86,9 +86,14 @@ TrinketIO.export('library.trinkets.detail.controller', [
     shareRuntimeWorker : '',
     shareRuntimeMain   : '',
     shareCalculator    : '',
+    embedRuntimeWorker : '',
+    embedRuntimeMain   : '',
+    embedCalculator    : '',
 
     embedRunMenu       : '',
     embedDisplayMenu   : '',
+    embedRuntimeMenu   : '',
+    embedLayoutMenu    : '',
     shareRunMenu       : '',
     shareRuntimeMenu   : '',
     shareLayoutMenu    : '',
@@ -354,6 +359,22 @@ TrinketIO.export('library.trinkets.detail.controller', [
       $('#embedRunOption').hide();
     }
 
+    // #108: only the Pyodide-backed embed reads ?runtime=; mirrors the show/hide
+    // for #shareRuntimeOption in linkModal() above.
+    if ($scope.runtimeOption) {
+      $('#embedRuntimeOption').show();
+    } else {
+      $('#embedRuntimeOption').hide();
+    }
+
+    // The calculator layout is a glowscript feature; mirrors the show/hide for
+    // #shareCalculatorOption in linkModal() above.
+    if ($scope.calculatorOption) {
+      $('#embedCalculatorOption').show();
+    } else {
+      $('#embedCalculatorOption').hide();
+    }
+
     $('#autorunEmbedToggle').attr('checked', false);
     if (trinketConfig.get('autorun').indexOf($scope.trinket.lang) >= 0) {
       $('#autorunEmbedToggle').show();
@@ -384,6 +405,14 @@ TrinketIO.export('library.trinkets.detail.controller', [
     $('#runOptionEmbed').data('trinket-shortCode', $scope.trinket.shortCode);
     $('#runOptionEmbed').data('trinket-runMode',   $scope.runMode);
     $('#runOptionEmbed').val('');
+
+    $('#runtimeOptionEmbed').data('trinket-shortCode', $scope.trinket.shortCode);
+    $('#runtimeOptionEmbed').data('trinket-runMode',   $scope.runMode);
+    $('#runtimeOptionEmbed').val('');
+
+    $('#calculatorOptionEmbed').data('trinket-shortCode', $scope.trinket.shortCode);
+    $('#calculatorOptionEmbed').data('trinket-runMode',   $scope.runMode);
+    $('#calculatorOptionEmbed').val('');
 
     $('#displayOptionEmbed').data('trinket-shortCode', $scope.trinket.shortCode);
     $('#displayOptionEmbed').data('trinket-runMode',   $scope.runMode);
@@ -586,6 +615,12 @@ TrinketIO.export('library.trinkets.detail.controller', [
   $scope.$watch('info.embedRunMenu', function(newValue, oldValue) {
     generateEmbedCode('runOption');
   });
+  $scope.$watch('info.embedRuntimeMenu', function(newValue, oldValue) {
+    generateEmbedCode('runtimeOption');
+  });
+  $scope.$watch('info.embedLayoutMenu', function(newValue, oldValue) {
+    generateEmbedCode('layoutOption');
+  });
 
   $scope.$watch('info.embedStart', function(newValue, oldValue) {
     generateEmbedCode();
@@ -631,6 +666,23 @@ TrinketIO.export('library.trinkets.detail.controller', [
       }
     }
 
+    if (calledFor === 'runtimeOption') {
+      $scope.info.embedRuntimeWorker = '';
+      $scope.info.embedRuntimeMain   = '';
+
+      if ($scope.info.embedRuntimeMenu) {
+        $scope.info[$scope.info.embedRuntimeMenu] = true;
+      }
+    }
+
+    if (calledFor === 'layoutOption') {
+      $scope.info.embedCalculator = '';
+
+      if ($scope.info.embedLayoutMenu) {
+        $scope.info[$scope.info.embedLayoutMenu] = true;
+      }
+    }
+
     if ($scope.info.embedOutputOnly) {
       params.push('outputOnly=true');
     }
@@ -645,7 +697,23 @@ TrinketIO.export('library.trinkets.detail.controller', [
       params.push('runOption=console');
     }
 
-    if ($scope.runMode) {
+    // #108, mirrored from generateShareUrl: guarded by runtimeOption as well as
+    // the selection, so a hidden control (a trinket type that ignores ?runtime=)
+    // can never contribute a parameter.
+    if ($scope.runtimeOption && $scope.info.embedRuntimeWorker) {
+      params.push('runtime=worker');
+    }
+    else if ($scope.runtimeOption && $scope.info.embedRuntimeMain) {
+      params.push('runtime=main');
+    }
+
+    // The calculator layout IS a runMode, so — mirroring generateShareUrl — it
+    // takes the place of the one the trinket is being viewed in rather than
+    // being appended alongside it.
+    if ($scope.calculatorOption && $scope.info.embedCalculator) {
+      params.push('runMode=calculator');
+    }
+    else if ($scope.runMode) {
       params.push('runMode=' + $scope.runMode);
     }
 
@@ -804,11 +872,18 @@ TrinketIO.export('library.trinkets.detail.controller', [
     $scope.info.shareRuntimeMenu   = '';
     $scope.info.shareRuntimeWorker = '';
     $scope.info.shareRuntimeMain   = '';
+    // Embed-side mirror, cleared here for the same reason.
+    $scope.info.embedRuntimeMenu   = '';
+    $scope.info.embedRuntimeWorker = '';
+    $scope.info.embedRuntimeMain   = '';
     // Same shape for the calculator layout: offered only where it is implemented,
     // and cleared here so a choice cannot follow the user to another trinket.
     $scope.calculatorOption = (config.get('calculatorOption') || []).indexOf(trinket.lang) >= 0;
     $scope.info.shareLayoutMenu = '';
     $scope.info.shareCalculator = '';
+    // Embed-side mirror, cleared here for the same reason.
+    $scope.info.embedLayoutMenu = '';
+    $scope.info.embedCalculator = '';
     $scope.extraOptions = $scope.autorunOption || $scope.outputOnlyOption || $scope.toggleCodeOption;
 
     if (config.get('downloadable').indexOf(trinket.lang) >= 0) {
@@ -827,6 +902,8 @@ TrinketIO.export('library.trinkets.detail.controller', [
     $('#runOptionEmbed').val('');
     $('#runtimeOptionLink').val('');
     $('#calculatorOptionLink').val('');
+    $('#runtimeOptionEmbed').val('');
+    $('#calculatorOptionEmbed').val('');
 
     $('#displayOptionLink').val('');
     $('#displayOptionEmbed').val('');
