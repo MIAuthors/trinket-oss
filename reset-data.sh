@@ -50,9 +50,10 @@ firebase firestore:delete \
 echo ""
 echo "--- Deleting GCS bucket contents ---"
 for BUCKET in "${GCS_BUCKETS[@]}"; do
-  if gsutil ls "gs://${BUCKET}/" &>/dev/null; then
+  if gcloud storage ls "gs://${BUCKET}/" &>/dev/null; then
     echo "    Clearing gs://${BUCKET}/"
-    gsutil -m rm -r "gs://${BUCKET}/**" || true
+    # `/**` (not `--recursive gs://BUCKET/`) so the bucket itself survives
+    gcloud storage rm -r "gs://${BUCKET}/**" || true
   else
     echo "    gs://${BUCKET}/ not found — skipping"
   fi
