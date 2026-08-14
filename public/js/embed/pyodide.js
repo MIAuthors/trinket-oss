@@ -67,6 +67,7 @@ var mainFile = 'main.py';
 var template = TrinketIO.import('utils.template');
 var ActivityLog = TrinketIO.import('embed.analytics.activity');
 var runtimeRouter   = TrinketIO.import('embed.runtimeRouter');
+var consoleBuffer   = TrinketIO.import('embed.consoleBuffer');
 var workerClientApi = TrinketIO.import('embed.workerClient');
 var replContinuation = TrinketIO.import('embed.replContinuation');
 var workerClient    = null;   // created lazily; null means the main-thread path
@@ -95,6 +96,7 @@ function initConsoleOutput() {
   $('#console-wrap').css('height', '100%');
 
   jqconsole = $('#console-output').jqconsole();
+  outResetBuffer();
   jqconsole.Write("\x1b[0m");
   jqconsole.Reset();
   jqconsole.Append(loadingHeader());
@@ -112,6 +114,9 @@ function resetOutput(consoleOnly) {
   }
 
   if (jqconsole) {
+    // Discard queued output too: the console it was headed for is gone, and a
+    // pending flush would otherwise paint the old run's tail into the new one.
+    outResetBuffer();
     jqconsole.Write("\x1b[0m");
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
@@ -129,11 +134,93 @@ function resetOutput(consoleOnly) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Console output buffering (#142)
+//
+// pydoc's plain_pager hands `help(numpy)` to stdout as ONE 2.45 MB write, and
+// Pyodide's batched stdout flushes on every newline — so the console took
+// 70,605 separate writes. Each jqconsole.Write appends a span and then calls
+// _ScrollToEnd, which READS scrollHeight and .position() before writing back:
+// a forced layout per line, against a container growing to 70k children. The
+// cost is superlinear, and it is all synchronous on the main thread, so the
+// page stops painting and Stop can never fire. `help(np)` looks like a harmless
+// one-liner and froze the tab for minutes.
+//
+// Two guards, both general — the trigger is output VOLUME, not help():
+//
+//   1. Coalesce. Text queues and is appended once per animation frame in a
+//      single Write, so N lines cost one reflow per frame instead of N.
+//   2. Cap. Program output stops being APPENDED past the line limit (the
+//      program itself keeps running). Coalescing alone is not enough: a big
+//      enough program still builds a DOM the browser cannot lay out.
+//
+// Three paths share the one queue, which is what keeps them ordered:
+//   writeStream() — program stdout/stderr; capped.
+//   writeOut()    — loader notices, '[stopped]'; queued but never capped, since
+//                   those must survive a truncated run.
+//   consoleWrite()— styled/immediate (errors, headers, REPL results); flushes
+//                   the queue first so it cannot jump ahead of program output.
+// The queue/cap accounting is in embed/console-buffer.js, kept pure so the
+// rules are testable in node (same split as runtime-router.js). Timers and the
+// actual write stay here, where the DOM is.
+var outBuf   = consoleBuffer.createOutputBuffer({ maxLines: 5000 });
+var outRaf   = null;
+var outTimer = null;
+
+function outCancelFlush() {
+  if (outRaf !== null && window.cancelAnimationFrame) window.cancelAnimationFrame(outRaf);
+  if (outTimer !== null) clearTimeout(outTimer);
+  outRaf = null;
+  outTimer = null;
+}
+
+// rAF coalesces to one append per painted frame, but it does NOT fire in a
+// backgrounded tab — a program finishing there would strand its last output.
+// The timer is the backstop; whichever fires first cancels the other.
+function outScheduleFlush() {
+  if (outRaf !== null || outTimer !== null) return;
+  if (window.requestAnimationFrame) {
+    outRaf = window.requestAnimationFrame(function() { outRaf = null; flushConsoleNow(); });
+  }
+  outTimer = setTimeout(function() { outTimer = null; flushConsoleNow(); }, 100);
+}
+
+// One Write for everything queued — this is the whole point: N lines cost one
+// reflow, not N.
+function flushConsoleNow() {
+  outCancelFlush();
+  var text = outBuf.drain();
+  if (text && jqconsole) jqconsole.Write(text);
+}
+
+// Drop anything queued: the console it was destined for is being rebuilt.
+function outResetBuffer() {
+  outCancelFlush();
+  outBuf.reset();
+}
+
+// System/UI text — queued (so it stays ordered with program output) but never
+// capped.
 function writeOut(text) {
   initConsoleOutput();
-  if (jqconsole) {
-    jqconsole.Write(text);
-  }
+  if (!jqconsole) return;
+  outBuf.pushSystem(text);
+  outScheduleFlush();
+}
+
+// Program stdout/stderr — queued AND capped.
+function writeStream(text) {
+  initConsoleOutput();
+  if (!jqconsole) return;
+  outBuf.pushStream(text);
+  outScheduleFlush();
+}
+
+// A styled or immediate write (errors, headers, REPL results). Flushes the
+// queue first so it cannot jump ahead of program output already emitted.
+function consoleWrite(text, cls, escape) {
+  flushConsoleNow();
+  if (jqconsole) jqconsole.Write(text, cls, escape);
 }
 
 // Direct, synchronous console write that bypasses Pyodide's *batched* stdout
@@ -154,7 +241,11 @@ window.__trinket_console_input = function(prompt) {
   initConsoleOutput();
   window.readyForSnapshot = true;
   return new Promise(function(resolve) {
-    if (prompt) { jqconsole.Write(String(prompt)); }
+    // Anything the program printed before asking has to land BEFORE the input
+    // widget: a queued flush landing afterwards would put the question above
+    // output that preceded it.
+    flushConsoleNow();
+    if (prompt) { consoleWrite(String(prompt)); }
     var active = document.activeElement;
     $('#console-output').addClass('console-active');
     jqconsole.Input(function(line) {
@@ -260,7 +351,7 @@ function showOutputPane() {
 
 function writeReplError(err) {
   var msg = String(err && err.message || err);
-  jqconsole.Write(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
+  consoleWrite(escapeConsoleHtml(formatPythonTraceback(msg, '<stdin>')) + '\n', 'jqconsole-error', false);
 }
 
 // Does the REPL run in the worker? A REPL statement has no source to inspect up
@@ -280,6 +371,13 @@ function replUsesWorker() {
 function startReplPrompt() {
   if (!jqconsole) return;
   replActive = true;
+
+  // The previous statement's output must be on screen before the next prompt.
+  flushConsoleNow();
+  // Give each statement its own output budget. The cap is there to stop one
+  // runaway command, and at the REPL "one command" is the natural unit — a
+  // single `help(numpy)` should not leave the console mute for the session.
+  outBuf.resetCap();
 
   jqconsole.Prompt(true, function(input) {
     // Worker-backed REPL: the namespace lives in the worker, so a runaway
@@ -313,7 +411,7 @@ function startReplPrompt() {
     Promise.resolve(result)
       .then(function(value) {
         if (value !== undefined && value !== null) {
-          jqconsole.Write(escapeConsoleHtml(pyodide.runPython('repr')(value)) + '\n', 'jqconsole-output', false);
+          consoleWrite(escapeConsoleHtml(pyodide.runPython('repr')(value)) + '\n', 'jqconsole-output', false);
         }
       })
       .catch(function(err) {
@@ -399,7 +497,7 @@ function startRepl() {
     $('#console-output').addClass('console-mode');
     var client = ensureWorkerClient();
     return client.ready().then(function(info) {
-      jqconsole.Write('Python ' + (info.pythonVersion || '') +
+      consoleWrite('Python ' + (info.pythonVersion || '') +
                       ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
       startReplPrompt();
     });
@@ -414,7 +512,7 @@ function startRepl() {
   $('#console-output').addClass('console-mode');
 
   return ensurePyodide().then(function() {
-    jqconsole.Write('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
+    consoleWrite('Python ' + pyodide.runPython('import sys; sys.version.split()[0]') +
                     ' on Pyodide — type Python at the >>> prompt\n', 'jqconsole-header', true);
     startReplPrompt();
   }).catch(function(err) {
@@ -434,8 +532,8 @@ function ensurePyodide() {
     pyodideReady = true;
     // Route Python stdout/stderr into the trinket console. batched gives us the
     // text without its trailing newline, so we re-add it per write.
-    py.setStdout({ batched: function(s) { writeOut(s + '\n'); } });
-    py.setStderr({ batched: function(s) { writeOut(s + '\n'); } });
+    py.setStdout({ batched: function(s) { writeStream(s + '\n'); } });
+    py.setStderr({ batched: function(s) { writeStream(s + '\n'); } });
     // Wire input() to a browser prompt. Pyodide configures no stdin by default,
     // so CPython's input() raises `OSError: [Errno 29] I/O error` the instant a
     // program reads input — which broke every intro-course trinket that uses
@@ -1548,16 +1646,19 @@ function renderDebugStep() {
     var wantErr = isEnd && !!debugRec.error;
     if (debugLastOut === -1 || st.out < debugLastOut || wantErr !== debugErrShown) {
       // First paint, stepping backward past output, or the error line toggled:
-      // rebuild from scratch.
+      // rebuild from scratch. Drop any queued live output first — it belongs to
+      // the console being torn down, and consoleWrite below would otherwise
+      // flush it into the replay.
+      outResetBuffer();
       jqconsole.Reset();
       jqconsole.Append(loadingHeader());
-      jqconsole.Write(debugRec.output.slice(0, st.out));
+      consoleWrite(debugRec.output.slice(0, st.out));
       if (wantErr) {
-        jqconsole.Write('\n' + escapeConsoleHtml(debugRec.error) + '\n', 'jqconsole-error', false);
+        consoleWrite('\n' + escapeConsoleHtml(debugRec.error) + '\n', 'jqconsole-error', false);
       }
     } else if (st.out > debugLastOut) {
       // Forward over new output: append just the delta.
-      jqconsole.Write(debugRec.output.slice(debugLastOut, st.out));
+      consoleWrite(debugRec.output.slice(debugLastOut, st.out));
     }
     // st.out === debugLastOut with no error change: console untouched.
     debugLastOut = st.out;
@@ -1614,10 +1715,11 @@ function exitReplay(quiet) {
   // Restore the console to the full recorded output and the table to the live
   // post-run explorer view.
   if (!quiet && jqconsole) {
+    outResetBuffer();
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
-    jqconsole.Write(rec.output);
-    if (rec.error) jqconsole.Write('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
+    consoleWrite(rec.output);
+    if (rec.error) consoleWrite('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
   }
   paintVariables();
 }
@@ -1914,7 +2016,7 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     varsHelper   : VARS_HELPER,
-    onStdout   : function(text) { writeOut(text); },
+    onStdout   : function(text) { writeStream(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
     onInputRequest : function(prompt) {
       // The same jq-console widget console.input() uses, so a prompt looks
@@ -1923,7 +2025,11 @@ function ensureWorkerClient() {
         // Write the prompt here, synchronously, rather than printing it from
         // Python: batched stdout holds a newline-less prompt until the next
         // newline, which lands after the answer.
-        if (prompt) { writeOut(String(prompt)); }
+        // consoleWrite (not writeOut) so the queue is flushed first: the prompt
+        // must appear after everything the program already printed, and before
+        // the input widget.
+        flushConsoleNow();
+        if (prompt) { consoleWrite(String(prompt)); }
         $('#console-output').addClass('console-active');
         jqconsole.Input(function(line) {
           $('#console-output').removeClass('console-active');
@@ -1932,14 +2038,14 @@ function ensureWorkerClient() {
         jqconsole.Focus();
       });
     },
-    onStderr   : function(text) { writeOut(text); },
+    onStderr   : function(text) { writeStream(text); },
     onError    : function(traceback) {
       workerRunError = new Error(traceback);
       // At the prompt the frame is the console, not a file — CPython names it
       // <stdin>, and calling it main.py would point a student at a line of a
       // file they never wrote.
       var frameName = replActive ? '<stdin>' : mainFile;
-      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, frameName)) + '\n',
+      consoleWrite('\n' + escapeConsoleHtml(formatPythonTraceback(traceback, frameName)) + '\n',
                       'jqconsole-error', false);
     }
   });
@@ -2157,6 +2263,10 @@ function runInWorker(program, files, serialized) {
 function finishRun(serializedCode, err) {
   $('.stop-it').addClass('hide');
   running = false;
+  // The run's last output must be on screen before anything reads the console:
+  // readyForSnapshot below invites a thumbnail capture, and a queued flush would
+  // land after it.
+  flushConsoleNow();
   window.readyForSnapshot = true;
 
   if (window.parent) {
@@ -2333,7 +2443,7 @@ function startRun() {
     // Show the student THEIR frames, not the runtime's (see formatPythonTraceback).
     var msg = (err && (err.message || err.toString())) || 'Error';
     if (jqconsole) {
-      jqconsole.Write('\n' + escapeConsoleHtml(formatPythonTraceback(msg, mainFile)) + '\n', 'jqconsole-error', false);
+      consoleWrite('\n' + escapeConsoleHtml(formatPythonTraceback(msg, mainFile)) + '\n', 'jqconsole-error', false);
     }
     // collectErrorData below still receives the RAW error: telemetry wants the
     // full stack, only the human-facing console is trimmed.
