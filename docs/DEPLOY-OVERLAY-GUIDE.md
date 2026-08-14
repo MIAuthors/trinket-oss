@@ -148,6 +148,15 @@ parameter wins over the flag either way, and it works on **both** the embed URL
 and the trinket page URL — the page carries it through to the iframe it builds.
 Any other value is ignored rather than reflected back.
 
+**Is `workerRuntime: false` a default or a policy? A default.** A trinket whose
+author stored *Stoppable* runs in the worker even on a deploy with the flag
+off — deliberately: that per-trinket opt-in is the setting's founding use case,
+and it mirrors `?runtime=worker`, which has always beaten the flag. So the flag
+sets what *undecided* trinkets do; it is not a site-wide ban. If a deploy needs
+the worker hard-off — say, while debugging an infrastructure problem — that
+switch does not exist today and would be a separate feature request, not a
+config value.
+
 **Per-trinket setting:** an author can store a runtime on the trinket itself —
 **Trinket Settings ▸ Runtime** — and it travels with the trinket: forks inherit
 it, and every embed of it uses it, with no query parameter involved.
