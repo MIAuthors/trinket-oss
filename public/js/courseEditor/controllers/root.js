@@ -62,9 +62,26 @@
       =  trinketRoles.hasPermission("course-assignments")
       && this.$scope.canManageAssignments;
 
-    this.$scope.canAssignAssocRole
-      =  this.$scope.isAdmin
-      && this.$scope.canManageAccess;
+    // Associate is gated like every other role in the dropdown: on the course
+    // permission, not on site-wide admin.
+    //
+    // It used to also require `isAdmin`, which is NOT a course role — it comes
+    // from `request.user.hasRole('admin')` on the SITE context, injected through
+    // ng-init in lib/views/courses/view.html. So a course owner could not grant
+    // Associate on their own course (#137).
+    //
+    // That ordering was backwards: `course-admin`, which any owner can grant
+    // from this same menu, is strictly STRONGER than `course-associate` —
+    // associate adds only make-course-copy + view-course-content, while admin
+    // carries manage-course-access, manage-course-content and the rest. An
+    // owner could hand over near-total control of the course but not permission
+    // to take a copy of it.
+    //
+    // The server never enforced it either: course.updateRoles checks only
+    // manage-course-access, so POST /api/courses/{id}/roles with role
+    // "associate" already succeeded for an owner. The gate hid a capability the
+    // API allowed, which protected nothing.
+    this.$scope.canAssignAssocRole = this.$scope.canManageAccess;
 
     this.$scope.canViewSubmissions = trinketRoles.hasPermission("view-assignment-submissions", "course", { id : this.$scope.courseId });
 
