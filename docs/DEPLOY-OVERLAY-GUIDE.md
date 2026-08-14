@@ -111,7 +111,9 @@ app:
     subtitle: 'Write and run Python and Web VPython in interactive courses.'
   theme:
     heading: '#123456'                  # your brand colors
-    primary: '#123456'
+    primary: '#123456'                  # ⚠️ does NOT cover links/buttons — see below
+    link:    '#123456'
+    button:  '#123456'
 
 # Which trinket types appear in the New-Trinket menu AND are allowed to run.
 # Omit this block to inherit the stock set; override only what you want to change:
@@ -120,6 +122,53 @@ features:
     html: true        # e.g. also enable HTML trinkets
     # pyodide: true   # …or re-enable a separate Pyodide button
 ```
+
+### ⚠️ Theme colors: `primary` alone no longer covers links and buttons
+
+`app.theme` has **five** color keys, and they split into two groups by whether the
+color carries text:
+
+| key | applies to | carries text? | contrast requirement |
+|---|---|---|---|
+| `pageBg` | page (body) background | — | it's the backdrop everything else is measured against |
+| `heading` | `h1`/`h2`/`h3` | yes | 4.5:1 vs `pageBg` (3:1 if ≥24px) |
+| `navItem` | nav dropdown item background | — | — |
+| `primary` | **display only**: hero banner and other large fills | no | none — no small text sits on it |
+| `link` | anchor color | yes | **4.5:1 vs `pageBg`** |
+| `button` | filled primary/success button background | yes (white label) | **4.5:1 vs white** |
+
+`link` and `button` were split out of `primary` because Foundation derived *both*
+the anchor color and filled-button backgrounds from `$primary-color`. That made one
+value serve a large decorative fill and small body text at the same time — and the
+stock display green measured **2.04:1** as a link and **2.26:1** under white button
+text, well under the 4.5:1 WCAG AA wants.
+
+**The trap:** an overlay that sets only `primary` does **not** get its brand color on
+links and buttons. `config/default.yaml` ships concrete `link`/`button` values, and
+overlays are **deep-merged** (`config/deploy-dir.js`) — the `theme` block is merged
+key by key, not replaced wholesale. So omitting them doesn't fall back to your
+`primary`; it inherits the **stock ink green `#2E7D32`**, and your site serves
+green links next to, say, an indigo hero.
+
+If you want one brand color everywhere, set all three explicitly:
+
+```yaml
+app:
+  theme:
+    primary: '#35429B'   # hero / large fills
+    link:    '#35429B'   # same value — but see the contrast note
+    button:  '#35429B'
+```
+
+Before reusing one value for all three, **measure it**. `primary` has no contrast
+floor, so a brand color chosen for a hero banner can easily fail as body text. The
+keys are deliberately separate so a deploy with a light brand color can keep it on
+the hero and pick a darker companion for text — which is exactly what the stock
+theme does (`primary: #75BF48` for fills, `#2E7D32` for text).
+
+Check a candidate against your `pageBg` (and against white for `button`) with any
+contrast checker; you want **≥ 4.5:1**. Values that already pass on white include
+`#35429B` (8.7:1) and `#ba0c2f` (6.6:1).
 
 ## Optional: run Python off the main thread (`features.workerRuntime`)
 
