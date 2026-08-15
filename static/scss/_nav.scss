@@ -6,7 +6,7 @@
 	background: var(--brand-nav-item, #E0E6C6);
 	color: #333;
 	&:hover {
-		background: $primary-color;
+		background: var(--brand-primary, #{$primary-color});
 		color: #FFF;
 	}
 }
@@ -48,7 +48,7 @@ nav.top-bar {
 				background: var(--brand-nav-item, #E0E6C6);
 				color: #333;
 				&:hover {
-					background: $primary-color;
+					background: var(--brand-primary, #{$primary-color});
 					color: #FFF;
 				}
 			}

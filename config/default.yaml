@@ -117,6 +117,16 @@ app:
     # text. This darker green measures 5.13:1 in both roles.
     link: '#2E7D32'      # anchor color
     button: '#2E7D32'    # filled primary/success button background (white label text)
+    # --- #149: optional derived-shade keys, NO defaults on purpose. When unset,
+    # every use falls back (in the compiled CSS) to the exact Sass-computed
+    # stock shade, so leaving these out changes nothing. A branded deploy that
+    # sets link/button/primary/secondary should usually set these too:
+    #   buttonDark:    hover/border shade of `button`  (stock: darken(green,10%))
+    #   buttonPale:    pale hover/disabled fill        (stock: lighten(green,40%))
+    #   secondary:     the second accent (completed-status, secondary buttons;
+    #                  stock: dark green #006400)
+    #   secondaryDark: hover shade of `secondary`
+    #   secondaryPale: pale fill of `secondary`
   siteUrl: ''
   supportEmail: ''
   adminEmail: ''
