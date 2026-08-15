@@ -148,6 +148,27 @@ parameter wins over the flag either way, and it works on **both** the embed URL
 and the trinket page URL — the page carries it through to the iframe it builds.
 Any other value is ignored rather than reflected back.
 
+**Is `workerRuntime: false` a default or a policy? A default.** A trinket whose
+author stored *Stoppable* runs in the worker even on a deploy with the flag
+off — deliberately: that per-trinket opt-in is the setting's founding use case,
+and it mirrors `?runtime=worker`, which has always beaten the flag. So the flag
+sets what *undecided* trinkets do; it is not a site-wide ban. If a deploy needs
+the worker hard-off — say, while debugging an infrastructure problem — that
+switch does not exist today and would be a separate feature request, not a
+config value.
+
+**Per-trinket setting:** an author can store a runtime on the trinket itself —
+**Trinket Settings ▸ Runtime** — and it travels with the trinket: forks inherit
+it, and every embed of it uses it, with no query parameter involved.
+
+Precedence, highest first: a `?runtime=` on the URL, then the trinket's own
+setting, then this flag. Two rules override all of them, because they are
+capability limits rather than preferences: Web VPython always runs on the main
+thread, and so does a program calling `input()`, `sleep()` or `rate()` inside a
+lambda or comprehension. A `?runtime=worker` may override that second one — the
+check deliberately over-matches — but a stored setting may not, so a saved
+choice can never permanently break a trinket for everyone who opens it.
+
 **Telling which runtime a program got:** the console says so when the answer
 isn't the obvious one — when a program runs in the worker, when a request like
 `?runtime=worker` could *not* be honoured (Web VPython, or `input()`/`sleep()`/
@@ -161,9 +182,10 @@ into the worker. With the flag **on** — where the worker is the default —
 "Original" sends one program back to the main thread, which is what a program
 the async transform cannot rewrite needs.
 
-The choice rides on the link, not on the trinket — a second embed of the same
-program, a fork, or an LTI launch each builds its own URL and starts from the
-deploy default again. Moving it onto the trinket itself is issue #128.
+The choice rides on the **link**, not the trinket: it's a one-off override for
+that URL only, gone as soon as a fresh embed, a fork, or an LTI launch builds
+its own URL. To make a choice stick for every future viewer, use **Trinket
+Settings ▸ Runtime** instead — see "Per-trinket setting" above.
 
 **What changes for a student when this is on**
 

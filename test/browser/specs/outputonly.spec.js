@@ -91,4 +91,40 @@ test.describe('outputOnly without autorun (#66)', () => {
       expect(p.editor, 'the normal embed must still show the editor').toBe(true);
     }).toPass({ timeout: 60_000 });
   });
+
+  // Whole-branch review, item 2: this branch added `with context` to the
+  // embed templates' import of the Trinket Settings macro so `config` would
+  // resolve inside it (lib/views/includes/embed-settings.html's own
+  // `{% if not outputOnly %}` guard, previously always-true because
+  // `outputOnly` was undefined without context). That correctly stops the
+  // modal itself from rendering in output-only embeds -- but left-menu.html's
+  // Settings link (data-action="code.settings") was left ungated, so its
+  // click handler now opens a #settingsModal that isn't in the DOM. python3
+  // is in config.app.configurable, and storageState logs every test in as a
+  // real user (playwright.config.js), so `configurable` is true here exactly
+  // as it would be for a real output-only embed of a logged-in author's
+  // trinket -- this is the live bug shape, not a contrived one.
+  test('does not offer a dead Settings menu item (its modal is gone too)', async ({ page }) => {
+    await page.goto('/embed/python3?outputOnly=true&runtime=main');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.output, 'page must have finished rendering').toBe(true);
+    }).toPass({ timeout: 60_000 });
+
+    await expect(page.locator('a[data-action="code.settings"]')).toHaveCount(0);
+    await expect(page.locator('#settingsModal')).toHaveCount(0);
+  });
+
+  test('REGRESSION: an ordinary embed still offers Settings, modal included', async ({ page }) => {
+    await page.goto('/embed/python3?runtime=main');
+
+    await expect(async () => {
+      const p = await panes(page);
+      expect(p.editor, 'the normal embed must still show the editor').toBe(true);
+    }).toPass({ timeout: 60_000 });
+
+    await expect(page.locator('a[data-action="code.settings"]')).toHaveCount(1);
+    await expect(page.locator('#settingsModal')).toHaveCount(1);
+  });
 });

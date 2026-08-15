@@ -209,3 +209,61 @@ describe('Trinket import after delete (soft-delete dedup)', () => {
     expect(copies[0].code).toBe('print("second import")');
   });
 });
+
+// Review finding (Drew): imports.js assigns meta.settings — JSON.parsed straight
+// out of a user-uploaded zip's metadata.json — to the Trinket doc without running
+// it through sanitizeSettings(), on both the create path and the replace path.
+// Firestore has no validators, so a bogus settings.runtime would land verbatim
+// (an unmatched <option> the author can't clear). On Mongo the schema enum
+// REJECTS it, so the whole .save() fails and the import errors out. Covers the
+// Mongo half here: without the fix this whole trinket fails to import.
+function buildSettingsZip(settingsPayload, code) {
+  const zip = new JSZip();
+  const sc  = 'set123abc0';
+  zip.file('manifest.json', JSON.stringify({ trinkets: [{ shortCode: sc, lang: 'python3' }] }));
+  const dir = 'python3/Settings_One_' + sc + '/';
+  zip.file(dir + 'metadata.json', JSON.stringify({
+    name: 'Settings One', description: 'settings sanitize test', lang: 'python3',
+    settings: settingsPayload
+  }));
+  zip.file(dir + 'main.py', code || 'print("hi")');
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+describe('Trinket import — settings sanitization (unvalidated write paths)', () => {
+  it('sanitizes a bogus settings.runtime on the create path, without stripping sibling settings', async () => {
+    await freshLogin('user');
+    const r = await flow.importTrinketsZip(
+      await buildSettingsZip({ runtime: 'bogus', autofocusEnabled: false })
+    );
+    // Pre-fix on Mongo: the schema enum rejects 'bogus' and .save() fails,
+    // so this trinket is silently dropped (not counted in `imported`).
+    expect(r.statusCode).toBe(200);
+    expect(r.body.data.imported).toBe(1);
+    expect(r.body.data.failed).toBe(0);
+
+    await flow.get('/api/trinkets');
+    const t = flow.lastResponse.body.data.find((x) => x.name === 'Settings One');
+    expect(t).toBeTruthy();
+    expect(t.settings.runtime).toBe('');               // sanitized, not 'bogus'
+    expect(t.settings.autofocusEnabled).toBe(false);    // sibling survives sanitize
+  });
+
+  it('sanitizes a bogus settings.runtime on the replace (re-import) path', async () => {
+    await freshLogin('user');
+    await flow.importTrinketsZip(await buildSettingsZip({ runtime: '', autofocusEnabled: true }));
+
+    const r = await flow.importTrinketsZip(
+      await buildSettingsZip({ runtime: 'bogus', autofocusEnabled: false }),
+      { replace: true }
+    );
+    expect(r.statusCode).toBe(200);
+    expect(r.body.data.failed || 0).toBe(0);
+
+    await flow.get('/api/trinkets');
+    const t = flow.lastResponse.body.data.find((x) => x.name === 'Settings One');
+    expect(t).toBeTruthy();
+    expect(t.settings.runtime).toBe('');
+    expect(t.settings.autofocusEnabled).toBe(false);
+  });
+});
