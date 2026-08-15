@@ -11,6 +11,17 @@
 
 $_brand-primary: #75BF48;   // = $picup-green / $primary-color
 
+// Accessible companion to the brand green, for anything that carries TEXT.
+//
+// $picup-green is a display color: it only reaches 2.04:1 against the page
+// background and 2.26:1 under white button text, where WCAG AA wants 4.5:1 for
+// body text. Foundation derives BOTH the anchor color and filled-button fills
+// from $primary-color, so every link and button label on the site inherited
+// that. This darker green measures 5.13:1 in both roles while still reading as
+// the same brand color; $_brand-primary stays untouched for large fills like
+// the hero, where no small text sits on it.
+$_brand-ink: #2E7D32;
+
 // Hero banner (homepage masthead) — the dominant brand surface.
 // Match the `body#home #hero` specificity from _homepage.scss so this wins.
 body#home #hero,
@@ -18,15 +29,28 @@ body#home #hero,
   background: var(--brand-primary, #{$_brand-primary});
 }
 
-// Filled primary / success buttons (e.g. the Sign Up CTA). Hollow / secondary /
-// alert buttons keep their own styling.
-.button.primary,
-.button.success {
-  background-color: var(--brand-primary, #{$_brand-primary});
-  border-color: var(--brand-primary, #{$_brand-primary});
+// Links. Foundation sets these from $primary-color at compile time, which is
+// why they could not be themed at runtime before — this rule re-points them at
+// a custom property so a deploy can override without a rebuild.
+a {
+  color: var(--brand-link, #{$_brand-ink});
   &:hover,
   &:focus {
-    background-color: var(--brand-primary, #{$_brand-primary});
+    color: var(--brand-link, #{$_brand-ink});
+    filter: brightness(0.85);
+  }
+}
+
+// Filled primary / success buttons (e.g. the Sign Up CTA). Hollow / secondary /
+// alert buttons keep their own styling. These carry white label text, so they
+// use the ink green rather than the display green.
+.button.primary,
+.button.success {
+  background-color: var(--brand-button, #{$_brand-ink});
+  border-color: var(--brand-button, #{$_brand-ink});
+  &:hover,
+  &:focus {
+    background-color: var(--brand-button, #{$_brand-ink});
     filter: brightness(0.93);
   }
 }
