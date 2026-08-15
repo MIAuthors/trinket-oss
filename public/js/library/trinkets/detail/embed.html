@@ -35,4 +35,33 @@
       </div>
     </div>
   </fieldset>
+  <!-- #108. Mirrored from share.html's Runtime Options fieldset, kept in step so
+       the two do not drift. Orthogonal to Run vs Console, so it gets its own
+       control. Shown only for trinket types whose embed reads the parameter
+       (config.app.runtimeOption) — elsewhere it would do nothing. -->
+  <fieldset ng-show="runtimeOption">
+    <legend>Runtime Options</legend>
+    <div class="row">
+      <div class="small-12 columns">
+        <select name="runtimeOptionEmbed" ng-model="info.embedRuntimeMenu">
+          <option value="">Use this site's default runtime</option>
+          <option value="embedRuntimeWorker">Stoppable &mdash; recommended for programs with loops</option>
+          <option value="embedRuntimeMain">Original &mdash; for a program the stoppable runtime can't run</option>
+        </select>
+      </div>
+    </div>
+  </fieldset>
+  <!-- Mirrored from share.html's Layout Options fieldset. Shown only for trinket
+       types that implement the calculator layout (config.app.calculatorOption). -->
+  <fieldset ng-show="calculatorOption">
+    <legend>Layout Options</legend>
+    <div class="row">
+      <div class="small-12 columns">
+        <select name="calculatorOptionEmbed" ng-model="info.embedLayoutMenu">
+          <option value="">Standard layout</option>
+          <option value="embedCalculator">Calculator layout &mdash; show the output first, with the code behind a toggle</option>
+        </select>
+      </div>
+    </div>
+  </fieldset>
 </form>

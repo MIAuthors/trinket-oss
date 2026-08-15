@@ -1,4 +1,17 @@
 (function(window, TrinketIO) {
+  // shareQueryParams is a single module-level object read/written by the change
+  // handlers for BOTH #shareModal (the link dialog) and #embedModal (the embed
+  // dialog) below — the handlers only distinguish which DOM element they rewrite
+  // (via data-type), not which dialog's state they are updating. That was already
+  // true for runOption/displayOption before #108/the calculator option added a
+  // second, third, and now (embed share options) fourth writer of `runMode`. In
+  // practice this is not visibly wrong: linkModal()/embedModal() in
+  // detail-controller.js call trinketShare.resetParams() every time either dialog
+  // is opened, and each of those functions also resets its OWN selects'
+  // data-trinket-runMode back to the current $scope.runMode. So a value written by
+  // one dialog cannot survive being carried into a value displayed by the other —
+  // it is always overwritten by the time that other dialog is actually opened and
+  // interacted with. Do not remove those resets without re-checking this.
   var shareQueryParams;
 
   resetParams();
