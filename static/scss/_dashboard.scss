@@ -116,10 +116,10 @@ $material-row-height: 40px;
       color: $yellow;
     }
     .submitted {
-      color: $primary-color;
+      color: var(--brand-link, #{$primary-color});
     }
     .completed {
-      color: $secondary-color;
+      color: var(--brand-secondary, #{$secondary-color});
     }
     .submittedLate {
       color: $warning-color;
@@ -240,13 +240,13 @@ $material-row-height: 40px;
         }
       }
       &.submitted {
-        @include progress-meter($bg:$primary-color);
+        @include progress-meter($bg: var(--brand-primary, #{$primary-color}));
         &:hover {
           color: #ffffff;
         }
       }
       &.completed {
-        @include progress-meter($bg:$secondary-color);
+        @include progress-meter($bg: var(--brand-secondary, #{$secondary-color}));
         &:hover {
           color: #ffffff;
         }

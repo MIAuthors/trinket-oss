@@ -54,3 +54,76 @@ a {
     filter: brightness(0.93);
   }
 }
+
+// =============================================================================
+// #149: coverage for Foundation-COMPILED brand greens.
+//
+// Foundation derives these from $primary-color inside the vendored components
+// tarball, so they cannot be converted at their source the way static/scss/
+// files were. Re-pointed here instead — imported last, so these win. Every
+// fallback is the exact color Foundation compiles today; with no --brand-*
+// custom properties set, rendering is unchanged.
+//
+// Shade provenance: #5E9D37 = darken($picup-green, 10%), #9ED27F =
+// lighten($picup-green, 14%) — Foundation's own derivations, frozen here as
+// fallbacks. Branded deploys override via theme.buttonDark / theme.link etc.
+// =============================================================================
+
+// Breadcrumb trail text and links.
+.breadcrumbs > * {
+  color: var(--brand-link, #{$_brand-primary});
+  a { color: var(--brand-link, #{$_brand-primary}); }
+}
+
+// Inline labels (tags). White text sits on these — a text-bearing role.
+.label,
+.label.success {
+  background-color: var(--brand-button, #{$_brand-primary});
+}
+
+// Pagination: the current page chip (white label).
+ul.pagination li.current a,
+ul.pagination li.current button {
+  background: var(--brand-button, #{$_brand-primary});
+  &:hover,
+  &:focus {
+    background: var(--brand-button, #{$_brand-primary});
+    filter: brightness(0.93);
+  }
+}
+
+// Icon bar hover/active fill.
+.icon-bar > a {
+  &:hover,
+  &.active {
+    background: var(--brand-button, #{$_brand-primary});
+  }
+}
+
+// Side-nav active/hover link text (Foundation compiles a LIGHTENED green here).
+.side-nav li {
+  a:not(.button):not(.faux-button) {
+    &:hover,
+    &:active { color: var(--brand-link, #9ED27F); }
+  }
+  &.active > a:first-child:not(.button):not(.faux-button) {
+    color: var(--brand-link, #9ED27F);
+  }
+}
+
+// Callout panel links.
+.panel.callout a:not(.button):not(.faux-button) {
+  color: var(--brand-link, #{$_brand-primary});
+  &:hover,
+  &:focus {
+    color: var(--brand-link, #{$_brand-primary});
+    filter: brightness(0.85);
+  }
+}
+
+// Success alert boxes (white text on the fill).
+.alert-box,
+.alert-box.success {
+  background-color: var(--brand-button, #{$_brand-primary});
+  border-color: var(--brand-button-dark, #64A83B);  // Foundation's own alert border shade
+}

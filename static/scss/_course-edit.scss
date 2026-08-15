@@ -65,7 +65,7 @@ body.course {
   .dropdown-blue {
     @extend .dropdown;
     &:after {
-      border-color: $primary-color transparent transparent transparent !important;
+      border-color: var(--brand-primary, #{$primary-color}) transparent transparent transparent !important;
     }
     &:hover:after {
       border-color: #006ecc transparent transparent transparent !important;
@@ -163,7 +163,7 @@ body.course {
       }
       &.current { 
         font-weight: bold; 
-        background: $primary-color;
+        background: var(--brand-primary, #{$primary-color});
         color: #FFF;
       }
     }
@@ -368,7 +368,7 @@ body.course {
 
         li:hover {
           color: #fff;
-          background-color: $primary-color;
+          background-color: var(--brand-primary, #{$primary-color});
         }
 
         p.user-role-heading {
