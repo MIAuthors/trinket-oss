@@ -15,7 +15,11 @@
     this.Restangular = Restangular;
     this.parser      = markdownParser({
       $scope:  $scope,
-      preview: false
+      preview: false,
+      engine : function() {
+        return ($scope.course && $scope.course.globalSettings
+                && $scope.course.globalSettings.markdownEngine) || 'legacy';
+      }
     });
     this.trinketConfig = trinketConfig;
     this.trinketUtil   = trinketUtil;
@@ -173,7 +177,8 @@
           self.$scope.courseForm = {
             name        : course.name,
             description : course.description,
-            contentDefault : course.globalSettings.contentDefault
+            contentDefault : course.globalSettings.contentDefault,
+            markdownEngine : (course.globalSettings && course.globalSettings.markdownEngine) || 'legacy'
           };
           self.$scope.coursePageUrl = self.defaultCoursePageUrl = self.trinketConfig.getClassUrl(self.$scope.userSlug, self.$scope.courseSlug)
 

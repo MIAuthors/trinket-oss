@@ -25,7 +25,14 @@
     this.stopRenderAndSave  = false;
     this.materialSlugChange = false;
     this.Restangular        = Restangular;
-    this.parser             = markdownParser({$scope:$scope, preview:true});
+    this.parser             = markdownParser({
+      $scope:  $scope,
+      preview: true,
+      engine : function() {
+        return ($scope.course && $scope.course.globalSettings
+                && $scope.course.globalSettings.markdownEngine) || 'legacy';
+      }
+    });
     this.beforeWindowUnload = angular.bind(this, this.beforeWindowUnload);
     this.sizeToWindow       = angular.bind(this, this.sizeToWindow);
     this.trinketConfig      = trinketConfig;
