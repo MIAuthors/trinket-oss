@@ -1296,7 +1296,7 @@ function expandNode(root, path) {
 
 // --- Step-through debugger (record & replay) --------------------------------
 //
-// Design: docs/pyodide-debugger-mvp.md. Clicking "Step through" re-runs the
+// Design: docs/design/pyodide-debugger-mvp.md. Clicking "Step through" re-runs the
 // program under a sys.settrace recorder that captures, per user-code line
 // event: line number, function, call depth, a compact variable snapshot of the
 // executing frame, and the stdout offset. Replay then steps forward/backward

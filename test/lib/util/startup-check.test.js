@@ -1,6 +1,6 @@
 'use strict';
 
-// Design decision 3 (GCR-PICUP-TRIAL-MERGE-NOTES): GCP is all-or-none.
+// Design decision 3 (docs/history/GCR-PICUP-TRIAL-MERGE-NOTES.md): GCP is all-or-none.
 // db.backend firestore requires auth.provider firebase (and vice versa).
 // Unsupported shapes fail closed in production (unless the deployer sets
 // app.allowUnsupportedConfig) and warn everywhere else.
