@@ -59,8 +59,8 @@ opening to real classroom traffic.
    currently `false` everywhere — file uploads are disabled. The
    `trinket-snapshots` bucket exists but no materials bucket does yet.
    Steps:
-   - Create bucket: `gsutil mb -l US-CENTRAL1 -p trinket-gcr-test gs://trinket-materials`
-   - Make publicly readable: `gsutil iam ch allUsers:objectViewer gs://trinket-materials`
+   - Create bucket: `gcloud storage buckets create gs://trinket-materials --location=US-CENTRAL1 --project=trinket-gcr-test`
+   - Make publicly readable: `gcloud storage buckets add-iam-policy-binding gs://trinket-materials --member=allUsers --role=roles/storage.objectViewer`
    - Create HMAC keys for the Cloud Run service account:
      `gcloud storage hmac create <sa>@trinket-gcr-test.iam.gserviceaccount.com`
    - Store in Secret Manager (`trinket-aws-key-id`, `trinket-aws-key`) and
