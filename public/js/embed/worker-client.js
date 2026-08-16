@@ -73,6 +73,17 @@
         return;
       }
 
+      // Scene updates from the vpython transport. NOT scoped to `current` like
+      // figures — deliberately: a vpython scene outlives its run (the program
+      // ends, the scene stays live and browser-paced), so ops legitimately
+      // arrive after settle() nulls `current`. Staleness is handled by the
+      // `generation` tag the kernel stamps on every package instead: the page
+      // bumps the generation on re-run and drops ops from an older scene.
+      if (msg.type === 'scene-ops') {
+        if (opts.onSceneOps) opts.onSceneOps(msg);
+        return;
+      }
+
       // Request/response replies (the variable explorer). Not tied to a run:
       // they are asked for AFTER a run finishes, when the worker is idle.
       if (msg.type === 'snapshot-result') {
@@ -145,9 +156,19 @@
             // stop() may have replaced the worker, or another run started,
             // while Pyodide was still booting.
             if (worker === w && current && current.id === id) {
-              w.postMessage({ type: 'run', id: id, source: source, files: files || null,
-                              transformUrl: opts.transformUrl,
-                              graphicWidth: (opts2 && opts2.graphicWidth) || 0 });
+              var runMsg = { type: 'run', id: id, source: source, files: files || null,
+                             transformUrl: opts.transformUrl,
+                             graphicWidth: (opts2 && opts2.graphicWidth) || 0 };
+              // The worker VPython path (spec 2026-08-10) needs the wheel to
+              // install and the scene generation to tag its ops with. Added
+              // ONLY for a vpython run, so an ordinary python3 run message is
+              // byte-for-byte what it always was.
+              if (opts2 && opts2.vpython) {
+                runMsg.vpython = true;
+                runMsg.wheelUrl = opts2.wheelUrl;
+                runMsg.sceneGeneration = opts2.sceneGeneration | 0;
+              }
+              w.postMessage(runMsg);
             }
           });
         });
@@ -158,6 +179,27 @@
       stop: function() {
         if (worker) { worker.terminate(); worker = null; }
         settle();
+      },
+
+      // Throw the interpreter away WITHOUT it being a Stop: the next run() boots
+      // a fresh one, with a fresh Python namespace.
+      //
+      // Same mechanism as stop() and named differently on purpose — the caller's
+      // intent is "start clean", not "kill what is running", and the two are read
+      // in very different places. The worker VPython path (spec 2026-08-10) is
+      // the one caller: on this host a Run is a fresh program from the top, and
+      // vpython's `scene = canvas()` at import time makes that unavoidable
+      // besides (see V7a in the design spec). Ordinary python3 runs never call
+      // this and keep their accumulating namespace.
+      //
+      // Returns whether there WAS an interpreter to discard, so the page can
+      // tell a student whose console session just went with it — and stay quiet
+      // when nothing was lost.
+      discardWorker: function() {
+        var had = !!worker;
+        if (worker) { worker.terminate(); worker = null; }
+        settle();
+        return had;
       },
 
       // One REPL statement. Same channel and same correlation as run(), so
@@ -195,6 +237,15 @@
       sendMplEvent: function(figureId, content) {
         if (worker) {
           worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
+        }
+      },
+
+      // SPIKE (vpython-jupyter adoption): browser events — or the bare pacing
+      // trigger `[{"trigger":1}]` — to the vpython transport in the worker.
+      // `events` is a JSON array string in glowcomm's wire format.
+      sendSceneEvent: function(events) {
+        if (worker) {
+          worker.postMessage({ type: 'scene-event', events: String(events) });
         }
       },
 
