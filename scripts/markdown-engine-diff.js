@@ -145,8 +145,19 @@ function diffMaterial(course, lesson, material, summary, records) {
 
   summary.compared++;
 
-  var legacyHtml = normalizeHtml(legacyRender(content));
-  var modernHtml = normalizeHtml(modernRender(content));
+  // A render crash is a FINDING, not a fatal: the first real-corpus run died
+  // on a pre-existing legacy-engine ReferenceError (`python_types` undefined
+  // in the server wrapper — any self-hosted trinket link triggers it), taking
+  // the whole report with it. Record which engine crashed and keep sweeping.
+  var legacyHtml, modernHtml, crashed = null;
+  try { legacyHtml = normalizeHtml(legacyRender(content)); }
+  catch (e) { crashed = 'legacy'; legacyHtml = 'RENDER CRASH: ' + e.message; }
+  try { modernHtml = normalizeHtml(modernRender(content)); }
+  catch (e) { crashed = crashed ? 'both' : 'modern'; modernHtml = 'RENDER CRASH: ' + e.message; }
+  if (crashed) {
+    summary.crashed = (summary.crashed || 0) + 1;
+    summary['crashed_' + crashed] = (summary['crashed_' + crashed] || 0) + 1;
+  }
 
   if (legacyHtml === modernHtml) {
     summary.identical++;
@@ -192,6 +203,12 @@ function printSummary(summary, records, sample) {
   console.log('  identical              : ' + summary.identical);
   console.log('  differing              : ' + summary.differing);
   console.log('  skipped (empty content): ' + summary.skippedEmpty);
+  if (summary.crashed) {
+    console.log('  RENDER CRASHES         : ' + summary.crashed +
+      ' (legacy: ' + (summary.crashed_legacy || 0) +
+      ', modern: ' + (summary.crashed_modern || 0) +
+      ', both: ' + (summary.crashed_both || 0) + ')');
+  }
 
   if (!records.length) { return; }
 
