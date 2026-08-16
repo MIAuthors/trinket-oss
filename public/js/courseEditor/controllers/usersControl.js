@@ -42,17 +42,10 @@
         studentList : ""
       };
 
-      function parseCsvInput(text) {
-        return text.split('\n')
-          .map(function(line) { return line.trim(); })
-          .filter(function(line) { return line.length > 0; })
-          .map(function(line) {
-            var parts = line.split(',').map(function(p) { return p.trim(); });
-            var email = parts[parts.length - 1];
-            var name  = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
-            return { email: email, name: name };
-          });
-      }
+      // Parsing lives in studentListParser.js (shared with the unit tests):
+      // handles comma AND tab delimiters (spreadsheet pastes, picup#166) and
+      // separates out lines with no plausible email so they are never
+      // submitted as junk users.
 
       $scope.addingUser         = false;
       $scope.sendingInvitations = false;
@@ -233,14 +226,29 @@
           className = 'warning';
         }
         if (totals.invalid) { message += " " + totals.invalid + " invalid email(s) skipped."; }
+        if (totals.held) {
+          message += " " + totals.held + " line(s) had no email address and were left in the box.";
+          if (className === 'success') { className = 'warning'; }
+        }
         if (totals.failed)  { message += " " + totals.failed + " batch(es) failed — please retry."; className = 'alert'; }
 
         $("#invitations-sent-messages").notify(message, { className : className });
       }
 
       $scope.inviteUsersToCourse = function() {
-        var students = parseCsvInput($scope.inviteForm.studentList);
-        if (!students.length) { return; }
+        var parsed   = trinketStudentListParser.parse($scope.inviteForm.studentList);
+        var students = parsed.students;
+        var skipped  = parsed.skipped;
+
+        if (!students.length) {
+          if (skipped.length) {
+            $("#invitations-sent-messages").notify(
+              "No email addresses found — nothing was added. Each line needs " +
+              "an email address (lines left in the box below).",
+              { className : 'warning' });
+          }
+          return;
+        }
 
         var batches = [];
         for (var i = 0; i < students.length; i += INVITE_BATCH) {
@@ -256,8 +264,11 @@
           if (index >= batches.length) {
             $scope.sendingInvitations     = false;
             $scope.inviteProgress.active  = false;
-            $scope.inviteForm.studentList = "";
+            // Leave only the held-back lines in the box so the instructor can
+            // fix them in place; everything submitted is cleared.
+            $scope.inviteForm.studentList = skipped.join('\n');
             $(document).foundation('dropdown', 'reflow');
+            totals.held = skipped.length;
             reportRoster(totals);
             return;
           }
