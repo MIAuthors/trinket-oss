@@ -55,7 +55,13 @@ features:
     # Engine for NEWLY CREATED courses: legacy | modern. Existing courses keep
     # whatever they have (absent = legacy). See docs/superpowers/specs/
     # 2026-08-15-markdown-engine-bridge-design.md.
-    newCourseDefault: modern
+    #
+    # Ships as `legacy` on purpose: the modern engine arrives as a per-course
+    # option instructors can opt into, so nothing changes for anyone until they
+    # choose it. Deployments that want the modern engine for new courses can set
+    # this to `modern`; the decision about a global default belongs with the
+    # evidence from real adoption, not with this PR.
+    newCourseDefault: legacy
 
 auth:
   # Auth provider — a deployment uses exactly ONE ('local' or 'firebase').
