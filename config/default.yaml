@@ -509,16 +509,22 @@ app:
   # policies tighten with no code change.
   csp:
     enabled: true
+    # Scheme-less on purpose: the embed pulls several of these with
+    # protocol-relative URLs, so they resolve to http on a local stack and
+    # https in production. A host with no scheme matches both.
     cdnOrigins:
-      - 'https://cdnjs.cloudflare.com'   # MathJax, loaded by the glowscript frame
-      - 'https://cdn.jsdelivr.net'       # pyodide.js + wheels, fetched at runtime
+      - 'cdnjs.cloudflare.com'   # MathJax, jQuery, Modernizr, moment, highlight.js (+ their CSS)
+      - 'cdn.jsdelivr.net'       # pyodide.js + wheels, fetched at runtime
+    fontOrigins:
+      - 'fonts.googleapis.com'   # the stylesheet
+      - 'fonts.gstatic.com'      # the font files it references
     # Normal embeds: keep remote images/media so textures in existing course
     # material keep working. frame-src is 'none' even here — no program has a
     # reason to embed a frame.
     standard: >-
       default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
-      style-src 'self' 'unsafe-inline'; img-src * data: blob:;
-      media-src * data: blob:; font-src 'self' data: {cdn}; connect-src * data: blob:;
+      style-src 'self' 'unsafe-inline' {cdn} {fonts}; img-src * data: blob:;
+      media-src * data: blob:; font-src 'self' data: {cdn} {fonts}; connect-src * data: blob:;
       frame-src 'none'; child-src 'none'; worker-src 'self' blob:;
       object-src 'none'; base-uri 'none'; form-action 'none'
     # runMode=calculator (exam/test mode): no third-party content at all.
@@ -526,8 +532,8 @@ app:
     # that is the point.
     exam: >-
       default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
-      style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;
-      media-src 'self' data: blob:; font-src 'self' data: {cdn};
+      style-src 'self' 'unsafe-inline' {cdn} {fonts}; img-src 'self' data: blob:;
+      media-src 'self' data: blob:; font-src 'self' data: {cdn} {fonts};
       connect-src 'self' {cdn}; frame-src 'none'; child-src 'none';
       worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'
 workers:

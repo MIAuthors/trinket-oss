@@ -10,9 +10,10 @@ const { policyFor } = require('../../../lib/util/embedCsp');
 
 const CONFIG = {
   enabled: true,
-  cdnOrigins: ['https://cdnjs.cloudflare.com', 'https://cdn.jsdelivr.net'],
-  standard: "default-src 'none'; script-src 'self' {cdn}; img-src * data:; connect-src *; frame-src 'none'; child-src 'none'; worker-src 'self' blob:",
-  exam: "default-src 'none'; script-src 'self' {cdn}; img-src 'self' data:; connect-src 'self' {cdn}; frame-src 'none'; child-src 'none'; worker-src 'self' blob:"
+  cdnOrigins: ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'],
+  fontOrigins: ['fonts.googleapis.com'],
+  standard: "default-src 'none'; script-src 'self' {cdn}; style-src 'self' {cdn} {fonts}; font-src 'self' {cdn} {fonts}; img-src * data:; connect-src *; frame-src 'none'; child-src 'none'; worker-src 'self' blob:",
+  exam: "default-src 'none'; script-src 'self' {cdn}; style-src 'self' {cdn} {fonts}; font-src 'self' {cdn} {fonts}; img-src 'self' data:; connect-src 'self' {cdn}; frame-src 'none'; child-src 'none'; worker-src 'self' blob:"
 };
 
 describe('embed CSP', function() {
@@ -39,7 +40,7 @@ describe('embed CSP', function() {
   // those are vendored locally, cdnOrigins goes empty and this tightens itself.
   it('substitutes the configured CDN origins', function() {
     const p = policyFor(CONFIG, '/embed/python3/x', 'calculator');
-    expect(p).toContain('https://cdn.jsdelivr.net');
+    expect(p).toContain('cdn.jsdelivr.net');
     expect(p).not.toContain('{cdn}');
   });
 
@@ -65,6 +66,28 @@ describe('embed CSP', function() {
       const p = policyFor(CONFIG, '/embed/python3/x', mode);
       expect(p).toContain("worker-src 'self' blob:");
     });
+  });
+
+
+  // The embed pulls several assets with protocol-relative URLs, so they are
+  // http on a local stack and https in production. Host entries carry no
+  // scheme so both match — pinning https would break local development and
+  // any http deployment.
+  it('keeps CDN hosts scheme-less', function() {
+    const p = policyFor(CONFIG, '/embed/glowscript/x', '');
+    expect(p).toContain('cdnjs.cloudflare.com');
+    expect(p).not.toContain('https://cdnjs');
+  });
+
+  // The CDNs serve stylesheets as well as scripts, and the font services serve
+  // a stylesheet plus the font files.
+  it('allows CDN and font origins for styles and fonts', function() {
+    const p = policyFor(CONFIG, '/embed/glowscript/x', 'calculator');
+    const style = /style-src[^;]*/.exec(p)[0];
+    const font = /font-src[^;]*/.exec(p)[0];
+    expect(style).toContain('cdnjs.cloudflare.com');
+    expect(style).toContain('fonts.googleapis.com');
+    expect(font).toContain('fonts.googleapis.com');
   });
 
   it('does not touch non-embed pages', function() {
