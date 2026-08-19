@@ -1,4 +1,4 @@
-# Local development stacks (see NEW-DEPLOY-STEP-BY-STEP.md, Part I).
+# Local development stacks (see DEPLOYING.md and GETTING_STARTED.md).
 #
 # Both stacks auto-read the gitignored root .env for interpolation — GCP needs
 # SESSION_PASSWORD + FIREBASE_CLIENT_CONFIG, self-host needs GARAGE_* — so no
@@ -8,9 +8,12 @@
 # Intel/amd64 hosts: the compose files pin platform: linux/arm64 (Apple
 # Silicon). If that runs slowly under emulation, add an override that sets
 # services.app.platform: linux/amd64 (see the "two locals" note in the docs).
+#
+# Per-deploy operations (deploy/verify/clean) dispatch to the ACTIVE overlay's
+# own Makefile — see "Per-deploy targets" below and docs/DEPLOY-OVERLAY-GUIDE.md.
 
 .DEFAULT_GOAL := help
-.PHONY: help gcp mongo down-gcp down-mongo browser-smoke
+.PHONY: help gcp mongo down-gcp down-mongo browser-smoke deploy verify deploy-clean deploy-clean-dry
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-11s %s\n", $$1, $$2}'
@@ -29,3 +32,18 @@ down-mongo: ## Stop and remove the self-host stack
 
 browser-smoke: ## Browser smoke tests (New Trinket + WebVPython journeys) vs a local gcp stack; on-demand pre-deploy gate
 	bash test/browser/run-smoke.sh
+
+# --- Per-deploy targets ------------------------------------------------------
+# An overlay repo (deploys/<name>/) may ship its own Makefile carrying that
+# deployment's project ID, hostname and platform recipe (Cloud Run, compose, …).
+# These targets dispatch to it, so `make deploy` works in any checkout without
+# remembering overlay names or env vars. TRINKET_DEPLOY comes from the
+# environment or this checkout's .env (same precedence deploy-cloudrun.sh uses).
+TRINKET_DEPLOY ?= $(shell grep -E '^TRINKET_DEPLOY=' .env 2>/dev/null | head -1 | cut -d= -f2)
+DEPLOY_MK = deploys/$(TRINKET_DEPLOY)/Makefile
+
+deploy verify deploy-clean deploy-clean-dry: ## deploy|verify|clean the ACTIVE overlay (TRINKET_DEPLOY from env or .env)
+	@[ -n "$(TRINKET_DEPLOY)" ] || { echo "TRINKET_DEPLOY is not set (env or .env). Overlays with Makefiles:"; \
+	  ls deploys/*/Makefile 2>/dev/null | sed 's|deploys/\(.*\)/Makefile|  \1|' || echo "  (none found under deploys/)"; exit 1; }
+	@[ -f "$(DEPLOY_MK)" ] || { echo "$(DEPLOY_MK) not found — this overlay ships no Makefile (see docs/DEPLOY-OVERLAY-GUIDE.md)"; exit 1; }
+	@$(MAKE) -f $(DEPLOY_MK) $(patsubst deploy-clean%,clean%,$@)

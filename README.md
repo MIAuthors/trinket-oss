@@ -64,7 +64,7 @@ Copy `config/local.example.yaml` to `config/local.yaml` and fill in the required
 | `app.auth.google.*` | Google OAuth login |
 | `app.recaptcha.*` | reCAPTCHA spam protection |
 
-See [GETTING_STARTED.md](GETTING_STARTED.md) for detailed setup of optional features.
+See [GETTING_STARTED.md](GETTING_STARTED.md). The full documentation map — LTI, deploy overlays, design records, compliance — is indexed at [docs/README.md](docs/README.md) for detailed setup of optional features.
 
 ## Development
 

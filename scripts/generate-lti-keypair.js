@@ -3,7 +3,7 @@
 // scripts/generate-lti-keypair.js
 //
 // Generate the LTI 1.3 Tool RS256 keypair (used to sign Tool JWTs; public key served at
-// /lti/jwks). Run ONCE; trinket uses one keypair across all platforms (LTI-SPEC.md §11).
+// /lti/jwks). Run ONCE; trinket uses one keypair across all platforms (docs/lti/LTI-SPEC.md §11).
 //
 // Usage:
 //   node scripts/generate-lti-keypair.js
