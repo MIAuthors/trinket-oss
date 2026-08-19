@@ -492,6 +492,44 @@ app:
     - '/signup'
     - '/contact'
     - '/educators'
+
+  # Content-Security-Policy for /embed/* responses.
+  #
+  # Test mode (runMode=calculator) should be self-contained: what the student
+  # sees is what the trinket contains, with nothing pulled in from outside.
+  # Normal embeds stay permissive about images and media so existing course
+  # material (remote textures) keeps working. Frames are disallowed in both.
+  #
+  # These policies reach the program itself: glowscript runs it in a `srcdoc`
+  # iframe, which inherits the embedding page's policy, and the same policy
+  # governs a blob: Web Worker (the pyodide worker runtime).
+  #
+  # cdnOrigins lists the third-party hosts the runtimes still need. Vendoring
+  # them locally (build-resilience work) lets this list empty out, and the
+  # policies tighten with no code change.
+  csp:
+    enabled: true
+    cdnOrigins:
+      - 'https://cdnjs.cloudflare.com'   # MathJax, loaded by the glowscript frame
+      - 'https://cdn.jsdelivr.net'       # pyodide.js + wheels, fetched at runtime
+    # Normal embeds: keep remote images/media so textures in existing course
+    # material keep working. frame-src is 'none' even here — no program has a
+    # reason to embed a frame.
+    standard: >-
+      default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' 'unsafe-inline'; img-src * data: blob:;
+      media-src * data: blob:; font-src 'self' data: {cdn}; connect-src * data: blob:;
+      frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none';
+      form-action 'none'
+    # runMode=calculator (exam/test mode): no third-party content at all.
+    # Deliberately breaks uploaded images and remote textures — during an exam
+    # that is the point.
+    exam: >-
+      default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;
+      media-src 'self' data: blob:; font-src 'self' data: {cdn};
+      connect-src 'self' {cdn}; frame-src 'none'; child-src 'none';
+      object-src 'none'; base-uri 'none'; form-action 'none'
 workers:
   trinkets:
     outputDir: '/tmp/' # should be readable by nginx

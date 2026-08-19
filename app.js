@@ -39,6 +39,7 @@ const Vision         = require('@hapi/vision');
 const Yar            = require('@hapi/yar');
 const config         = require('./config/app.config');
 const Helpers        = require('./lib/util/helpers');
+const embedCsp       = require('./lib/util/embedCsp');
 const Authentication = require('./lib/auth/passport.js');
 // gleak is not compatible with Node 16+ (uses GLOBAL which was removed)
 // Use a no-op fallback for now
@@ -266,6 +267,11 @@ const init = async () => {
       if (addXFrame) {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
+
+      const boomCsp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname, request.query && request.query.runMode);
+      if (boomCsp) {
+        response.output.headers['Content-Security-Policy'] = boomCsp;
+      }
     }
     else if (response.header) {
       response.header('Cache-Control', cache_control);
@@ -274,6 +280,11 @@ const init = async () => {
 
       if (addXFrame) {
         response.header('X-Frame-Options', 'deny');
+      }
+
+      const csp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname, request.query && request.query.runMode);
+      if (csp) {
+        response.header('Content-Security-Policy', csp);
       }
     }
 
