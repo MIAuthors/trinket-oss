@@ -24,7 +24,11 @@ angular
     var currentPath       = null;
     var parser            = markdownParser({
       $scope:  $scope,
-      preview: false
+      preview: false,
+      engine : function() {
+        return ($scope.course && $scope.course.globalSettings
+                && $scope.course.globalSettings.markdownEngine) || 'legacy';
+      }
     });
 
     $anchorScroll.yOffset = 75;
