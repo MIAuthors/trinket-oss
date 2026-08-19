@@ -25,6 +25,67 @@
     return { type: 'done', id: id };
   }
 
+  // The vpython scene channel, and the one thing on it the page cannot work out
+  // for itself: whether a package is the REPLY to a trigger the page sent, or
+  // something the PROGRAM pushed on its own (rate() flushes up to
+  // rate_control.MAX_RENDERS a second from inside the animation loop).
+  //
+  // The page's pacer needs that to know when to get out of the way, and it
+  // cannot infer it: trinket_worker._dispatch answers EVERY inbound message with
+  // a flush, so inbound traffic alone never distinguishes a busy program from
+  // the page's own echo.
+  //
+  // Implemented as a COUNT of dispatches still owed a reply rather than "are we
+  // inside the dispatch call right now". The two are identical while _dispatch
+  // is synchronous, which it is today — but decision V4 has JSPI in view, and
+  // under it a dispatch could suspend and flush after returning. A boolean
+  // would then mark every reply unsolicited, the pacer would alternate
+  // tick/poll, and a static scene would silently drop to half its pacing with
+  // nothing failing. The count survives that: what it relies on is the
+  // transport's own contract — one flush per dispatch (trinket_worker._dispatch
+  // ends with baseObj.trigger()) — not on JS call-stack timing.
+  //
+  // Pure so it can be unit-tested; the live path is a browser spec.
+  function createSceneChannel(opts) {
+    var owed = 0;        // dispatches that have not yet produced their flush
+    var sends = 0;
+
+    return {
+      // The outbound half of the pipe vpython's trinket_worker transport
+      // expects. The transport JSON-encodes every update package ({cmds,
+      // methods, attrs} — glowcomm's wire format) and calls this.
+      send: function(jsonStr) {
+        sends++;
+        var solicited = owed > 0;
+        if (solicited) owed--;
+        opts.post({ type: 'scene-ops', id: opts.runId(), generation: opts.generation(),
+                    solicited: solicited, ops: String(jsonStr) });
+      },
+
+      // The page's browser events (or a bare pacing trigger) going in. Before
+      // the transport boots — or on a run with no vpython at all — there is
+      // nothing to dispatch to, and dropping the message is correct: it is
+      // pacing, not data, and it must not be counted as owing a reply.
+      dispatch: function(eventsJson) {
+        var fn = opts.dispatcher();
+        if (typeof fn !== 'function') return;
+        owed++;
+        var before = sends;
+        try {
+          fn(String(eventsJson || '[]'));
+        } catch (e) {
+          // It threw without flushing, so the reply is not merely late — it is
+          // never coming. Give the credit back, or the next thing the PROGRAM
+          // pushes would be mislabelled as this dispatch's reply.
+          if (sends === before && owed > 0) owed--;
+          opts.onError(e);
+        }
+      },
+
+      _owed: function() { return owed; }    // test-only
+    };
+  }
+
   // ---- worker runtime (skipped entirely when required from node) -----------
   if (typeof self !== 'undefined' && typeof self.importScripts === 'function') {
     var pyodide = null;
@@ -119,8 +180,28 @@
 
     // Only programs that actually read input need rewriting; everything else
     // runs unmodified, so the transform can't perturb an ordinary program.
+    //
+    // VPython is the other case, and it is decided by the RUN, not by this
+    // regex — see wantsTransform() below.
     function needsTransform(src) {
       return /(^|[^.\w])input\s*\(/.test(src || '') || /\bconsole\s*\.\s*input\s*\(/.test(src || '');
+    }
+
+    // A vpython run ALWAYS gets the transform. rate()/sleep() are coroutines in
+    // the worker (trinket_worker's transport patches), so without an inserted
+    // `await` the program builds a coroutine per iteration and throws it away:
+    // no pacing, no flush — the animation never draws and the loop hot-spins.
+    //
+    // Keyed off msg.vpython rather than a widened source regex on purpose. The
+    // transform's await set contains the BARE names `rate` and `sleep`, so a
+    // regex hit on `rate(` would also fire for an ordinary python3 program that
+    // defines its own rate() — and `await`ing a function that returns a plain
+    // value is a TypeError at runtime, i.e. the transform would break a working
+    // program. msg.vpython is set only by the router, only for a run it has
+    // already classified as VPython, so it cannot mis-fire on a non-vpython
+    // program at all.
+    function wantsTransform(msg, src) {
+      return !!(msg && msg.vpython) || needsTransform(src);
     }
 
     // ---- matplotlib ---------------------------------------------------------
@@ -152,6 +233,75 @@
     self.__trinket_worker_mpl = function(figid, sub, payload) {
       post({ type: 'figure', id: currentRunId, figureId: String(figid), kind: String(sub), data: String(payload) });
     };
+
+    // ---- vpython (spec 2026-08-10) ------------------------------------------
+    //
+    // vpython runs execute against the vpython-jupyter wheel (spec 2026-08-10).
+    // Idempotent per worker: micropip is a no-op if already installed.
+    //
+    // deps=False is REQUIRED: the wheel declares the jupyter-stack dependencies
+    // vpython needs on a notebook (ipykernel, jupyter-server-proxy, …) and
+    // micropip cannot resolve them here. The worker path uses none of them —
+    // the transport talks over postMessage, not a comm.
+    var vpythonReady = null;
+    function ensureVPython(wheelUrl) {
+      if (vpythonReady) return vpythonReady;
+      vpythonReady = pyodide.loadPackage(['numpy', 'micropip']).then(function() {
+        pyodide.globals.set('__vpy_wheel__', wheelUrl);
+        return pyodide.runPythonAsync(
+          'import micropip\n' +
+          'await micropip.install(__vpy_wheel__, deps=False)\n'
+        );
+      }).catch(function(e) {
+        // Never cache a failed install, or one transient fetch error poisons
+        // every later vpython run for the life of this worker.
+        vpythonReady = null;
+        // A raw micropip failure would reach the page as a Python traceback
+        // whose frames are all site-packages — and formatPythonTraceback maps
+        // the synthetic <exec> frame to main.py, so the student would be shown
+        // "File main.py, line 2" above micropip internals, for a failure that
+        // has nothing to do with their program. Send one plain sentence
+        // instead: with no frame lines in it the formatter passes it through
+        // untouched.
+        //
+        // A Pyodide PythonError's `.message` is the WHOLE traceback, so only
+        // its last line (the `SomeError: text` one) is quoted — embedding the
+        // rest would reintroduce exactly the frames this exists to suppress.
+        var raw = String(e && e.message || e).split('\n');
+        var reason = '';
+        for (var li = raw.length - 1; li >= 0 && !reason; li--) {
+          if (raw[li].trim()) reason = raw[li].trim();
+        }
+        throw new Error('VPython could not be loaded in the worker runtime ' +
+          '(the vpython package failed to install: ' + reason +
+          '). This is a site problem, not an error in your program.');
+      });
+      return vpythonReady;
+    }
+
+    // The scene a program draws into. The page bumps this on every re-run, so
+    // ops belonging to a scene it has already torn down are identifiable as
+    // stale. A vpython re-run also discards this whole worker (spec V7a), so the
+    // tag is no longer guarding against a surviving Python namespace — it guards
+    // against messages ALREADY POSTED when that happened, which terminate()
+    // cannot un-post.
+    var sceneGeneration = 0;
+
+    // The scene channel (see createSceneChannel above). `ops` rides out on the
+    // protocol's RESERVED `scene-ops` type, carried as the raw JSON string: the
+    // page parses it once, into the object the front-end factory takes.
+    var sceneChannel = createSceneChannel({
+      post: post,
+      runId: function() { return currentRunId; },
+      generation: function() { return sceneGeneration; },
+      dispatcher: function() { return self.__trinket_vpython_dispatch; },
+      onError: function(e) {
+        post({ type: 'stderr', id: currentRunId,
+               text: '[vpython dispatch] ' + String(e && e.message || e) + '\n' });
+      }
+    });
+
+    self.__trinket_vpython_send = sceneChannel.send;
 
     // Interactive figures, the ipympl way: backend_webagg_core is pure Python and
     // transport-agnostic — upstream webagg carries its messages over a WebSocket
@@ -375,7 +525,12 @@
       var shadowsConsole = !!(msg.files &&
         Object.prototype.hasOwnProperty.call(msg.files, 'console.py'));
 
-      var prepared = needsTransform(source)
+      // A vpython run draws into the scene the page has just created; ops are
+      // tagged with its generation so the page can drop any that arrive from a
+      // scene it has already torn down. Absent (any non-vpython run) means 0.
+      if (msg.vpython) { sceneGeneration = msg.sceneGeneration | 0; }
+
+      var prepare = function() { return wantsTransform(msg, source)
         ? ensureTransform(msg.transformUrl).then(function() {
             pyodide.runPython(shadowsConsole
               ? '_t._MODULE_AWAIT_ATTRS = {}'
@@ -385,11 +540,15 @@
               return pyodide.runPython('transform_source(__user_source__)');
             });
           })
-        : Promise.resolve(source);
+        : Promise.resolve(source); };
 
       var mpl = usesMatplotlib(source);
 
-      return prepared
+      // The wheel install comes FIRST and the source preparation is built after
+      // it resolves, so micropip's runPythonAsync never interleaves with the
+      // transform's.
+      return (msg.vpython ? ensureVPython(msg.wheelUrl) : Promise.resolve())
+        .then(prepare)
         .then(function(src) {
           // Pyodide-bundled packages the program imports (numpy, matplotlib,
           // pandas, …) must be installed here too — the worker has its own
@@ -461,6 +620,16 @@
           return;
         }
 
+        // SPIKE (vpython-jupyter adoption): inbound half of the vpython pipe.
+        // The page sends browser events (or a bare pacing trigger) on the
+        // RESERVED `scene-event` type; vpython's trinket_worker transport set
+        // __trinket_vpython_dispatch when it booted. See createSceneChannel for
+        // what happens before that boot, and for the reply accounting.
+        if (msg.type === 'scene-event') {
+          sceneChannel.dispatch(msg.events);
+          return;
+        }
+
         if (msg.type === 'run') {
           if (!pyodide) {
             post({ type: 'error', id: msg.id, traceback: 'Python is not ready yet.' });
@@ -484,6 +653,7 @@
     };
   }
 
-  var api = { buildRunReply: buildRunReply, PROTOCOL_VERSION: PROTOCOL_VERSION };
+  var api = { buildRunReply: buildRunReply, createSceneChannel: createSceneChannel,
+              PROTOCOL_VERSION: PROTOCOL_VERSION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : this);
