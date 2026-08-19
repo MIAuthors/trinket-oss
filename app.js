@@ -268,7 +268,9 @@ const init = async () => {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
 
-      const boomCsp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname, request.query && request.query.runMode);
+      const boomCsp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
+        request.query && request.query.runMode,
+        [config.url, request.url && request.url.origin]);
       if (boomCsp) {
         response.output.headers['Content-Security-Policy'] = boomCsp;
       }
@@ -282,7 +284,9 @@ const init = async () => {
         response.header('X-Frame-Options', 'deny');
       }
 
-      const csp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname, request.query && request.query.runMode);
+      const csp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
+        request.query && request.query.runMode,
+        [config.url, request.url && request.url.origin]);
       if (csp) {
         response.header('Content-Security-Policy', csp);
       }

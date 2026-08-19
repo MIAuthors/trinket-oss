@@ -504,6 +504,11 @@ app:
   # iframe, which inherits the embedding page's policy, and the same policy
   # governs a blob: Web Worker (the pyodide worker runtime).
   #
+  # {origin} is substituted with this deployment's own origin(s). It is not
+  # redundant with 'self': the program runs in a sandboxed frame with an opaque
+  # origin, and 'self' matches nothing there, so the frame could not load the
+  # runtime libraries without naming the origin explicitly.
+  #
   # cdnOrigins lists the third-party hosts the runtimes still need. Vendoring
   # them locally (build-resilience work) lets this list empty out, and the
   # policies tighten with no code change.
@@ -522,20 +527,20 @@ app:
     # material keep working. frame-src is 'none' even here — no program has a
     # reason to embed a frame.
     standard: >-
-      default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
-      style-src 'self' 'unsafe-inline' {cdn} {fonts}; img-src * data: blob:;
-      media-src * data: blob:; font-src 'self' data: {cdn} {fonts}; connect-src * data: blob:;
-      frame-src 'none'; child-src 'none'; worker-src 'self' blob:;
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src * data: blob:;
+      media-src * data: blob:; font-src 'self' {origin} data: {cdn} {fonts}; connect-src * data: blob:;
+      frame-src 'none'; child-src 'none'; worker-src 'self' {origin} blob:;
       object-src 'none'; base-uri 'none'; form-action 'none'
     # runMode=calculator (exam/test mode): no third-party content at all.
     # Deliberately breaks uploaded images and remote textures — during an exam
     # that is the point.
     exam: >-
-      default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' {cdn};
-      style-src 'self' 'unsafe-inline' {cdn} {fonts}; img-src 'self' data: blob:;
-      media-src 'self' data: blob:; font-src 'self' data: {cdn} {fonts};
-      connect-src 'self' {cdn}; frame-src 'none'; child-src 'none';
-      worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src 'self' {origin} data: blob:;
+      media-src 'self' {origin} data: blob:; font-src 'self' {origin} data: {cdn} {fonts};
+      connect-src 'self' {origin} {cdn}; frame-src 'none'; child-src 'none';
+      worker-src 'self' {origin} blob:; object-src 'none'; base-uri 'none'; form-action 'none'
 workers:
   trinkets:
     outputDir: '/tmp/' # should be readable by nginx
