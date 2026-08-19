@@ -11,8 +11,8 @@ const { policyFor } = require('../../../lib/util/embedCsp');
 const CONFIG = {
   enabled: true,
   cdnOrigins: ['https://cdnjs.cloudflare.com', 'https://cdn.jsdelivr.net'],
-  standard: "default-src 'none'; script-src 'self' {cdn}; img-src * data:; connect-src *; frame-src 'none'",
-  exam: "default-src 'none'; script-src 'self' {cdn}; img-src 'self' data:; connect-src 'self' {cdn}; frame-src 'none'"
+  standard: "default-src 'none'; script-src 'self' {cdn}; img-src * data:; connect-src *; frame-src 'none'; child-src 'none'; worker-src 'self' blob:",
+  exam: "default-src 'none'; script-src 'self' {cdn}; img-src 'self' data:; connect-src 'self' {cdn}; frame-src 'none'; child-src 'none'; worker-src 'self' blob:"
 };
 
 describe('embed CSP', function() {
@@ -53,6 +53,18 @@ describe('embed CSP', function() {
   // runMode, not on the trinket type.
   it('covers pyodide embeds as well as glowscript', function() {
     expect(policyFor(CONFIG, '/embed/pyodide/x', 'calculator')).toContain("img-src 'self' data:");
+  });
+
+
+  // worker-src must be stated explicitly: it falls back to child-src, and
+  // child-src is 'none' here, so omitting it would stop the worker runtimes
+  // from starting at all. The worker inherits the policy, so allowing it does
+  // not widen what the program can reach.
+  it('permits blob: workers in both modes', function() {
+    ['', 'calculator'].forEach(function(mode) {
+      const p = policyFor(CONFIG, '/embed/python3/x', mode);
+      expect(p).toContain("worker-src 'self' blob:");
+    });
   });
 
   it('does not touch non-embed pages', function() {
