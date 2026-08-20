@@ -26,10 +26,21 @@ name would create empty ones and the database would appear to have vanished.
     # If the box has its own docker-compose.override.yml (proxy network, LTI
     # vars), include it explicitly — passing -f disables compose's automatic
     # loading of it, and omitting it will silently drop those settings.
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml build app
+    COMMIT_ID=$(git rev-parse HEAD) \
+      GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) \
+      BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml build app
     docker compose down                    # containers only; volumes are untouched
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
     docker volume ls | grep -E 'mongodb_data|garage_data'   # confirm reuse, not recreation
 
 The now-unused `<project>_node_modules`, `<project>_public_components` and
 `<project>_public_css` volumes can be removed once the stack is healthy.
+
+### Why the build arguments matter
+
+With no bind mount the image has no `.git`, so `/version` cannot fall back to
+reading the checkout. An unstamped image reports whatever `build-info.json` was
+committed, which can name a commit the server is not running. Passing
+`COMMIT_ID`, `GIT_BRANCH` and `BUILD_TIME` at build time makes `/version`
+authoritative — it reports `commitSource: env` when they are present.
