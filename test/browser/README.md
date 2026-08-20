@@ -16,11 +16,19 @@ the exact seam the vitest harness uses (`flow.cjs` → mint verified ID token �
 
 A thin set of checks against the deployed trial URL still has value for
 deploy/config-specific things a local stack can't mirror (real GCS buckets, the
-`deploys/` overlay) — but that's a separate, tiny smoke, not this suite.
+`deploys/` overlay) — that suite now exists as `specs-deploy/`, described below.
 
 ## Running
 
 ```bash
+# 0. The stack interpolates the gitignored root .env (SESSION_PASSWORD,
+#    FIREBASE_CLIENT_CONFIG — see the Makefile header). Fresh worktrees don't
+#    have it: copy it from the base clone, and copy config/local.example.yaml
+#    to config/local.yaml (plus any feature flags the specs need, e.g.
+#    features.workerVPython). Without FIREBASE_CLIENT_CONFIG the UI login page
+#    is broken — the SPECS still pass, because global-setup mints emulator
+#    tokens directly and never sees the login page.
+
 # 1. Bring up the GCP-shape stack (from repo root). Builds host-native.
 docker compose -f docker-compose.gcr.yml up --build -d
 
@@ -45,3 +53,36 @@ Env knobs: `TRINKET_BASE_URL` (default `http://localhost:3001`),
   (`--use-angle=swiftshader`), so the snapshot path actually executes.
 - **Auth:** open-signup on the stack (`requireApprovedAccount` off) means any email
   auto-creates an account on first `POST /api/auth/session`.
+
+## Deploy smoke (`specs-deploy/`)
+
+Runs against a **real** deployment rather than a local stack. Every test is
+anonymous and read-only, so it is safe to point at a running server:
+
+```bash
+cd test/browser
+TRINKET_BASE_URL=https://trial-merge.spvi.net      npx playwright test -c playwright.deploy.config.js
+TRINKET_BASE_URL=https://rba-merge-trial.spvi.net  npx playwright test -c playwright.deploy.config.js
+
+# assert a specific build is live
+EXPECT_COMMIT=7f5e205 TRINKET_BASE_URL=... npx playwright test -c playwright.deploy.config.js
+```
+
+It answers the questions a local stack cannot:
+
+* **is this the build I deployed?** `/version` must report a real commit, and
+  `commitSource` distinguishes a stamped image from a stale `build-info.json`;
+* **is it in production mode?** a deploy with `NODE_ENV` unset silently loses
+  view caching, `local-production.yaml`, and route gating (issue #111);
+* **does this server send the right headers?** normal embeds keep remote images
+  but never frames; `runMode=calculator` allows neither third-party images nor
+  general network egress;
+* **do the trinket types it serves actually work?** a WebVPython scene renders a
+  sized WebGL canvas, and a python3 program prints — the latter proving the
+  deploy's policy permits pyodide to fetch its runtime and wheels;
+* **is a program prevented from pulling in third-party content?** the injected
+  iframe is refused by the deployed policy, not merely by the code.
+
+Deliberately excluded: anything requiring a login (no auth emulator on a real
+server) and anything that writes. Keep it that way — this suite should stay safe
+to run against production.
