@@ -28,6 +28,22 @@
 
 services:
   app:
+    # Stamp build identity into the image. With no bind mount there is no .git
+    # for /version to read, so an unstamped image reports whatever build-info.json
+    # happened to be committed — which is how a server can claim a commit it is
+    # not running. Pass these when building:
+    #
+    #   COMMIT_ID=$(git rev-parse HEAD) \
+    #   GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) \
+    #   BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+    #   docker compose -f docker-compose.yml -f docker-compose.prod.yml build app
+    build:
+      context: .
+      args:
+        COMMIT_ID: "${COMMIT_ID:-}"
+        GIT_BRANCH: "${GIT_BRANCH:-}"
+        BUILD_TIME: "${BUILD_TIME:-}"
+        NODE_ENV: production
     # Replace the dev mounts wholesale: the source bind mount and the three
     # shadow volumes it required all go, so code and dependencies come only
     # from the image. `!override` is required — a plain override would MERGE
