@@ -37,8 +37,10 @@
 
       return (type && config.prefixes[type])
         ? '/' + config.prefixes[type] + path
-        // use current date if no prefix config can be found
-        : '/' + config.cachePrefix + Date.now() + path;
+        // assetToken identifies the deploy, so this URL is stable until the
+        // next one and can actually be cached. Date.now() remains only as a
+        // last resort for a page rendered before assetToken existed.
+        : '/' + config.cachePrefix + (config.assetToken || Date.now()) + path;
     },
     component : function(name, path) {
       return [config.vendorHost, name, config.components[name], path].join('/');
