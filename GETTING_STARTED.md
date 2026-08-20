@@ -215,6 +215,20 @@ aws:
   endpoint: 'https://minio.example.com'
 ```
 
+## Updating a deploy you already have running
+
+`git pull` is enough for code, because the container runs your working copy —
+but **a branch that adds a dependency needs an explicit install**, since
+`node_modules` lives in a Docker volume that rebuilding does not refresh:
+
+```bash
+docker compose exec -T app npm ci --no-audit --no-fund
+docker compose restart app
+```
+
+The startup check names any missing packages if you forget. See
+[docs/UPDATING-A-RUNNING-DEPLOY.md](docs/UPDATING-A-RUNNING-DEPLOY.md).
+
 ## Server-Side Languages
 
 Python 3, Java, R, and Pygame require backend services. See [serverside/README.md](serverside/README.md) for setup.
