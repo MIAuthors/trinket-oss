@@ -1,0 +1,2 @@
+Firebase Hosting requires `public` to name a directory that exists. Every path
+is rewritten to Cloud Run, so nothing is ever served from here.

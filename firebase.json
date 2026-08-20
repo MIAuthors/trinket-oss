@@ -1,4 +1,12 @@
 {
+  "hosting": {
+    "site": "trinket-merge-test",
+    "public": "firebase-empty",
+    "ignore": ["**/.*"],
+    "rewrites": [
+      { "source": "**", "run": { "serviceId": "trinket-cdntest", "region": "us-central1" } }
+    ]
+  },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
