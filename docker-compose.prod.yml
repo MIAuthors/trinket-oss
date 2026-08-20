@@ -28,10 +28,18 @@
 
 services:
   app:
-    # Drop the bind mount and the three shadow volumes it required. `!reset`
-    # clears the list the base file set — a plain override would merge with it,
-    # and the bind mount would survive.
-    volumes: !reset []
+    # Replace the dev mounts wholesale: the source bind mount and the three
+    # shadow volumes it required all go, so code and dependencies come only
+    # from the image. `!override` is required — a plain override would MERGE
+    # with the base list and the bind mount would survive.
+    #
+    # config/ stays a host mount, read-only. Deploy secrets (the session cookie
+    # password, bucket credentials) live in gitignored config/local.yaml and
+    # config/local-production.yaml, so they must not be baked into an image —
+    # and without them the app exits at boot with "Session cookie password not
+    # configured". Read-only because nothing should write config at runtime.
+    volumes: !override
+      - ./config:/usr/local/node/trinket/config:ro
     environment:
       # The base defaults to development so a bare `docker compose up` stays a
       # dev stack. A server must say otherwise: with NODE_ENV unset, view

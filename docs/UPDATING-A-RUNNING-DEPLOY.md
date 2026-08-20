@@ -7,7 +7,11 @@ image is the only source of code and dependencies:
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 Updating then has no dependency step at all — rebuild and restart, and nothing
-can be stale. It also sets `NODE_ENV=production`, which a compose deploy
+can be stale. `config/` remains a read-only host mount, because deploy secrets
+(the session cookie password, bucket credentials) live in gitignored
+`config/local.yaml` / `config/local-production.yaml` and must not be baked into
+an image. Without them the app exits at boot with "Session cookie password not
+configured". It also sets `NODE_ENV=production`, which a compose deploy
 otherwise lacks (issue #111), and adds a healthcheck so a crash-looping app
 shows as unhealthy rather than merely "Up".
 
@@ -19,6 +23,9 @@ name would create empty ones and the database would appear to have vanished.
 
     cd <deploy dir>
     git pull
+    # If the box has its own docker-compose.override.yml (proxy network, LTI
+    # vars), include it explicitly — passing -f disables compose's automatic
+    # loading of it, and omitting it will silently drop those settings.
     docker compose -f docker-compose.yml -f docker-compose.prod.yml build app
     docker compose down                    # containers only; volumes are untouched
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
