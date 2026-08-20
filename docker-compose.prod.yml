@@ -1,0 +1,48 @@
+# Production overlay for the compose deploys.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# The base file is shaped for development: it bind-mounts the working copy over
+# the app directory so edits are live, and then shadows node_modules and the
+# built assets with named volumes so the host's copies do not hide what the
+# image built.
+#
+# That shape is wrong for a server, in two ways that have both bitten us:
+#
+#   * the running code is a git checkout rather than the image, so what is
+#     deployed depends on the state of a directory rather than on a build;
+#   * `node_modules` is a named volume created once and kept forever, so
+#     `up --build` refreshes the image but never the dependencies. A commit
+#     that adds a package then crash-loops with `Cannot find module ...` while
+#     the build log looks perfectly clean.
+#
+# This overlay removes every host mount from the app service, so the image is
+# the only source of code and dependencies — the same arrangement Cloud Run
+# already enforces by construction. Updating becomes: rebuild, restart. There
+# is nothing left to go stale.
+#
+# ⚠️ Run it with the SAME compose project name you already use. The data
+# volumes (mongodb_data, garage_data) are matched by project-qualified name;
+# a different project name would create empty ones and the database would
+# appear to have vanished. `docker compose ls` shows the current name.
+
+services:
+  app:
+    # Drop the bind mount and the three shadow volumes it required. `!reset`
+    # clears the list the base file set — a plain override would merge with it,
+    # and the bind mount would survive.
+    volumes: !reset []
+    environment:
+      # The base defaults to development so a bare `docker compose up` stays a
+      # dev stack. A server must say otherwise: with NODE_ENV unset, view
+      # caching is off, config/local-production.yaml never loads, and routes
+      # marked `enable: false` are still served (issue #111).
+      NODE_ENV: production
+    healthcheck:
+      # A crash-looping app otherwise looks healthy to `docker ps`, which is
+      # exactly how a missing dependency stayed invisible for an afternoon.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/version >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
