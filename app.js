@@ -418,6 +418,21 @@ const init = async () => {
   // Register routes
   server.route(config.routes);
 
+  // TEMPORARY DIAGNOSTIC (fix/forwarded-host spike): what does the CDN actually
+  // forward? X-Forwarded-Host turned out NOT to be sent by Firebase Hosting, so
+  // this reports the real header set rather than another guess. Remove before
+  // this branch goes anywhere near a PR.
+  server.route({
+    method: 'GET',
+    path: '/debug/headers',
+    options: { auth: false },
+    handler: (request, h) => h.response({
+      infoHostname : request.info.hostname,
+      infoHost     : request.info.host,
+      headers      : request.headers
+    }).type('application/json')
+  });
+
   // Verify backend connectivity before accepting traffic
   const checkPassed = await startupCheck.run();
   if (!checkPassed) {
