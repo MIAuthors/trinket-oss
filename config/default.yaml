@@ -273,6 +273,12 @@ app:
     user: ''      # SMTP username
     pass: ''      # SMTP password
     secure: false # true for port 465, false for other ports
+  # Static-asset caching. Off by default: turning it on tells browsers and any
+  # shared cache to keep version-stamped assets, which is only safe because the
+  # stamp rolls on deploy. Dynamic responses stay no-store either way.
+  cache:
+    enabled: false
+    staticMaxAge: 31536000   # 1 year; the URL changes on deploy, so this is safe
   cachePrefix: cache-prefix-
   prefixes: # static routes
     components:
