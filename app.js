@@ -40,6 +40,7 @@ const Yar            = require('@hapi/yar');
 const config         = require('./config/app.config');
 const Helpers        = require('./lib/util/helpers');
 const embedCsp       = require('./lib/util/embedCsp');
+const publicHostname = require('./lib/util/publicHostname');
 const Authentication = require('./lib/auth/passport.js');
 // gleak is not compatible with Node 16+ (uses GLOBAL which was removed)
 // Use a no-op fallback for now
@@ -307,7 +308,13 @@ const init = async () => {
     const response = request.response;
     if (response && response.variety === 'view' &&
         response.source && response.source.context) {
-      response.source.context._hostname = request.info.hostname;
+      // Behind a CDN/proxy the request host is the backend's own, not the
+      // browser's — honour a forwarded host, but only one this deploy claims.
+      response.source.context._hostname = publicHostname.resolve(
+        request.headers,
+        request.info.hostname,
+        [config.app.url.hostname].concat(config.app.url.knownHosts || [])
+      );
     }
     return h.continue;
   });
