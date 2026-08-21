@@ -86,3 +86,29 @@ It answers the questions a local stack cannot:
 Deliberately excluded: anything requiring a login (no auth emulator on a real
 server) and anything that writes. Keep it that way — this suite should stay safe
 to run against production.
+
+### Front-door tests (`front-door.spec.js`)
+
+A deployment may sit behind a CDN or proxy. When it does, the app receives the
+BACKEND's host rather than the browser's, and any absolute URL it renders points
+at a foreign origin — Angular then refuses the embed iframe as `[$sce:insecurl]`
+and the trinket never renders.
+
+The rest of the deploy smoke cannot see this: those tests navigate to
+`/embed/...` URLs they build themselves, so nothing exercises a page where the
+CLIENT builds the URL. Behind a broken CDN front door the suite passed 8/8 while
+the library page was dead.
+
+Two of these tests need no fixture and run against any deployment. The third
+needs a public trinket, since there is no anonymous listing to crawl:
+
+```bash
+SMOKE_TRINKET_PATH=/library/trinkets/<id> \
+TRINKET_BASE_URL=https://<host> \
+  npx playwright test -c playwright.deploy.config.js specs-deploy/front-door.spec.js
+```
+
+Both fixture-free tests were verified RED by rolling a deployment back to the
+pre-fix revision, then GREEN again — worth repeating if they are ever changed,
+since an earlier draft of the leak check matched only `https://` URLs and passed
+against a genuinely broken build.
