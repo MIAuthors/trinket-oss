@@ -1,0 +1,109 @@
+const { test, expect } = require('@playwright/test');
+
+// The instructor journey against a REAL deployment: sign in, build a course with
+// an assignment, export student work, confirm the archive is offered.
+//
+// Everything else in specs-deploy/ is anonymous and read-only. That was a
+// deliberate safety property, but it means the paths instructors actually use
+// have no coverage against a deployed server at all — and the two production
+// bugs found this week (the /login 500 for an already-authenticated visitor, and
+// the export status 500) both live on exactly those paths.
+//
+// This spec WRITES, so it is opt-in and only runs where credentials are given:
+//
+//   SMOKE_EMAIL=... SMOKE_PASSWORD=... TRINKET_BASE_URL=https://... \
+//     npx playwright test -c playwright.deploy.config.js specs-deploy/instructor-journey.spec.js
+//
+// It cleans up the course it creates.
+//
+// WHERE IT RUNS: deploys using local (form) auth — the Mongo trial and the picup
+// VPS. It cannot run where /login is Firebase-driven (the gcr trial, mandi,
+// uindy): there is no form to fill. Covering those needs a Firebase ID token
+// exchanged at POST /api/auth/session, the same seam the local browser suite
+// uses via the auth emulator. uindy is Google-only, so even that would not
+// reach it — those paths still need a human.
+
+const EMAIL = process.env.SMOKE_EMAIL;
+const PASSWORD = process.env.SMOKE_PASSWORD;
+const stamp = () => 'smoke-' + Math.random().toString(36).slice(2, 8);
+
+test.describe('instructor journey', () => {
+  test.skip(!EMAIL || !PASSWORD, 'set SMOKE_EMAIL and SMOKE_PASSWORD to run');
+
+  let courseId = null;
+
+  test('sign in, build an assignment, export student work', async ({ page, request, baseURL }) => {
+    // --- sign in -----------------------------------------------------------
+    await page.goto('/login');
+    await page.fill('input[name="email"], input[type="email"]', EMAIL);
+    await page.fill('input[name="password"], input[type="password"]', PASSWORD);
+    await Promise.all([
+      page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 30_000 }),
+      page.click('button[type="submit"], input[type="submit"]'),
+    ]);
+    expect(page.url(), 'should not still be on /login').not.toMatch(/\/login/);
+
+    // --- an authenticated visitor hitting /login is redirected, not 500'd ---
+    // This is #176, which reached production. It only fires when already signed
+    // in, which is why it survived every anonymous test.
+    const relogin = await page.goto('/login');
+    expect(relogin.status(), '/login while signed in must not be a 500').toBeLessThan(500);
+
+    // --- build a course with an assignment ---------------------------------
+    const api = async (method, path, body) => {
+      const res = await page.request.fetch(new URL(path, baseURL).toString(), {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        data: body ? JSON.stringify(body) : undefined,
+      });
+      return { status: res.status(), body: await res.json().catch(() => ({})) };
+    };
+
+    const name = 'Smoke ' + stamp();
+    const course = await api('POST', '/api/courses', { name, description: 'deploy smoke' });
+    expect(course.status, JSON.stringify(course.body)).toBe(200);
+    courseId = (course.body.course || {}).id;
+    expect(courseId).toBeTruthy();
+
+    const lesson = await api('POST', `/api/courses/${courseId}/lessons`, { name: 'Week 1' });
+    const lessonId = (lesson.body.data || {}).id;
+    expect(lessonId).toBeTruthy();
+
+    // type:assignment REQUIRES a trinketId — omitting it 500s (issue #182).
+    const material = await api('POST', `/api/courses/${courseId}/lessons/${lessonId}/materials`,
+      { name: 'Assignment 1', type: 'assignment', trinketId: '_blank_', lang: 'python3' });
+    expect(material.status, JSON.stringify(material.body)).toBe(200);
+    expect((material.body.data || {}).trinket, 'assignment should get a prompt trinket').toBeTruthy();
+
+    // --- export student work ----------------------------------------------
+    const start = await api('POST', `/api/courses/${courseId}/exports/submissions`);
+    // A deploy with no export worker refuses immediately and says why — that is
+    // correct behaviour, not a failure of this test.
+    if (start.status !== 200 || !(start.body.data || {}).exportId) {
+      expect(JSON.stringify(start.body), 'refusal should explain itself').toMatch(/export worker|not available/i);
+      test.info().annotations.push({ type: 'note', description: 'no export worker on this deploy — refusal path verified' });
+      return;
+    }
+
+    const exportId = start.body.data.exportId;
+    let status = 'pending';
+    for (let i = 0; i < 12 && status !== 'completed' && status !== 'failed'; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const poll = await api('GET', `/api/exports/${exportId}`);
+      expect(poll.status, 'export status must never 500 (#178)').toBe(200);
+      status = (poll.body.data || {}).status;
+    }
+
+    expect(status, 'export should finish').toBe('completed');
+    const final = await api('GET', `/api/exports/${exportId}`);
+    expect(final.body.data.downloadUrl, 'a completed export should offer a download').toBeTruthy();
+    expect(final.body.data.created, 'created must serialize (#178)').toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test.afterEach(async ({ page, baseURL }) => {
+    if (!courseId) return;
+    await page.request.fetch(new URL(`/api/courses/${courseId}`, baseURL).toString(), { method: 'DELETE' })
+      .catch(() => {});
+    courseId = null;
+  });
+});
