@@ -2,6 +2,17 @@ const flow     = require('../../helpers/flow.cjs');
 const defaults = require('../../helpers/defaults');
 const Export   = require('../../../lib/models/export');
 const User     = require('../../../lib/models/user');
+const queues   = require('../../../lib/util/queues');
+
+// These tests exercise the ENQUEUE path, which now refuses to create an export
+// on a server that has no worker to run it (the Cloud Run failure: jobs were
+// queued into a handlerless queue and silently discarded). Register a no-op
+// handler so the harness represents a deployment that can actually process.
+// The refusal itself is covered in test/lib/util/queues.test.js.
+beforeAll(() => {
+  const q = queues.exports();
+  if (typeof q.hasHandlers === 'function' && !q.hasHandlers()) q.process(() => {});
+});
 
 // Reset the cookie jar before every test.
 beforeEach(() => {
