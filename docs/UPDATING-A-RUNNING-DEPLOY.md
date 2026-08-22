@@ -117,6 +117,35 @@ committed, which can name a commit the server is not running. Passing
 `COMMIT_ID`, `GIT_BRANCH` and `BUILD_TIME` at build time makes `/version`
 authoritative — it reports `commitSource: env` when they are present.
 
+## Which mode is this server in?
+
+Ask the container, not the checkout — a bind-mounted deploy and an image-only
+one look identical from the command line:
+
+```sh
+docker inspect trinket --format '{{range .Mounts}}{{.Source}}->{{.Destination}} {{end}}'
+```
+
+* Only `config` mounted → **image-only**. `git pull` alone changes nothing;
+  the code lives in the image and you must rebuild.
+* The whole checkout mounted at `/usr/local/node/trinket` → bind-mounted.
+  `git pull` plus a restart is enough for code, and the dependency caveat above
+  applies.
+
+Getting this wrong is quiet rather than loud: on an image-only server a pull
+and restart completes successfully and serves the *old* code, and `/version`
+keeps reporting the build stamp, which looks correct.
+
+## Before rebuilding: did dependencies actually change?
+
+```sh
+git diff --name-only <old-sha> <new-sha> | grep -E 'package(-lock)?\.json'
+```
+
+Empty output means no `npm ci` step is needed. On an image-only server the
+rebuild handles dependencies anyway; this check matters on bind-mounted
+deploys, where it is the difference between a restart and a crash loop.
+
 ## Checking it worked
 
 Run the deploy smoke — the fastest honest answer, and safe against a live server
