@@ -25,15 +25,28 @@ const { test, expect } = require('@playwright/test');
 
 const EMAIL = process.env.SMOKE_EMAIL;
 const PASSWORD = process.env.SMOKE_PASSWORD;
-const stamp = () => 'smoke-' + Math.random().toString(36).slice(2, 8);
+// A session captured once by hand (see save-session.js). This is how the journey
+// reaches Google-only deploys, where there is no form to fill: sign in once in a
+// real browser, reuse the resulting `__session` cookie thereafter.
+const STATE = process.env.SMOKE_STORAGE_STATE;
+const fixtures = require('../fixtures');
 
 test.describe('instructor journey', () => {
-  test.skip(!EMAIL || !PASSWORD, 'set SMOKE_EMAIL and SMOKE_PASSWORD to run');
+  test.skip(!STATE && !(EMAIL && PASSWORD),
+    'set SMOKE_EMAIL+SMOKE_PASSWORD, or SMOKE_STORAGE_STATE from save-session.js');
+  test.use(STATE ? { storageState: STATE } : {});
 
   let courseId = null;
 
   test('sign in, build an assignment, export student work', async ({ page, request, baseURL }) => {
     // --- sign in -----------------------------------------------------------
+    if (STATE) {
+      // Already authenticated by the captured session; just confirm it is live,
+      // so an expired capture fails loudly instead of silently testing anonymously.
+      const res = await page.goto('/home');
+      expect(res.status(), 'captured session should still be valid').toBeLessThan(400);
+      expect(page.url(), 'a stale session redirects to /login').not.toMatch(/\/login/);
+    } else {
     await page.goto('/login');
     await page.fill('input[name="email"], input[type="email"]', EMAIL);
     await page.fill('input[name="password"], input[type="password"]', PASSWORD);
@@ -42,6 +55,7 @@ test.describe('instructor journey', () => {
       page.click('button[type="submit"], input[type="submit"]'),
     ]);
     expect(page.url(), 'should not still be on /login').not.toMatch(/\/login/);
+    }
 
     // --- an authenticated visitor hitting /login is redirected, not 500'd ---
     // This is #176, which reached production. It only fires when already signed
@@ -59,7 +73,9 @@ test.describe('instructor journey', () => {
       return { status: res.status(), body: await res.json().catch(() => ({})) };
     };
 
-    const name = 'Smoke ' + stamp();
+    // Named from the shared convention so the sweeper can find it if this run
+    // dies before its cleanup step.
+    const name = fixtures.courseName(fixtures.runId());
     const course = await api('POST', '/api/courses', { name, description: 'deploy smoke' });
     expect(course.status, JSON.stringify(course.body)).toBe(200);
     courseId = (course.body.course || {}).id;
