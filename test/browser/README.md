@@ -112,3 +112,8 @@ Both fixture-free tests were verified RED by rolling a deployment back to the
 pre-fix revision, then GREEN again — worth repeating if they are ever changed,
 since an earlier draft of the leak check matched only `https://` URLs and passed
 against a genuinely broken build.
+
+## Deploy testing policy
+
+Fixture policy, why production stays read-only, and why the auth emulator is not
+used on deployed trials: see [docs/DEPLOY-TESTING.md](../../docs/DEPLOY-TESTING.md).
