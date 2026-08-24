@@ -24,6 +24,15 @@
 # ENV
 #   FIREBASE_PROJECT   (required) Firebase/GCP project id
 #   HOSTING_SITE       (required) Hosting site id
+#   HOSTING_REWRITES   (required) the site's rewrites as JSON. `firebase deploy
+#                      --only hosting` REPLACES the site's config, so whatever
+#                      is passed here becomes the site's ONLY rewrites:
+#                        front-door site (Hosting in front of the app):
+#                          '[{"source":"**","run":{"serviceId":"<service>","region":"us-central1"}}]'
+#                        assets-only site (no rewrites, on purpose):
+#                          '[]'
+#                      Required precisely so an assets upload can never
+#                      silently strip the run rewrite off a front-door site.
 #   SERVICE_URL        (required unless COMMIT and ASSET_SRC are both set)
 #   IMAGE              container image to extract assets from (needs docker)
 #   ASSET_SRC          a public/ directory to use instead of extracting
@@ -32,6 +41,7 @@ set -euo pipefail
 
 FIREBASE_PROJECT="${FIREBASE_PROJECT:?set FIREBASE_PROJECT}"
 HOSTING_SITE="${HOSTING_SITE:?set HOSTING_SITE}"
+HOSTING_REWRITES="${HOSTING_REWRITES:?set HOSTING_REWRITES — [] for an assets-only site, or the run-rewrite JSON for a front-door site. This deploy REPLACES the sites rewrites}"
 SERVICE_URL="${SERVICE_URL:-}"
 IMAGE="${IMAGE:-}"
 ASSET_SRC="${ASSET_SRC:-}"
@@ -122,7 +132,7 @@ cat > "${WORK}/firebase.json" <<JSON
       { "source": "/cache-prefix-*/**",
         "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }
     ],
-    "rewrites": ${HOSTING_REWRITES:-'[]'}
+    "rewrites": ${HOSTING_REWRITES}
   }
 }
 JSON

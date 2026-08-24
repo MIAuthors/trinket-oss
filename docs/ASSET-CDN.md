@@ -45,6 +45,13 @@ HOSTING_REWRITES='[{"source":"**","run":{"serviceId":"<service>","region":"us-ce
   scripts/deploy-hosting.sh
 ```
 
+`HOSTING_REWRITES` is **required**, because `firebase deploy --only hosting`
+*replaces* the site's config — whatever is passed becomes the site's only
+rewrites. For a front-door site pass the run rewrite as above; for an
+assets-only site (the separate-host architecture at the bottom of this doc)
+pass `HOSTING_REWRITES='[]'` explicitly. Requiring it means an assets upload
+can never silently strip the run rewrite off a live front door.
+
 Assets are published under `/cache-prefix-<commit>/`, matching the URLs the app
 emits (`lib/util/assetVersion.js`). Each deploy publishes a fresh immutable set;
 older ones simply stop being requested. Run it AFTER the Cloud Run deploy, so
