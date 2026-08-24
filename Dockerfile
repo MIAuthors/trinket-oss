@@ -65,7 +65,6 @@ RUN set -eu; \
     echo "${RSCOMPILER_SHA256}  $dir/RScompiler.3.2.3.min.js" | sha256sum -c -; \
     echo "${RSRUN_SHA256}  $dir/RSrun.3.2.3.min.js"           | sha256sum -c -
 
-
 # Copy source last so code changes don't bust the layers above
 COPY --chown=trinket:trinket . .
 
