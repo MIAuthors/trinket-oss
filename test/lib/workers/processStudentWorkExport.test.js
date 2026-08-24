@@ -44,6 +44,7 @@ beforeAll(() => {
 
 let putObjectMock;
 let uploadedZip;
+let uploadReadError;
 let s3Spy;
 let nunjucksRenderSpy;
 
@@ -61,12 +62,14 @@ beforeEach(() => {
   // AWS.S3.prototype.putObject is therefore a no-op ("putObject does not
   // exist"). Spy on the aws.S3 constructor itself instead — it's a plain
   // property of the exports object — and return a fake client.
+  uploadedZip = null;        // never let one test satisfy the next test's assertion
+  uploadReadError = null;
   putObjectMock = vi.fn(function(params, cb) {
     // Keep the bytes: asserting "an archive was uploaded" is not the same
     // as asserting the students' work is inside it. A seeding mistake that
     // produced EMPTY files passed every other assertion in this file.
     try { uploadedZip = require('fs').readFileSync(params.Body.path); }
-    catch (e) { uploadedZip = null; }
+    catch (e) { uploadedZip = null; uploadReadError = e; }
     setImmediate(function() { cb(null, {}); });
     return {};
   });
@@ -179,17 +182,22 @@ describe('student-work-export queue action / processStudentWorkExport', () => {
     await exportsQueue.add({ action: 'student-work-export', exportId: exportRecord.id, userId: owner.id });
     await waitForExportSettled(exportRecord.id);
 
-    expect(uploadedZip, 'the upload should have carried bytes').toBeTruthy();
-    const entries = new AdmZip(uploadedZip).getEntries().map((e) => e.entryName);
+    expect(uploadedZip, 'the upload should have carried bytes' +
+      (uploadReadError ? ' (capture failed: ' + uploadReadError.message + ')' : '')).toBeTruthy();
+    const zip = new AdmZip(uploadedZip);
+    const entries = zip.getEntries().map((e) => e.entryName);
 
     // One folder per student, plus the prompt and a manifest.
     expect(entries).toContain('manifest.json');
     expect(entries.some((n) => /_assignment\//.test(n))).toBe(true);
 
+    // The manifest must agree with what the folders claim.
+    const manifest = JSON.parse(zip.getEntry('manifest.json').getData().toString('utf8'));
+    expect(JSON.stringify(manifest)).toMatch(/janestudent/);
+
     const code = entries.find((n) => /janestudent\/main\.py$/.test(n));
     expect(code, 'the student should have a code file: ' + entries.join(', ')).toBeTruthy();
 
-    const zip = new AdmZip(uploadedZip);
     const body = zip.getEntry(code).getData().toString('utf8');
     expect(body, 'an empty file here means the export shipped nothing useful').toContain('print("jane")');
 
