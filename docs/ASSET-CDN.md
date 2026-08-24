@@ -66,6 +66,15 @@ uploaded wholesale; the script crawls the deploy's own pages and uploads only
 the component files they reference. Anything missed falls through to the origin
 and still works, uncached.
 
+Everything is published **twice**: under the stamped prefix (immutable, 1 year)
+and at its **bare path** (`/js/...`, `/components/...`, `max-age=300`). The
+bare copies are the load-bearing half for embeds: embed pages reference ~33
+files unstamped, and under a cold-start class-sized herd the origin sheds the
+biggest of them (measured: glow.min.js lost for 17% of 1000 students — a blank
+scene in a lockdown browser). Static files beat rewrites, so the bare copies
+remove that entire failure mode with no app change; each deploy re-uploads
+them and Firebase purges its CDN on deploy.
+
 Firebase applies its own `max-age=3600` to uploaded files, overriding what the
 app would have sent, so the config restates the immutable header.
 

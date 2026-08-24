@@ -91,28 +91,37 @@ else
   SRC="${WORK}/public"
 fi
 
-# --- 3. stage under the versioned prefix ----------------------------------
+# --- 3. stage under the versioned prefix AND at bare paths ------------------
+# Bare paths matter as much as the stamped ones: embed pages reference ~33
+# files as plain /js/... and /components/... (no cache-prefix), and every one
+# of those otherwise rides the rewrite to the origin on every view. Measured
+# 2026-08-24: a 1000-student cold herd shed glow.min.js for 17% of students —
+# all on bare-path files. Hosting matches static files BEFORE rewrites, so
+# publishing them here moves that whole class of traffic to the edge with no
+# app change. Bare paths get a SHORT max-age (they change in place across
+# deploys); each hosting deploy also purges Firebase's CDN.
 SITE="${WORK}/site"
 PREFIX="${SITE}/cache-prefix-${COMMIT}"
 mkdir -p "${PREFIX}"
 for d in ${ASSET_DIRS}; do
-  [[ -d "${SRC}/${d}" ]] && cp -R "${SRC}/${d}" "${PREFIX}/"
+  [[ -d "${SRC}/${d}" ]] && cp -R "${SRC}/${d}" "${PREFIX}/" && cp -R "${SRC}/${d}" "${SITE}/"
 done
 
 if [[ -n "${SERVICE_URL}" ]]; then
   refs="${WORK}/refs"; : > "${refs}"
   for p in ${CRAWL_PATHS}; do
     curl -fsS --max-time 60 "${SERVICE_URL}${p}" 2>/dev/null \
-      | grep -oE '/cache-prefix-[^"'"'"' ]+' >> "${refs}" || true
+      | grep -oE '(/cache-prefix-[^"'"'"' ]+|/components/[^"'"'"' ]+)' >> "${refs}" || true
   done
   n=0
   while read -r f; do
     [[ -f "${SRC}/${f}" ]] || continue
-    mkdir -p "${PREFIX}/$(dirname "${f}")"
-    cp "${SRC}/${f}" "${PREFIX}/${f}" && n=$((n+1))
-  done < <(grep -oE '/cache-prefix-[^/]+/components/[^"'"'"' ]+' "${refs}" \
-             | sed 's|/cache-prefix-[^/]*/||' | sort -u)
-  say "components referenced by this deploy: ${n}"
+    mkdir -p "${PREFIX}/$(dirname "${f}")" "${SITE}/$(dirname "${f}")"
+    cp "${SRC}/${f}" "${PREFIX}/${f}"
+    cp "${SRC}/${f}" "${SITE}/${f}" && n=$((n+1))
+  done < <(sed 's|^/cache-prefix-[^/]*/|/|' "${refs}" \
+             | grep -oE '^/components/[^"'"'"' ]+' | sed 's|^/||' | sort -u)
+  say "components referenced by this deploy: ${n} (published stamped AND bare)"
 fi
 
 say "staged $(find "${SITE}" -type f | wc -l | tr -d ' ') files, $(du -sh "${SITE}" | cut -f1)"
@@ -130,7 +139,9 @@ cat > "${WORK}/firebase.json" <<JSON
     "ignore": ["**/.*"],
     "headers": [
       { "source": "/cache-prefix-*/**",
-        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+      { "source": "!/cache-prefix-*/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] }
     ],
     "rewrites": ${HOSTING_REWRITES}
   }
