@@ -69,6 +69,43 @@ function resetOutput() {
   $('#graphic').removeData("graphicMode");
 }
 
+// The runner html of the CURRENT run, kept so a runtime load failure can
+// rebuild the exact same runner. Every srcdoc resource is no-store, so a
+// rebuild refetches everything — one shed file never needs targeted handling.
+var lastRunnerHtml = null;
+var runnerRetry = (typeof trinketRunnerRetry !== 'undefined')
+  ? trinketRunnerRetry.create()
+  : null;
+
+// A runtime file failed inside the runner (reported by the srcdoc's __lf).
+// Rebuild after the policy's backoff: under the cold-start herd that shed the
+// file, the fleet is warm by the first retry. In a lockdown browser (Safe
+// Exam Browser, Respondus) the student HAS no refresh — this is the only
+// recovery path they get.
+function rebuildRunner() {
+  if (!lastRunnerHtml) { return; }
+  runnerRetry.rebuilding();
+  $('#loadingContent').show();
+  if (trinketSandboxConfig.mode === 'local') {
+    runCodeLocal(lastRunnerHtml);
+  } else {
+    runCodeExternal(lastRunnerHtml);
+  }
+}
+
+function handleRunnerLoadFailure(src) {
+  if (!runnerRetry || !lastRunnerHtml) { return; }
+  var verdict = runnerRetry.onLoadFailure(src);
+  if (verdict.retry) {
+    setTimeout(rebuildRunner, verdict.delayMs);
+  }
+  else if (verdict.reason === 'exhausted') {
+    api.showMessage('alert',
+      'The 3D runtime could not be loaded after several tries. ' +
+      'Please check your connection and press Run again.');
+  }
+}
+
 /**
  * Run code using local sandboxed iframe (srcdoc)
  */
@@ -206,7 +243,7 @@ function runCode() {
   var trinketVersion = trinketAppConfig.versionMap[version].trinket;
   var glowscriptPath = trinketAppConfig.versionMap[version].path;
   var jquerySrcs     = _.map(trinketAppConfig.versionMap[version].jquerySrcs, function(src) {
-    return "<script src='" + src + "'></script>";
+    return "<script src='" + src + "' onerror='__lf(this)'></script>";
   });
 
   var glowscriptTextarea = 'block';
@@ -229,6 +266,11 @@ function runCode() {
   });
 
   $("#loadingContent").show();
+
+  // A fresh Run gets a fresh retry budget; remember the html so a runtime
+  // load failure can rebuild this exact runner (see handleRunnerLoadFailure).
+  lastRunnerHtml = glowscriptHtml;
+  if (runnerRetry) { runnerRetry.reset(); }
 
   // Choose rendering mode based on configuration
   if (trinketSandboxConfig.mode === 'local') {
@@ -429,6 +471,11 @@ window.TrinketAPI = {
       try {
         data = JSON.parse(e.data);
       } catch(e) {}
+
+      if (data && typeof data["glowscript.loadfail"] !== 'undefined') {
+        handleRunnerLoadFailure(data["glowscript.loadfail"]);
+        return;
+      }
 
       if (data && data["glowscript.error"]) {
         api.showMessage('alert', data["glowscript.error"]);
