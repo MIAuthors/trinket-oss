@@ -48,11 +48,15 @@ describe('dates.toIso', () => {
 });
 
 describe('dates.isFuture', () => {
-  it('compares correctly even when the stored value is a number', () => {
-    // `expiresAt > new Date()` silently returns false for a numeric field, so a
-    // finished export could report downloadAvailable: false.
+  it('compares correctly whatever shape the stored value has', () => {
+    // A numeric expiresAt happened to survive `> new Date()` (valueOf
+    // coercion), but a string or husk compares NaN and silently reads false —
+    // reporting a finished export as not downloadable. isFuture makes the
+    // result independent of the stored shape.
     expect(dates.isFuture(Date.now() + 60000)).toBe(true);
     expect(dates.isFuture(Date.now() - 60000)).toBe(false);
+    expect(dates.isFuture(new Date(Date.now() + 60000).toISOString())).toBe(true);
+    expect(dates.isFuture({ _seconds: Math.floor(Date.now() / 1000) + 60 })).toBe(true);
     expect(dates.isFuture(undefined)).toBe(false);
   });
 });
