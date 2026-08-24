@@ -59,11 +59,12 @@ CRAWL_PATHS="${CRAWL_PATHS:-/ /embed/python3 /embed/glowscript /embed/pyodide}"
 # The glowscript RUNNER's files are referenced from a client-side srcdoc
 # template ({{prefix}}components/...), so the page crawl cannot see them —
 # and they are precisely the files a cold-start herd sheds (glow.min.js,
-# 4.2 MB, lost for 17% of 1000 students in the 2026-08-24 test). Published
-# explicitly; ~7 MB total. RUNNER_VERSION tracks the versionMap's current
+# 4.2 MB, lost for 17% of 1000 students in the 2026-08-24 test). Same story
+# for ace's lazily-loaded modes/themes (src-min-noconflict). Published
+# explicitly. RUNNER_VERSION tracks the versionMap's current
 # trinket build (the same pin the Dockerfile provisions).
 RUNNER_VERSION="${RUNNER_VERSION:-3.2.3}"
-RUNNER_PATHS="${RUNNER_PATHS:-components/vpython-glowscript/package/glow.RUNNER_VERSION.min.js components/vpython-glowscript/package/RSrun.RUNNER_VERSION.min.js components/vpython-glowscript/package/RScompiler.RUNNER_VERSION.min.js components/vpython-glowscript/package/reportScriptError-0.1.js components/vpython-glowscript/lib/jquery components/vpython-glowscript/css}"
+RUNNER_PATHS="${RUNNER_PATHS:-components/vpython-glowscript/package/glow.RUNNER_VERSION.min.js components/vpython-glowscript/package/RSrun.RUNNER_VERSION.min.js components/vpython-glowscript/package/RScompiler.RUNNER_VERSION.min.js components/vpython-glowscript/package/reportScriptError-0.1.js components/vpython-glowscript/lib/jquery components/vpython-glowscript/css components/src-min-noconflict}"
 RUNNER_PATHS="${RUNNER_PATHS//RUNNER_VERSION/${RUNNER_VERSION}}"
 
 say() { printf '  %s\n' "$*"; }
