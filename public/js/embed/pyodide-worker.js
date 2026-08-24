@@ -620,7 +620,7 @@
           return;
         }
 
-        // SPIKE (vpython-jupyter adoption): inbound half of the vpython pipe.
+        // Inbound half of the vpython pipe (spec 2026-08-10).
         // The page sends browser events (or a bare pacing trigger) on the
         // RESERVED `scene-event` type; vpython's trinket_worker transport set
         // __trinket_vpython_dispatch when it booted. See createSceneChannel for

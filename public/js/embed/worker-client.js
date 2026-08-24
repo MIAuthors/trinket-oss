@@ -240,8 +240,8 @@
         }
       },
 
-      // SPIKE (vpython-jupyter adoption): browser events — or the bare pacing
-      // trigger `[{"trigger":1}]` — to the vpython transport in the worker.
+      // Browser events — or the bare pacing trigger `[{"trigger":1}]` — to the
+      // vpython transport in the worker (spec 2026-08-10).
       // `events` is a JSON array string in glowcomm's wire format.
       sendSceneEvent: function(events) {
         if (worker) {
