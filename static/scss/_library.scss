@@ -350,7 +350,7 @@
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
     overflow: hidden;
     &:hover {
-      box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+      box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
     }
     .snapshot {
       display: block;
@@ -396,13 +396,13 @@
     }
 
     &.dragging-trinket {
-      border: dashed 2px $primary-color;
+      border: dashed 2px var(--brand-primary, #{$primary-color});
       box-shadow: none;
       background: rgba(#fff, 1);
       color: #666;
     }
     &.folder-dropzone {
-      box-shadow: 0 0 8px 2px rgba($primary-color, 0.75);
+      box-shadow: 0 0 8px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 75%, transparent);
     }
   }
 
@@ -665,7 +665,7 @@
         background: none;
         span {
           background: white;
-          box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+          box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
           padding: 10px 20px;
         }
       }
