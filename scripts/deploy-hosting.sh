@@ -56,6 +56,16 @@ ASSET_DIRS="${ASSET_DIRS:-css js img fonts partials}"
 # works — uncached, not broken.
 CRAWL_PATHS="${CRAWL_PATHS:-/ /embed/python3 /embed/glowscript /embed/pyodide}"
 
+# The glowscript RUNNER's files are referenced from a client-side srcdoc
+# template ({{prefix}}components/...), so the page crawl cannot see them —
+# and they are precisely the files a cold-start herd sheds (glow.min.js,
+# 4.2 MB, lost for 17% of 1000 students in the 2026-08-24 test). Published
+# explicitly; ~7 MB total. RUNNER_VERSION tracks the versionMap's current
+# trinket build (the same pin the Dockerfile provisions).
+RUNNER_VERSION="${RUNNER_VERSION:-3.2.3}"
+RUNNER_PATHS="${RUNNER_PATHS:-components/vpython-glowscript/package/glow.RUNNER_VERSION.min.js components/vpython-glowscript/package/RSrun.RUNNER_VERSION.min.js components/vpython-glowscript/package/RScompiler.RUNNER_VERSION.min.js components/vpython-glowscript/package/reportScriptError-0.1.js components/vpython-glowscript/lib/jquery components/vpython-glowscript/css}"
+RUNNER_PATHS="${RUNNER_PATHS//RUNNER_VERSION/${RUNNER_VERSION}}"
+
 say() { printf '  %s\n' "$*"; }
 
 # --- 1. which commit are we publishing for? -------------------------------
@@ -123,6 +133,25 @@ if [[ -n "${SERVICE_URL}" ]]; then
              | grep -oE '^/components/[^"'"'"' ]+' | sed 's|^/||' | sort -u)
   say "components referenced by this deploy: ${n} (published stamped AND bare)"
 fi
+
+# Runner files: same dual publication (stamped + bare) as everything else.
+rn=0
+for rel in ${RUNNER_PATHS}; do
+  if [[ -d "${SRC}/${rel}" ]]; then
+    mkdir -p "${PREFIX}/$(dirname "${rel}")" "${SITE}/$(dirname "${rel}")"
+    cp -R "${SRC}/${rel}" "${PREFIX}/$(dirname "${rel}")/"
+    cp -R "${SRC}/${rel}" "${SITE}/$(dirname "${rel}")/"
+    rn=$((rn+1))
+  elif [[ -f "${SRC}/${rel}" ]]; then
+    mkdir -p "${PREFIX}/$(dirname "${rel}")" "${SITE}/$(dirname "${rel}")"
+    cp "${SRC}/${rel}" "${PREFIX}/${rel}"
+    cp "${SRC}/${rel}" "${SITE}/${rel}"
+    rn=$((rn+1))
+  else
+    say "WARNING: runner path missing from image: ${rel}"
+  fi
+done
+say "runner files/dirs published: ${rn} (version ${RUNNER_VERSION})"
 
 say "staged $(find "${SITE}" -type f | wc -l | tr -d ' ') files, $(du -sh "${SITE}" | cut -f1)"
 
