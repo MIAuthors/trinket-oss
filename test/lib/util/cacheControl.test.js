@@ -84,3 +84,22 @@ describe('cacheControl.headersFor', () => {
     });
   });
 });
+
+
+describe('staticMaxAge validation', () => {
+  const APP = { cachePrefix: 'cache-prefix-', cache: { enabled: true, staticMaxAge: 60 } };
+
+  it('honours a sane configured value', () => {
+    const h = cacheControl.headersFor('/cache-prefix-abc/js/x.js', 200, APP);
+    expect(h['Cache-Control']).toContain('max-age=60');
+  });
+
+  it('falls back to the default for NaN or negative values', () => {
+    [NaN, -5].forEach((bad) => {
+      const h = cacheControl.headersFor('/cache-prefix-abc/js/x.js', 200,
+        { cachePrefix: 'cache-prefix-', cache: { enabled: true, staticMaxAge: bad } });
+      expect(h['Cache-Control']).toContain('max-age=31536000');
+      expect(h['Cache-Control']).not.toContain('NaN');
+    });
+  });
+});
