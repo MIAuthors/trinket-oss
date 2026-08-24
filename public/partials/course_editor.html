@@ -280,6 +280,14 @@
     </div>
     <div class="row">
       <div class="large-12 columns">
+        <label>Markdown Rendering
+          <select name="markdownEngine" ng-model="courseForm.markdownEngine" ng-options="o.id as o.name for o in [{'id':'modern','name':'Modern (GitHub-style) — recommended for new content'},{'id':'legacy','name':'Legacy — original trinket rendering'}]">
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="row">
+      <div class="large-12 columns">
         <button type="submit" class="primary small"><i class="fa" ng-class="{'fa-save':!savingCourse, 'fa-circle-o-notch fa-spin':savingCourse}"></i> Update</button>
         <a ng-show="canDeleteCourse" class="button caution small right" title="Delete Course" data-reveal-id="deleteCourseDialog" data-reveal><i class="fa fa-trash-o"></i> Delete Course</a>
       </div>
