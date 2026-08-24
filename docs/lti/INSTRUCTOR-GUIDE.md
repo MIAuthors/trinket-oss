@@ -27,12 +27,21 @@ appear, this is the surprise to un-surprise yourself about now.
 ### Adding an assignment
 
 1. In your LMS course, create an assignment/activity whose submission type is
-   the external tool, and pick **trinket** (in Canvas: Assignment →
-   Submission Type → External Tool; ⬜ Moodle: Activity → External tool;
-   ⬜ Brightspace: Existing Activities → external learning tool).
-2. Trinket's **picker** opens: choose the trinket or course material students
-   should start from. What you pick becomes each student's starting point.
-3. Save/publish in the LMS as usual.
+   the external tool (✅ Canvas: Assignment → Submission Type → **External
+   Tool** → **Find** → pick the tool **by its registered name** — it is the
+   tool title your admin registered, not necessarily "trinket";
+   ⬜ Moodle: Activity → External tool; ⬜ Brightspace: Existing Activities →
+   external learning tool).
+2. Trinket's **picker** opens *inside the dialog* — after a blank pause of
+   ~10 seconds (the LMS↔trinket sign-in handshake; blank means loading, not
+   broken). Choose the course assignment students should start from.
+3. **Canvas: check "Load This Tool In A New Tab."** Modern browsers block
+   third-party cookies by default, so an *embedded* assignment shows students
+   an anonymous (Sign Up / Log In) view instead of their own work. The
+   new-tab launch works everywhere. Then Save & Publish.
+4. ⚠️ A tool link added to a **Module** is an ungraded content launch — fine
+   for course material, but it creates **no gradebook column and no
+   needs-grading flow**. Graded work must be an *Assignment*.
 
 ### What students experience
 
@@ -66,9 +75,11 @@ given a single URL.
      Advantage → **Register Tool** → choose **Dynamic** → paste the link.
      Then create a **Deployment** (Admin Tools → External Learning Tools) and
      add the org units that may use it.
-   * ⬜ **Canvas**: hosted Canvas requires admin-enabled dynamic registration
-     (Developer Keys → Inherited → LTI Registration) or manual setup — see
-     the manual appendix below.
+   * ✅ **Canvas** (verified 2026-08-24, self-hosted): Admin → Developer Keys
+     → **+ Developer Key → LTI Registration** → paste the link → confirm →
+     flip the key **ON** → install the app (Admin → Settings → Apps → + App →
+     **By Client ID**). Hosted Canvas may require Instructure to have enabled
+     dynamic registration; the manual appendix below always works.
 3. Launch once from a course to confirm; trinket recognizes the platform and
    signs you in with an instructor role.
 
@@ -98,6 +109,19 @@ operator if an instructor launch lands you as a student.)
 
 ## Troubleshooting
 
+* **Students see Sign Up / Log In inside an embedded assignment** — the
+  browser is blocking third-party cookies (default in current Chrome and
+  Safari). Edit the assignment and enable **Load This Tool In A New Tab**.
+* **The external-tool picker dialog is empty** — before suspecting the
+  registration, try another browser (a content blocker or browser bug can
+  stop the dialog's tool list from loading; the registration is usually fine).
+* **Clicked the tool and got a blank white dialog** — it is loading; the
+  picker takes ~10 seconds to appear. Don't close it.
+* **No grade column appeared for a module link** — module links are ungraded
+  by design; create an Assignment with External Tool submission instead.
+* **Two identical tool names in the picker** — duplicate registrations (e.g.
+  an old server's). Ask your admin to remove or rename the stale one; picking
+  it launches into the wrong server.
 * **Launch fails with an OIDC/state error** — usually clock skew or a
   half-finished registration; retry once, then re-check the three URLs.
 * **Student says "I see someone else's code"** — they don't; each student has
