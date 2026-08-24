@@ -25,6 +25,13 @@ test.describe('the server is alive and is the build we think', () => {
     expect(['env', 'checkout', 'build']).toContain(info.commitSource);
 
     if (process.env.EXPECT_COMMIT) {
+      // When asserting WHICH build is live, a 'build' source is not evidence —
+      // it is the one source that can report a commit the server is not
+      // running (a committed build-info.json). Accepting it here would let
+      // the exact failure this test exists for pass.
+      expect(['env', 'checkout'],
+        'EXPECT_COMMIT needs a stamped image or a checkout — commitSource "build" cannot prove the running commit'
+      ).toContain(info.commitSource);
       expect(info.commit).toBe(process.env.EXPECT_COMMIT.substring(0, info.commit.length));
     }
   });

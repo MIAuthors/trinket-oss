@@ -16,6 +16,10 @@
 #     that adds a package then crash-loops with `Cannot find module ...` while
 #     the build log looks perfectly clean.
 #
+# Requires Docker Compose >= 2.24.4 (the `!override` tag below is not
+# understood by older releases — they fail with a YAML parse error, they do
+# not silently merge).
+#
 # This overlay removes every host mount from the app service, so the image is
 # the only source of code and dependencies — the same arrangement Cloud Run
 # already enforces by construction. Updating becomes: rebuild, restart. There
@@ -65,7 +69,9 @@ services:
     healthcheck:
       # A crash-looping app otherwise looks healthy to `docker ps`, which is
       # exactly how a missing dependency stayed invisible for an afternoon.
-      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/version >/dev/null || exit 1"]
+      # node rather than curl so the check survives a move to a slimmer base
+      # image — node is the one binary this image cannot lose.
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/version', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 3

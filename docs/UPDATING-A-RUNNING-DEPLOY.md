@@ -73,6 +73,7 @@ image is the only source of code and dependencies:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# (needs Docker Compose >= 2.24.4 — the overlay uses the `!override` tag)
 ```
 
 Updating then has no dependency step at all — rebuild and restart, and nothing
