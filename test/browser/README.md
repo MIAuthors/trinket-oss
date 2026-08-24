@@ -21,6 +21,14 @@ deploy/config-specific things a local stack can't mirror (real GCS buckets, the
 ## Running
 
 ```bash
+# 0. The stack interpolates the gitignored root .env (SESSION_PASSWORD,
+#    FIREBASE_CLIENT_CONFIG — see the Makefile header). Fresh worktrees don't
+#    have it: copy it from the base clone, and copy config/local.example.yaml
+#    to config/local.yaml (plus any feature flags the specs need, e.g.
+#    features.workerVPython). Without FIREBASE_CLIENT_CONFIG the UI login page
+#    is broken — the SPECS still pass, because global-setup mints emulator
+#    tokens directly and never sees the login page.
+
 # 1. Bring up the GCP-shape stack (from repo root). Builds host-native.
 docker compose -f docker-compose.gcr.yml up --build -d
 
