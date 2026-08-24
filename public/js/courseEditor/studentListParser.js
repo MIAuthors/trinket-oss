@@ -18,8 +18,10 @@
   var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   function parse(text) {
-    var students = [];
-    var skipped  = [];
+    var students   = [];
+    var skipped    = [];
+    var duplicates = 0;
+    var seen       = {};
 
     String(text || '').split('\n').forEach(function (raw) {
       var line = raw.trim();
@@ -39,12 +41,24 @@
         return;
       }
 
+      var email = parts[emailIndex];
+      var key   = email.toLowerCase();
+      if (seen[key]) {
+        // The same address pasted twice would otherwise be submitted twice.
+        duplicates++;
+        return;
+      }
+      seen[key] = true;
+
       var name = parts.filter(function (_, i) { return i !== emailIndex; })
                       .join(' ');
-      students.push({ email : parts[emailIndex], name : name });
+      // `line` is the untouched paste — kept so the caller can put a line BACK
+      // in the box exactly as the instructor wrote it (e.g. when its batch
+      // fails to submit), rather than a lossy reconstruction.
+      students.push({ email : email, name : name, line : line });
     });
 
-    return { students : students, skipped : skipped };
+    return { students : students, skipped : skipped, duplicates : duplicates };
   }
 
   return { parse : parse };

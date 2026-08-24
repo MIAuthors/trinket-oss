@@ -230,7 +230,8 @@
           message += " " + totals.held + " line(s) had no email address and were left in the box.";
           if (className === 'success') { className = 'warning'; }
         }
-        if (totals.failed)  { message += " " + totals.failed + " batch(es) failed — please retry."; className = 'alert'; }
+        if (totals.duplicates) { message += " " + totals.duplicates + " duplicate line(s) ignored."; }
+        if (totals.failed)  { message += " " + totals.failed + " batch(es) failed — their lines were left in the box; please retry."; className = 'alert'; }
 
         $("#invitations-sent-messages").notify(message, { className : className });
       }
@@ -255,7 +256,9 @@
           batches.push(students.slice(i, i + INVITE_BATCH));
         }
 
-        var totals = { enrolled : 0, invited : 0, invalid : 0, failed : 0 };
+        var totals = { enrolled : 0, invited : 0, invalid : 0, failed : 0,
+                       duplicates : parsed.duplicates };
+        var failedLines = [];   // students whose batch POST failed — they were NOT added
 
         $scope.sendingInvitations = true;
         $scope.inviteProgress = { active : true, done : 0, total : students.length };
@@ -264,9 +267,11 @@
           if (index >= batches.length) {
             $scope.sendingInvitations     = false;
             $scope.inviteProgress.active  = false;
-            // Leave only the held-back lines in the box so the instructor can
-            // fix them in place; everything submitted is cleared.
-            $scope.inviteForm.studentList = skipped.join('\n');
+            // Leave the lines that were NOT added in the box — held-back lines
+            // (no email) AND the lines of any batch whose POST failed — so the
+            // instructor can fix or simply resubmit them in place. Everything
+            // that was actually submitted is cleared.
+            $scope.inviteForm.studentList = failedLines.concat(skipped).join('\n');
             $(document).foundation('dropdown', 'reflow');
             totals.held = skipped.length;
             reportRoster(totals);
@@ -280,8 +285,12 @@
               },
               function(err) {
                 // Skip the failed batch but keep going — one bad chunk shouldn't
-                // abandon the rest of the roster.
+                // abandon the rest of the roster. Its lines go back in the box
+                // (see processBatch's completion branch): "please retry" is an
+                // empty promise if the students it names have vanished.
                 totals.failed++;
+                failedLines = failedLines.concat(
+                  batches[index].map(function(s) { return s.line; }));
               }
             )
             .then(function() {
