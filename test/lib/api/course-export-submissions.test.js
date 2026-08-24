@@ -61,12 +61,14 @@ describe('Course/Assignment student-work export endpoints', () => {
         expect(flow.lastResponse.body.success).not.toBe(true);
         expect(JSON.stringify(flow.lastResponse.body)).toMatch(/no export worker/i);
 
+        // The refusal must carry the exportId — the dashboard polls it to
+        // surface the record's errorMessage. If the response shape changes,
+        // this should fail loudly rather than silently skip the DB checks.
         const id = flow.lastResponse.body.exportId || (flow.lastResponse.body.data || {}).exportId;
-        if (id) {
-          const rec = await Export.findById(id);
-          expect(rec.status).toBe('failed');
-          expect(rec.errorMessage).toMatch(/no export worker/i);
-        }
+        expect(id, 'refusal must include the failed exportId').toBeTruthy();
+        const rec = await Export.findById(id);
+        expect(rec.status).toBe('failed');
+        expect(rec.errorMessage).toMatch(/no export worker/i);
       } finally {
         q.handlers = saved;
       }
