@@ -44,6 +44,14 @@ describe('publicHostname.resolve', () => {
     )).toBe('trinket-merge-test.web.app');
   });
 
+  it('recognises an allowed host even when the proxy forwards host:port', () => {
+    // Compared AND returned portless — request.info.hostname has no port, so
+    // the caller sees one consistent form either way.
+    expect(publicHostname.resolve(
+      { 'x-forwarded-host': 'trinket-merge-test.web.app:443' }, 'x.run.app', ALLOWED
+    )).toBe('trinket-merge-test.web.app');
+  });
+
   it('ignores a port-qualified forwarded host that is otherwise unknown', () => {
     expect(publicHostname.resolve(
       { 'x-forwarded-host': 'evil.example.com:443' }, 'rba-merge-trial.spvi.net', ALLOWED

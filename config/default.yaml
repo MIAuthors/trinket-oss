@@ -135,6 +135,10 @@ app:
   url:
     protocol: https
     hostname: trinket.dev
+    # Extra hostnames this deploy also answers on (CDN front door, alternate
+    # domains). Used to validate X-Forwarded-Host (lib/util/publicHostname.js)
+    # and for embed-URL rewriting; hostnames only, no scheme or port.
+    knownHosts: []
     port:
   start: true
   usersubdomains: false
