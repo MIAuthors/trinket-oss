@@ -102,7 +102,7 @@ Cloud Firestore** (GCP / Firebase). Hosting region: «CONFIRM: region, e.g. us-c
 
 «CONFIRM» — Who at Trinket can view stored student data (admins via `/admin`, support, engineers
 with DB access)? What authentication + audit covers that access? The unified site-admin role
-(`hasRole("admin")`, see `docs/authority-model.md`) gates the in-app `/admin` area; document the
+(`hasRole("admin")`, see `docs/lti/authority-model.md`) gates the in-app `/admin` area; document the
 infrastructure-level access (GCP IAM) separately.
 
 ---

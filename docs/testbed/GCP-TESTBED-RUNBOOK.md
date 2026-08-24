@@ -156,7 +156,7 @@ match — SSH forward is the lower-friction path.)
 ## 7. Register + run the test
 
 From here it is the same as on the Mac: Dynamic Registration per `LTI-REGISTRATION.md`, then the
-deep-link → student-submit → SpeedGrader-review flow in `TASK13.md`. The trinket public host is the
+deep-link → student-submit → SpeedGrader-review flow in `docs/history/TASK13.md`. The trinket public host is the
 cloudflared URL from step 5; Canvas is `localhost:8080` via the SSH forward from step 6.
 
 ---
@@ -176,7 +176,7 @@ cloudflared URL from step 5; Canvas is `localhost:8080` via the SSH forward from
 
 ## What's still open / known issues
 
-- **App boot timeout** (`TASK13.md` step 1): if it persists even on native amd64, it's a real
+- **App boot timeout** (`docs/history/TASK13.md` step 1): if it persists even on native amd64, it's a real
   app↔emulator startup/connectivity bug to debug, not an emulation artifact. The VM is the cleanest
   place to tell those two causes apart.
 - **Secrets hygiene:** the trinket private key, `firebase-service-account.json`, and the Canvas

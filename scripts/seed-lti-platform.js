@@ -2,7 +2,7 @@
 //
 // scripts/seed-lti-platform.js
 //
-// Register (upsert) an LTI 1.3 platform — one record per LMS instance (LTI-SPEC.md §10).
+// Register (upsert) an LTI 1.3 platform — one record per LMS instance (docs/lti/LTI-SPEC.md §10).
 // Matches on (issuer, clientId); updates fields and merges the deployment id if it already
 // exists, otherwise creates a new record.
 //
