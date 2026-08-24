@@ -69,6 +69,13 @@ a {
 // fallbacks. Branded deploys override via theme.buttonDark / theme.link etc.
 // =============================================================================
 
+// Cascade-safety note (verified): the bare `.alert-box` / `.label` rules
+// below are (0,1,0); Foundation's own variant rules (`.alert-box.alert`,
+// `.alert-box.warning`, `.label.alert`, ...) are (0,2,0) and therefore keep
+// winning REGARDLESS of stylesheet order — only the default (green) variant
+// is re-pointed. Do not "tidy" these selectors up to `.alert-box.success`-only:
+// the bare default with no class is the primary-colored one being themed.
+
 // Breadcrumb trail text and links.
 .breadcrumbs > * {
   color: var(--brand-link, #{$_brand-primary});
@@ -100,7 +107,13 @@ ul.pagination li.current button {
   }
 }
 
-// Side-nav active/hover link text (Foundation compiles a LIGHTENED green here).
+// Side-nav active/hover link text (Foundation compiles a LIGHTENED green
+// here). The side-nav renders on a LIGHT background (page bg; #eee headings,
+// #ddd borders — _generic.scss `body.side-nav-with-content`), so the stock
+// #9ED27F was the low-contrast choice and --brand-link (specified 4.5:1
+// against pageBg) is an upgrade on the very surface it is measured for. If a
+// deploy ever gives the side-nav a dark fill, this key stops being the right
+// one — re-verify then.
 .side-nav li {
   a:not(.button):not(.faux-button) {
     &:hover,

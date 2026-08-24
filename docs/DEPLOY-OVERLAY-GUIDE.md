@@ -114,6 +114,14 @@ app:
     primary: '#123456'                  # ⚠️ does NOT cover links/buttons — see below
     link:    '#123456'
     button:  '#123456'
+    # Optional shade keys (#149) — without them, hovers/disabled fills and the
+    # second accent stay stock green even on a branded deploy. See the table
+    # below for what each covers.
+    # buttonDark:    '#0e2e46'          # hover/border shade of `button`
+    # buttonPale:    '#e6eef5'          # pale hover/disabled fill
+    # secondary:     '#333333'          # second accent (completed-status, secondary buttons)
+    # secondaryDark: '#1f1f1f'
+    # secondaryPale: '#eeeeee'
 
 # Which trinket types appear in the New-Trinket menu AND are allowed to run.
 # Omit this block to inherit the stock set; override only what you want to change:
