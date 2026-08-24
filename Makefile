@@ -39,11 +39,29 @@ browser-smoke: ## Browser smoke tests (New Trinket + WebVPython journeys) vs a l
 # These targets dispatch to it, so `make deploy` works in any checkout without
 # remembering overlay names or env vars. TRINKET_DEPLOY comes from the
 # environment or this checkout's .env (same precedence deploy-cloudrun.sh uses).
-TRINKET_DEPLOY ?= $(shell grep -E '^TRINKET_DEPLOY=' .env 2>/dev/null | head -1 | cut -d= -f2)
+# -f2- not -f2: a value containing '=' must not be truncated at the first one.
+TRINKET_DEPLOY ?= $(shell grep -E '^TRINKET_DEPLOY=' .env 2>/dev/null | head -1 | cut -d= -f2-)
 DEPLOY_MK = deploys/$(TRINKET_DEPLOY)/Makefile
 
-deploy verify deploy-clean deploy-clean-dry: ## deploy|verify|clean the ACTIVE overlay (TRINKET_DEPLOY from env or .env)
+# One canned recipe, four documented targets — separate rule lines so each
+# shows up in `make help` (its grep wants one target per line). The overlay
+# Makefile is invoked with -f from THIS directory: overlay Makefiles are
+# written for repo-root cwd (their guards check ./deploy-cloudrun.sh).
+define _dispatch_overlay
 	@[ -n "$(TRINKET_DEPLOY)" ] || { echo "TRINKET_DEPLOY is not set (env or .env). Overlays with Makefiles:"; \
 	  ls deploys/*/Makefile 2>/dev/null | sed 's|deploys/\(.*\)/Makefile|  \1|' || echo "  (none found under deploys/)"; exit 1; }
 	@[ -f "$(DEPLOY_MK)" ] || { echo "$(DEPLOY_MK) not found — this overlay ships no Makefile (see docs/DEPLOY-OVERLAY-GUIDE.md)"; exit 1; }
 	@$(MAKE) -f $(DEPLOY_MK) $(patsubst deploy-clean%,clean%,$@)
+endef
+
+deploy: ## Build + deploy the ACTIVE overlay (TRINKET_DEPLOY from env or .env)
+	$(_dispatch_overlay)
+
+verify: ## Verify the ACTIVE overlay's live deployment (/version, brand)
+	$(_dispatch_overlay)
+
+deploy-clean-dry: ## Preview cleanup of the ACTIVE overlay's old revisions/images
+	$(_dispatch_overlay)
+
+deploy-clean: ## Trim the ACTIVE overlay's old revisions/images
+	$(_dispatch_overlay)
