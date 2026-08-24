@@ -160,6 +160,10 @@ say "staged $(find "${SITE}" -type f | wc -l | tr -d ' ') files, $(du -sh "${SIT
 # responses. Everything else falls through to the app.
 # Firebase applies its own max-age=3600 to uploaded files, overriding whatever
 # the app would have sent — so the immutable header is restated here.
+# ⚠️ Header sources also match REWRITE responses: a negated glob
+# (!/cache-prefix-*/**) silently replaced the app's no-store on DYNAMIC pages
+# (observed live). Static dirs are enumerated instead — never use a negation
+# here.
 cat > "${WORK}/firebase.json" <<JSON
 {
   "hosting": {
@@ -169,7 +173,17 @@ cat > "${WORK}/firebase.json" <<JSON
     "headers": [
       { "source": "/cache-prefix-*/**",
         "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
-      { "source": "!/cache-prefix-*/**",
+      { "source": "/js/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] },
+      { "source": "/css/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] },
+      { "source": "/img/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] },
+      { "source": "/fonts/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] },
+      { "source": "/partials/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] },
+      { "source": "/components/**",
         "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] }
     ],
     "rewrites": ${HOSTING_REWRITES}
