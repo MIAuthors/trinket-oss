@@ -204,6 +204,16 @@ const init = async () => {
     const response = request.response;
     const addXFrame = config.app.xframeDeny && config.app.xframeDeny.indexOf(request.url.pathname) >= 0;
 
+    // One embed policy for both branches below. knownHosts is included so a
+    // deploy behind a CDN front door (Firebase Hosting, Cloudflare) still names
+    // the origin the BROWSER is actually using — request.url.origin is only the
+    // backend's own host there (see lib/util/publicHostname.js for the same
+    // problem on the template side).
+    const embedPolicy = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
+      request.query && request.query.runMode,
+      [config.url, request.url && request.url.origin]
+        .concat((config.app.url && config.app.url.knownHosts) || []));
+
     if (response.isBoom) {
       const statusCode = response.output.statusCode;
 
@@ -268,11 +278,8 @@ const init = async () => {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
 
-      const boomCsp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
-        request.query && request.query.runMode,
-        [config.url, request.url && request.url.origin]);
-      if (boomCsp) {
-        response.output.headers['Content-Security-Policy'] = boomCsp;
+      if (embedPolicy) {
+        response.output.headers['Content-Security-Policy'] = embedPolicy;
       }
     }
     else if (response.header) {
@@ -284,11 +291,8 @@ const init = async () => {
         response.header('X-Frame-Options', 'deny');
       }
 
-      const csp = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
-        request.query && request.query.runMode,
-        [config.url, request.url && request.url.origin]);
-      if (csp) {
-        response.header('Content-Security-Policy', csp);
+      if (embedPolicy) {
+        response.header('Content-Security-Policy', embedPolicy);
       }
     }
 

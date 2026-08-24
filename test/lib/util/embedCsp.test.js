@@ -109,6 +109,27 @@ describe('embed CSP', function() {
     expect(p).not.toContain('localhost:3001/ ');
   });
 
+  // hapi delivers a repeated parameter as an array. Duplication must only be
+  // able to TIGHTEN the policy: if any value says calculator, exam applies.
+  it('treats a repeated runMode containing calculator as exam mode', function() {
+    ['calculator', 'x'].forEach(function(first) {
+      const p = policyFor(CONFIG, '/embed/glowscript/x',
+        first === 'calculator' ? ['calculator', 'x'] : ['x', 'calculator'], ORIGINS);
+      expect(p).toContain("img-src 'self' data:");
+    });
+    // ...and an array with no calculator stays on the standard policy.
+    expect(policyFor(CONFIG, '/embed/glowscript/x', ['x', 'y'], ORIGINS))
+      .toContain('img-src * data:');
+  });
+
+  // Behind a CDN front door the browser-facing origin is a knownHosts entry,
+  // passed through scheme-less. It must survive into the policy untouched.
+  it('carries scheme-less known-host origins through', function() {
+    const p = policyFor(CONFIG, '/embed/glowscript/x', '',
+      ORIGINS.concat(['trinket-merge-test.web.app']));
+    expect(p).toContain('trinket-merge-test.web.app');
+  });
+
   it('does not touch non-embed pages', function() {
     expect(policyFor(CONFIG, '/', '', ORIGINS)).toBeNull();
     expect(policyFor(CONFIG, '/mytrinkets', 'calculator', ORIGINS)).toBeNull();
