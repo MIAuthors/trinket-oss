@@ -96,8 +96,13 @@ test.describe('instructor journey', () => {
     // A deploy with no export worker refuses immediately and says why — that is
     // correct behaviour, not a failure of this test.
     if (start.status !== 200 || !(start.body.data || {}).exportId) {
-      expect(JSON.stringify(start.body), 'refusal should explain itself').toMatch(/export worker|not available/i);
-      test.info().annotations.push({ type: 'note', description: 'no export worker on this deploy — refusal path verified' });
+      const why = JSON.stringify(start.body);
+      // Two legitimate refusals, both meaning "this deploy cannot export":
+      //   * no worker registered (#180 makes this explicit)
+      //   * an earlier export is wedged at pending, which on Cloud Run is
+      //     permanent and blocks every later attempt (#179)
+      expect(why, 'a refusal should explain itself').toMatch(/export worker|not available|already in progress/i);
+      test.info().annotations.push({ type: 'note', description: 'export refused: ' + why.slice(0, 120) });
       return;
     }
 
