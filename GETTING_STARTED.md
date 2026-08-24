@@ -226,8 +226,7 @@ docker compose exec -T app npm ci --no-audit --no-fund
 docker compose restart app
 ```
 
-The startup check names any missing packages if you forget. See
-[docs/UPDATING-A-RUNNING-DEPLOY.md](docs/UPDATING-A-RUNNING-DEPLOY.md).
+The startup check names any missing packages if you forget.
 
 ## Server-Side Languages
 

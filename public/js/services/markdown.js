@@ -4,6 +4,18 @@
       return function(options) {
         options = angular.extend({}, options);
 
+        // Default engine: read the course off the caller's $scope per call —
+        // the course document arrives async, after controllers build their
+        // parsers. Controllers that want something else pass options.engine
+        // (a string, or a function evaluated per call).
+        if (!options.engine && options.$scope) {
+          options.engine = function() {
+            var course = options.$scope.course;
+            return (course && course.globalSettings
+                    && course.globalSettings.markdownEngine) || 'legacy';
+          };
+        }
+
         var legacyParse = trinketMarkdown(options);
         // Modern engine (markdown-engine-bridge). `engine` may be a string or
         // a function evaluated per call — the course document arrives async,

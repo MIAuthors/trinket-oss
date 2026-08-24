@@ -15,11 +15,7 @@
     this.Restangular = Restangular;
     this.parser      = markdownParser({
       $scope:  $scope,
-      preview: false,
-      engine : function() {
-        return ($scope.course && $scope.course.globalSettings
-                && $scope.course.globalSettings.markdownEngine) || 'legacy';
-      }
+      preview: false
     });
     this.trinketConfig = trinketConfig;
     this.trinketUtil   = trinketUtil;

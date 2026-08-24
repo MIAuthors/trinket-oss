@@ -86,6 +86,21 @@ describe('markdownParser engine dispatch', () => {
     expect(received[0]).not.toBe(received[1]);               // and not shared between parsers
   });
 
+  it('derives the engine from $scope.course when no engine option is given', () => {
+    // Controllers used to paste the same engine-closure into every parser
+    // build; the service now derives it from the caller's $scope per call, so
+    // the course document arriving async is still honoured.
+    const { makeParser } = loadService({
+      withModernGlobals: true,
+      trinketMarkdownModern: () => (md) => 'MODERN:' + md
+    });
+    const $scope = {};
+    const parse = makeParser()({ $scope });
+    expect(parse('a')).toBe('LEGACY:a');            // course not loaded yet
+    $scope.course = { globalSettings: { markdownEngine: 'modern' } };
+    expect(parse('a')).toBe('MODERN:a');            // course arrived: modern
+  });
+
   it('falls back to legacy if the modern global is missing', () => {
     const { makeParser } = loadService();
     expect(makeParser()({ engine: 'modern' })('hi')).toBe('LEGACY:hi');

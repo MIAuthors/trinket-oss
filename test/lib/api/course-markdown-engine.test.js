@@ -42,6 +42,29 @@ beforeEach(() => {
   flow.cookies = {};
 });
 
+describe('partial updates must not reset course settings (reset-on-omit)', () => {
+  // Course.setGlobalSettings walks the SCHEMA's keys, so before the fix any
+  // key missing from the payload was reset to its schema default — a
+  // name-only save silently downgraded markdownEngine to legacy (and
+  // courseType to public). The Edit form happens to send some keys, but the
+  // server must not depend on every client remembering every setting.
+  it('keeps markdownEngine and courseType when the payload omits them', async () => {
+    await flow.switchUser('user');
+    await flow.createCourse({ name: 'Omit Test', markdownEngine: 'modern', courseType: 'private' });
+    expect(flow.wasOk).toBe(true);
+    const created = flow.lastResponse.body.course;
+    expect(created.globalSettings.markdownEngine).toBe('modern');
+    expect(created.globalSettings.courseType).toBe('private');
+
+    await flow.updateCourse(created.id, { name: 'Omit Test Renamed' });
+    expect(flow.wasOk).toBe(true);
+    const updated = flow.lastResponse.body.course;
+    expect(updated.name).toBe('Omit Test Renamed');
+    expect(updated.globalSettings.markdownEngine, 'a name-only save must not downgrade the engine').toBe('modern');
+    expect(updated.globalSettings.courseType, 'a name-only save must not reset courseType').toBe('private');
+  });
+});
+
 describe('Course export markdown engine selection', () => {
   describe('parserFor function (unit)', () => {
     it('selects legacy parser for courses without markdownEngine setting', () => {
