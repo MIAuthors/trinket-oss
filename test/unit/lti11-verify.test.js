@@ -117,6 +117,12 @@ describe('launchUrlFromRequest', () => {
     )).toBe('http://localhost:3001/lti/launch');
   });
 
+  it('drops explicit default ports from the host header', () => {
+    expect(v.launchUrlFromRequest(
+      req({ host: 'localhost:80' }, 'localhost'), { hostname: 'localhost', protocol: 'https' }, resolve
+    )).toBe('https://localhost/lti/launch');
+  });
+
   it('never adopts a foreign forwarded host', () => {
     expect(v.launchUrlFromRequest(
       req({ 'x-forwarded-host': 'evil.example.com', host: 'backend.run.app' }, 'backend.run.app'),
