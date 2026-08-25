@@ -93,11 +93,22 @@
         </style>
         <link type="text/css" href="{{url}}/{{prefix}}components/glowscript/css/redmond/IDE/jquery-ui.custom.css" rel="stylesheet" />
         <link type="text/css" href="{{url}}/{{prefix}}components/glowscript/css/ide.css" rel="stylesheet" />
+        <script type="text/javascript">
+          /* See glowscript.html: report runtime load failures to the page,
+             which rebuilds the runner — no refresh exists in a lockdown
+             browser. */
+          function __lf(el) {
+            try {
+              window.parent.postMessage(JSON.stringify(
+                { "glowscript.loadfail": (el && el.src) || "?" }), "*");
+            } catch (e) {}
+          }
+        </script>
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.3/MathJax.js?config=TeX-AMS_HTML"></script>
         {{jqueryList}}
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/glowscript/package/glow.{{version}}.min.js"></script>
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/glowscript/package/RSrun.{{version}}.min.js"></script>
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/glowscript/package/RScompiler.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/glowscript/package/glow.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/glowscript/package/RSrun.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/glowscript/package/RScompiler.{{version}}.min.js"></script>
       </head>
       <body>
         <div id="loading">Loading your GlowScript program</div>
