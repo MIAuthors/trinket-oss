@@ -26,6 +26,11 @@
       {% if config.app.theme.primary %}--brand-primary: {{ config.app.theme.primary }};{% endif %}
       {% if config.app.theme.link %}--brand-link: {{ config.app.theme.link }};{% endif %}
       {% if config.app.theme.button %}--brand-button: {{ config.app.theme.button }};{% endif %}
+      {% if config.app.theme.buttonDark %}--brand-button-dark: {{ config.app.theme.buttonDark }};{% endif %}
+      {% if config.app.theme.buttonPale %}--brand-button-pale: {{ config.app.theme.buttonPale }};{% endif %}
+      {% if config.app.theme.secondary %}--brand-secondary: {{ config.app.theme.secondary }};{% endif %}
+      {% if config.app.theme.secondaryDark %}--brand-secondary-dark: {{ config.app.theme.secondaryDark }};{% endif %}
+      {% if config.app.theme.secondaryPale %}--brand-secondary-pale: {{ config.app.theme.secondaryPale }};{% endif %}
     }
   </style>
   {% endif %}
@@ -37,6 +42,7 @@
         usersubdomains : {{config.app.usersubdomains}},
         protocol       : '{{config.app.url.protocol}}',
         cachePrefix    : '{{config.app.cachePrefix}}',
+        assetToken     : '{{ assetToken() }}',
         prefixes       : {{ config.app.prefixes | json | safe }},
         components     : {{ config.app.components | json | safe }},
         vendorHost     : '{{ config.aws.buckets.vendorassets.host }}',

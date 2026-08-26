@@ -39,9 +39,9 @@ describe('New-trinket page, python3 intro (#115)', () => {
   });
 
   it('does not instruct the student to pick Console from the Run menu', () => {
-    // On picup/main the Pyodide runner has no console branch, so the instruction
-    // describes something that does nothing. PR #114 implements the REPL and
-    // makes it true again — restore the sentence in the same pass that merges it.
+    // The REPL (#121) exists now, so a Console instruction would be TRUE — but
+    // the current wording (via #124) deliberately points at console.input()
+    // instead. If someone re-adds a Run-menu Console sentence, update this.
     expect(PY3).not.toMatch(/Console from the Run menu/i);
   });
 

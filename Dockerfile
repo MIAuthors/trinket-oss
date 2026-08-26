@@ -21,7 +21,12 @@ WORKDIR /usr/local/node/trinket
 
 # Install dependencies first — cached unless package.json changes
 COPY --chown=trinket:trinket package.json package-lock.json ./
-RUN npm install --legacy-peer-deps
+# `ci`, not `install`: it installs exactly the tree package-lock.json records,
+# so two builds of the same commit produce the same dependencies. That matters
+# more now that production runs the image's node_modules rather than a volume
+# someone once populated. --legacy-peer-deps is carried over from the previous
+# install step; dropping it needs the peer conflicts resolved first.
+RUN npm ci --legacy-peer-deps
 
 # Download frontend components — cached unless the release URL changes
 RUN curl -L --silent -o ./public-components.tgz \
@@ -59,6 +64,27 @@ RUN set -eu; \
     echo "${GLOW_SHA256}  $dir/glow.3.2.3.min.js"             | sha256sum -c -; \
     echo "${RSCOMPILER_SHA256}  $dir/RScompiler.3.2.3.min.js" | sha256sum -c -; \
     echo "${RSRUN_SHA256}  $dir/RSrun.3.2.3.min.js"           | sha256sum -c -
+
+# vpython-jupyter worker assets (workerVPython opt-in): the pure-Python wheel
+# the worker micropip-installs, and the glowcomm_host.js front-end factory.
+# Fetched from a pinned upstream GitHub release, sha256-checked — the same
+# pattern as the rsWVPRunner files above. public/components is gitignored AND
+# gcloudignored, so a checked-in copy would never reach a Cloud Build context;
+# the release asset is the artifact. Local dev: scripts/sync-vpython-worker.sh
+# does this same fetch, parsing these ARGs so the pins cannot drift.
+# The wheel filename must match VPYTHON_WHEEL_NAME in public/js/embed/pyodide.js.
+ARG VPYTHON_WHEEL_RELEASE=v7.6.6.dev0
+ARG VPYTHON_WHEEL_SHA256=1b319fd882f409fc32445bf464ff7787cac6571f3bd6accb2ee37d217a9c5050
+ARG GLOWCOMM_HOST_SHA256=6cf90f51deec78c91b6a6c768b0c4389631218ca31dbdc9b06c6d977d0fced32
+RUN set -eu; \
+    base="https://github.com/vpython/vpython-jupyter/releases/download/${VPYTHON_WHEEL_RELEASE}"; \
+    dir="public/components/vpython-worker"; \
+    mkdir -p "$dir"; \
+    wheel="vpython-${VPYTHON_WHEEL_RELEASE#v}-py3-none-any.whl"; \
+    curl -fL --silent -o "$dir/$wheel"            "$base/$wheel"; \
+    curl -fL --silent -o "$dir/glowcomm_host.js"  "$base/glowcomm_host.js"; \
+    echo "${VPYTHON_WHEEL_SHA256}  $dir/$wheel"            | sha256sum -c -; \
+    echo "${GLOWCOMM_HOST_SHA256}  $dir/glowcomm_host.js"  | sha256sum -c -
 
 # Copy source last so code changes don't bust the layers above
 COPY --chown=trinket:trinket . .

@@ -1,62 +1,62 @@
 .button {
-  color: $primary-color;
-  border: 1px solid $primary-color;
+  color: var(--brand-button, #{$primary-color});
+  border: 1px solid var(--brand-button, #{$primary-color});
   background: #FFF;
   text-transform: capitalize;
 
   &:hover {
-    color: darken($primary-color, 10%);
-    border: 1px solid darken($primary-color, 10%);
-    background: lighten($primary-color, 40%);
+    color: var(--brand-button-dark, #{darken($primary-color, 10%)});
+    border: 1px solid var(--brand-button-dark, #{darken($primary-color, 10%)});
+    background: var(--brand-button-pale, #{lighten($primary-color, 40%)});
   }
 
   &.disabled,&.disabled:hover,&.disabled:focus {
-    color: $primary-color;
-    background: lighten($primary-color, 40%);
-    border: 1px solid $primary-color;
+    color: var(--brand-button, #{$primary-color});
+    background: var(--brand-button-pale, #{lighten($primary-color, 40%)});
+    border: 1px solid var(--brand-button, #{$primary-color});
     opacity: $button-disabled-opacity;
   }
 
   &.primary {
     color: #FFF;
-    border: 1px solid $primary-color;
-    background: $primary-color;
+    border: 1px solid var(--brand-button, #{$primary-color});
+    background: var(--brand-button, #{$primary-color});
     &:hover {
-      background: darken($primary-color, 10%);
+      background: var(--brand-button-dark, #{darken($primary-color, 10%)});
     }
   }
 
   &.guide {
     text-transform: uppercase;
     color: #FFF;
-    border: 1px solid $secondary-color;
-    background: $secondary-color;
+    border: 1px solid var(--brand-secondary, #{$secondary-color});
+    background: var(--brand-secondary, #{$secondary-color});
     &:hover {
-      background: darken($secondary-color, 10%);
+      background: var(--brand-secondary-dark, #{darken($secondary-color, 10%)});
     }
     &.disabled,&.disabled:hover,&.disabled:focus {
-      color: $secondary-color;
-      background: lighten($secondary-color, 40%);
-      border: 1px solid $secondary-color;
+      color: var(--brand-secondary, #{$secondary-color});
+      background: var(--brand-secondary-pale, #{lighten($secondary-color, 40%)});
+      border: 1px solid var(--brand-secondary, #{$secondary-color});
       opacity: $button-disabled-opacity;
     }
   }
 
   &.secondary, &.success {
-    border: 1px solid $secondary-color !important;
+    border: 1px solid var(--brand-secondary, #{$secondary-color}) !important;
     &:hover:not(.disabled):not(.faux-button) {
-      color: darken($secondary-color, 10%) !important;
-      border: 1px solid darken($secondary-color, 10%) !important;
-      background: lighten($secondary-color, 40%) !important;
+      color: var(--brand-secondary-dark, #{darken($secondary-color, 10%)}) !important;
+      border: 1px solid var(--brand-secondary-dark, #{darken($secondary-color, 10%)}) !important;
+      background: var(--brand-secondary-pale, #{lighten($secondary-color, 40%)}) !important;
     }
 
     &.light {
-      color: $secondary-color !important;
+      color: var(--brand-secondary, #{$secondary-color}) !important;
       background: $white !important;
       &:hover:not(.disabled):not(.faux-button) {
-        color: darken($secondary-color, 20%) !important;
-        border: 1px solid darken($secondary-color, 10%) !important;
-        background: lighten($secondary-color, 40%) !important;
+        color: var(--brand-secondary-dark, #{darken($secondary-color, 20%)}) !important;
+        border: 1px solid var(--brand-secondary-dark, #{darken($secondary-color, 10%)}) !important;
+        background: var(--brand-secondary-pale, #{lighten($secondary-color, 40%)}) !important;
       }
     }
   }
@@ -100,7 +100,7 @@
   @extend .button;
   &.secondary, &.success {
     &:hover {
-      background: $secondary-color;
+      background: var(--brand-secondary, #{$secondary-color});
     }
   }
   &:hover {
@@ -126,7 +126,7 @@
 span.beta {
   vertical-align: super;
   font-size: 0.75em;
-  color: $primary-color;
+  color: var(--brand-link, #{$primary-color});
   &:before {
     content: 'beta';
   }
@@ -314,7 +314,7 @@ label.disabled {
     position: relative;
 
     &:hover {
-      box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+      box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
     }
   }
 }

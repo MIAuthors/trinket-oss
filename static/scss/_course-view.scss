@@ -41,7 +41,7 @@ body.course {
       background-color: #CCC;
       width: 100%;
       .percentage {
-        background-color: $secondary-color;
+        background-color: var(--brand-secondary, #{$secondary-color});
       }
     }
   }
@@ -65,7 +65,7 @@ body.course {
     border-radius: 0 $tab-border-radius $tab-border-radius 0;
     margin-top: 20px;
     padding: 20px 15px;
-    background-color: $primary-color;
+    background-color: var(--brand-primary, #{$primary-color});
     color: #FFF;
   }
 
@@ -175,7 +175,7 @@ body.course {
       padding-left: 20px;
       &.current,&.current:hover {
         font-weight: bold;
-        background: $primary-color;
+        background: var(--brand-primary, #{$primary-color});
         color: #FFF;
       }
       &:hover{

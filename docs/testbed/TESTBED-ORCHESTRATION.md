@@ -60,7 +60,7 @@ cd ~/Development/glow-repos/trinket-gcr && docker compose up -d
 
 ### One caveat unrelated to ports
 
-The trinket **app container's boot failure** (exit 1, "Firestore timed out after 5000ms" reaching `firebase:8080`) is a *separate* problem from the port collision — it's an app↔emulator startup/connectivity issue on the arm64 Mac, flagged in `TASK13.md` step 1. Fixing the port conflict does **not** fix that; it still needs debugging before a live end-to-end test. (See Part 2 — it may simply not reproduce on a native-amd64 host.)
+The trinket **app container's boot failure** (exit 1, "Firestore timed out after 5000ms" reaching `firebase:8080`) is a *separate* problem from the port collision — it's an app↔emulator startup/connectivity issue on the arm64 Mac, flagged in `docs/history/TASK13.md` step 1. Fixing the port conflict does **not** fix that; it still needs debugging before a live end-to-end test. (See Part 2 — it may simply not reproduce on a native-amd64 host.)
 
 ---
 
