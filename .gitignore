@@ -93,3 +93,6 @@ deploys/
 
 # Generated at build time by scripts/build-info.sh (stamps GET /version)
 build-info.json
+
+# Captured deploy sessions — live credentials, never commit.
+test/browser/.auth/
