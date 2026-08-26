@@ -435,7 +435,7 @@ routes = [
     config : { auth : 'session', pre : [ 'canInitiateLtiRegistration(user)' ] }
   },
   // ── LTI 1.3 (Tool) ──────────────────────────────────────────────────────────
-  // Public (no session); the launch establishes the session. See LTI-SPEC.md.
+  // Public (no session); the launch establishes the session. See docs/lti/LTI-SPEC.md.
   {
     route : 'GET /lti/jwks lti.jwks',
     config : {
