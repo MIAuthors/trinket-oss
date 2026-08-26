@@ -55,11 +55,31 @@
     return false;
   }
 
-  // options: { usesVPython, workerEnabled, queryRuntime, storedRuntime }
+  // options: { usesVPython, workerEnabled, workerVPython, queryRuntime, storedRuntime }
   function chooseRuntime(source, options) {
     var opts = options || {};
     var stored = (opts.storedRuntime === 'worker' || opts.storedRuntime === 'main')
       ? opts.storedRuntime : '';
+
+    // Opt-in (spec 2026-08-10 V1/V2): vpython-jupyter in the worker. The FLAG is
+    // the only gate — ?runtime=worker must not opt a class in by URL — but an
+    // explicit 'main' still escapes (query param, or the per-trinket stored
+    // runtime that arrived with #141 after the spec), so both are checked
+    // inline here rather than by the rules below, which this rule sits above.
+    //
+    // The lambda/comprehension guard is checked inline for the same reason, and
+    // it matters MORE here than on the python3 path. There, an un-awaited
+    // `rate()` is a call that simply happens synchronously. In a vpython worker
+    // run `rate`/`sleep` are coroutine FACTORIES: an un-awaited call constructs a
+    // coroutine and drops it — no flush, no pacing, no yield to the event loop.
+    // So the flag would turn a program that works on the main thread into one
+    // that renders nothing and spins, which is precisely the shape this guard
+    // was written to keep off the worker. Falling through lands on
+    // `usesVPython → main`, the right destination.
+    if (opts.usesVPython && opts.workerVPython && opts.queryRuntime !== 'main' &&
+        stored !== 'main' && !hasUnawaitableCall(source)) {
+      return { runtime: 'worker', vpython: true, reason: 'vpython: workerVPython flag routes to the worker runtime' };
+    }
 
     // VPython first: its bridge does `from js import sphere, box, rate, …`,
     // binding synchronously to the window realm. No choice of any kind can

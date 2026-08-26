@@ -186,7 +186,9 @@ features:
 
 - **Web VPython / GlowScript.** Its bridge binds `from js import sphere, box,
   rate, …` to the browser window, which does not exist in a worker. Unchanged,
-  deliberately: Stop already works there via `rate()`.
+  deliberately: Stop already works there via `rate()`. (A separate, experimental
+  flag — `features.workerVPython`, below — routes VPython through a *different*
+  worker path built on the `vpython` package; `workerRuntime` alone never does.)
 - Programs calling `input()`, `sleep()` or `rate()` inside a **lambda or a
   comprehension**, where `await` cannot be inserted. They keep working exactly as
   they do today; they just do not gain the freeze protection.
@@ -254,6 +256,356 @@ Settings ▸ Runtime** instead — see "Per-trinket setting" above.
 2. **Cold start after a stop.** The next run boots a fresh worker, so it is
    slower than a run that follows a normal finish.
 
+## Optional: run Web VPython off the main thread (`features.workerVPython`)
+
+> ⚠️ **Experimental — for a trial, not a production deploy.** The path is joined
+> up end to end and browser-tested: static scenes, `rate()` animations, Stop,
+> `scene.bind('click', …)` mouse handlers, camera interaction, `gcurve`/`gdots`
+> graphs and re-runs all work. (Key events — `bind('keydown', …)` — are wired on
+> the same path as mouse events but have **no test behind them**; treat them as
+> plausible, not verified.) What still gates it is validation, not plumbing —
+> a representative set of M&I programs (to be picked with Todd) has to render and
+> **animate correctly** first. That criterion used to read "identically to the
+> main-thread path"; it was amended once the main-thread path turned out to be
+> the one that paces wrongly (caveat 5), so a program that runs *nearer* its
+> requested `rate()` here than it does on the main thread has passed, not
+> failed. Six things to know before you turn it on — caveats 4 and 5 in
+> particular bear on how to judge a program:
+>
+> 1. **Every Run boots a fresh interpreter, so the Python namespace does NOT
+>    carry over between Runs — and this is a real, deliberate behaviour change
+>    from the main-thread path.** Read this one before you enable the flag.
+>
+>    trinket's *product model* has no persistent-namespace concept: pressing Run
+>    means "run this program from the top". That is the whole difference from
+>    Jupyter, Colab and VS Code, which keep one kernel alive across cell
+>    executions, and it is why the fresh interpreter is the right semantics here
+>    (design decision V7a).
+>
+>    But the main-thread *implementation* does not enforce that model. Every
+>    main-thread run executes in the same page-level `pyodide.globals`, so a name
+>    left behind by an earlier Run is still visible to the next one — an artifact
+>    of how that path was built, not a promise it makes, but observable all the
+>    same. `workerRuntime` python3 runs preserve it deliberately (decision V7).
+>
+>    So the concrete difference a deployer must know: **a program that only works
+>    because a previous Run left a variable behind works on the main thread and
+>    raises `NameError` under `workerVPython`.** That is the intended behaviour —
+>    the worker path matches the product model and the main-thread path does not —
+>    but it is a change, and a student who has been leaning on it will notice.
+>
+>    One knock-on, *only if `workerRuntime` is also on*: the interactive console
+>    then shares that same worker interpreter, so a VPython Run resets the console
+>    session too, and says so on the console rather than leaving it to be
+>    discovered. With `workerVPython` alone, the console runs on the page and a
+>    VPython Run does not touch it — the REPL follows `workerRuntime`, not this
+>    flag.
+>
+> 2. **Each Run therefore pays a cold boot — about 4 seconds** from click to
+>    rendered scene on the dev stack (measured: 4.1 s on the first run, 3.9 s on
+>    the second), being a fresh Pyodide plus the VPython wheel install. Pyodide's
+>    own artifacts do come from the browser cache; **trinket's own 3.5 MB VPython
+>    wheel does not** — `app.js` sends `no-store` on every response it serves, so
+>    the wheel is refetched in full on every Run. That is cheap on localhost and
+>    not cheap over the internet; it is the first follow-up below.
+>
+> 3. **A python3 worker session is thrown away by a VPython Run** — *only if
+>    `workerRuntime` is also on.* Every VPython Run discards the shared worker
+>    interpreter (caveat 1), and that interpreter is the same one plain python3
+>    runs have been accumulating names in. So a python3 Run, then a VPython Run,
+>    then a python3 Run means the third one starts empty — a divergence from the
+>    "python3 runs keep accumulating" behaviour `workerRuntime` gives on its own.
+>    Same mechanism as the console-session reset above; the console at least says
+>    so on screen, and this does not.
+>
+> 4. **`compound()`, `text()`, `extrusion()`, `obj.clone()` and
+>    `scene.mouse.pick` are deferred and raise.** They are not exotic in the M&I
+>    corpus, so read this before choosing a validation set. Each of them waits,
+>    inside the library, for a reply from the browser — and in a worker that
+>    reply can only be delivered by the very thread doing the waiting, so waiting
+>    can never end. They now raise `NotImplementedError` naming the construct,
+>    for the same reason `pause()` does: a deadlocked program shows a student no
+>    output, no error and a Stop button that works, which is the hardest possible
+>    thing to report. `?runtime=main` runs the program on the untouched
+>    main-thread bridge, where all five work.
+>
+> 5. **A `rate(N)` loop paces at N iterations/second — which the main-thread
+>    path does not do.** The worker's `rate()` subtracts the time the loop body
+>    already took from the sleep (a fixed timestep, as upstream
+>    vpython-jupyter's `RateKeeper` does with its measured `userTime`), so work
+>    inside the period is absorbed rather than added on top of it. The
+>    main-thread bridge calls GlowScript's own `rate()` from
+>    `glow.3.2.3.min.js`, which for `N <= 120` sleeps a flat `1000/N` ms and does
+>    **not** compensate. The two paths therefore still differ once the loop body
+>    is heavy — but the worker is now the *faster* of the two, and the one
+>    matching desktop VPython. Measured on the dev stack, 180 iterations of
+>    `rate(60)` with a busy-wait body:
+>
+>    | loop body | main thread | worker |
+>    |---|---|---|
+>    | (empty) | 52.0 Hz | 51.3–53.2 Hz |
+>    | 8 ms | 38.0 Hz | 54.2–54.6 Hz |
+>    | 20 ms | 25.8 Hz | 49.5–49.7 Hz |
+>
+>    A 20 ms body cannot exceed 50 Hz whatever `rate()` does, so that row is at
+>    its ceiling. Both paths land a few Hz short of the requested 60 even with an
+>    empty body — browser timer granularity plus the per-iteration scene update,
+>    present on both paths before and after this change. Closing that last few Hz
+>    is possible (anchor the next deadline at `max(last + period, now - period)`,
+>    which bounds catch-up to a single period) but deliberately not done: the
+>    residual is small, and paying for it with any amount of catch-up buys a
+>    burst of zero-sleep iterations after every hiccup. Read ~53 Hz on an empty
+>    `rate(60)` as normal, not as a broken fix.
+>
+>    **Ruled on, so a tester does not have to re-litigate it:** the acceptance
+>    criterion for this path was "renders and animates identically to the main
+>    path"; it is now **"animates correctly"**. The worker matches upstream
+>    desktop VPython, which is what a student's program was written against, and
+>    GlowScript's flat `rate()` is **filed as [vpython/rsWVPRunner#4](https://github.com/vpython/rsWVPRunner/issues/4)** as its own bug against the
+>    main-thread path rather than treated as something the worker should
+>    imitate. The *physics* is
+>    unaffected either way — M&I programs integrate with their own fixed `dt` —
+>    so what a side-by-side shows is a heavy loop running nearer its requested
+>    rate here than on the main thread. That is the expected result, not a
+>    finding.
+>
+> 6. **`size=` on `gcurve`/`gdots` is ignored — a REGRESSION against the default
+>    runtime.** `gdots(size=8)` gives 8-pixel dots on the main-thread bridge
+>    (`wvpython/vpython/core_funcs.py` forwards constructor kwargs straight to
+>    GlowScript) but the stock 6 under `workerVPython`. Cause: the packaged
+>    `vpython` library's `gobj.setup` assigns `self._size` directly, while `size`
+>    on `gobj` is a property derived from `_radius` — so the constructor argument
+>    is written to a dead attribute and never reaches the wire. This is an
+>    upstream vpython-jupyter bug, not trinket's. `radius=` is honoured on both
+>    paths and is the workaround. Setting `.size` *after* construction goes
+>    through the property setter and works on both paths too.
+>
+> 7. **No hidden star-imports — a python3 trinket gets nothing it did not
+>    import.** ✅ **CLOSED 2026-08-10 — this is no longer a divergence.** Both
+>    runtimes now obey the rule. It is written up here as a *behaviour change to
+>    the default runtime*, which is what it is, rather than as a gap.
+>
+>    It used to be one. The main-thread path ran `from math import *`,
+>    `from random import *` and `from vpython import *` before the student's code
+>    whenever `usesVPython(source)` matched (in `ensureVpython()`), and seeded
+>    bare `scene` / `rate` globals on top of that in `runVpython()`. The worker
+>    path never did, deliberately.
+>
+>    The consequence was visible: a program that says `import vpython as vp` and
+>    then uses a bare `color.red`, `sqrt(2)` or `random()` ran on the main thread
+>    and raised `NameError` under `workerVPython`. **The worker was right.** That
+>    program has a real bug — paste it into desktop VPython, a Jupyter notebook or
+>    plain Python and it fails there too. The main-thread path was propping it up.
+>    Both paths now raise the same `NameError` on the same line.
+>
+>    The rule this follows, by trinket type:
+>
+>    | trinket type | namespace |
+>    |---|---|
+>    | **Web VPython** (`glowscript`) | VPython names available by construction — the RapydScript compiler treats `from vpython import *` as the default (`GScompiler.js:503`) and delegates `random` to RapydScript-NG. Nothing to change; that is the environment those students expect. |
+>    | **Python** (`python3` / `pyodide`) | **Explicit imports only.** A Python trinket is a Python trinket, whatever library it happens to use. |
+>
+>    **Who this can break, in practice: almost nobody** (Steve, 2026-08-11).
+>    Using `vpython` inside a *Python* trinket is a capability added only weeks
+>    ago and barely known; the few people using it are not generally writing
+>    `from vpython import *` either. So the population at risk is small and
+>    recent, which is why this shipped as a straight fix rather than behind a
+>    deprecation. Web VPython trinkets — where the seeded namespace *is* the
+>    expected environment — are untouched: that type never reaches `pyodide.js`.
+>
+>    The seeding in `ensureVpython()` was copied from wmWVPRunner, which *is* a
+>    Web VPython runner, so it was right there and wrong here: it applied to a
+>    plain Python trinket whose source merely mentions vpython, and it shadowed
+>    builtins with `math`, `random` and `vpython` names the student never asked
+>    for.
+>
+>    **What survived the removal, and why it had to.** `runVpython()` still runs,
+>    before the student's code:
+>
+>    ```python
+>    import vpython as _vpy
+>    from js import scene as _js_scene
+>    from js import rate as _wrapped_rate
+>    _vpy.scene = _vpy.canvas(jsObj=_js_scene)   # the canvas rebuilt for THIS run
+>    _vpy.rate  = _wrapped_rate                  # the cancellation-wrapped rate
+>    ```
+>
+>    Those are **module attributes, not globals**, so they seed nothing. They
+>    still reach a student who writes `from vpython import *` herself, because
+>    `import vpython as _vpy` binds the module object in `sys.modules` — the same
+>    object her star-import reads from, at the moment it runs, which is after
+>    these assignments — and both names are in vpython's `__all__`. Verified by
+>    poisoning it: setting `_vpy.rate = None` makes her `rate(30)` raise
+>    `TypeError: 'NoneType' object is not callable`, so that assignment is
+>    demonstrably the channel her namespace is filled from.
+>
+>    (For `rate` specifically the assignment is currently belt-and-braces:
+>    `installRateCancellation()` wraps `window.rate` *before* `ensureVpython()` is
+>    awaited, so `core_funcs`' import-time `from js import rate` already captures
+>    the wrapped one. Removing the line does not break Stop today. It is kept
+>    because it is what pins the guarantee against a future reordering — the code
+>    comment there says so.)
+>
+>    **What a student does about it:** add `from vpython import *`, or prefix the
+>    names (`vp.color.red`, `vp.rate(100)`) — either is correct and portable.
+>
+>    Covered by `test/browser/specs/vpython-namespace.spec.js`, which runs the
+>    correct and the buggy form of the same real program on **both** runtimes, and
+>    guards the Stop-kills-a-`rate()`-loop behaviour on the main thread.
+>
+>    ⚠️ **One divergence remains, in the opposite direction, and it is OPEN.**
+>    `from vpython import *` supplies **math/random names on the worker but not on
+>    the main thread** — measured, both runtimes, on the dev stack:
+>
+>    | name | main thread | worker |
+>    |---|---|---|
+>    | `sqrt`, `pi`, `sin`, `cos`, `random` | **ABSENT** | **PRESENT** (`sqrt(4)` → `2.0`) |
+>    | `vector`, `color`, `scene`, `rate` | PRESENT | PRESENT |
+>
+>    The two paths run different vpython packages: the bespoke
+>    `public/js/embed/wvpython/vpython/__init__.py` declares a restrictive
+>    `__all__` of VPython names only; the worker's upstream `vpython-7.6.5` wheel
+>    declares no top-level `__all__` and so leaks the math/random names its
+>    submodules imported. The worker therefore matches **desktop VPython** (same
+>    package), and the main thread is now *stricter than desktop VPython* — so
+>    `from vpython import *` followed by `sqrt(2)` runs in a notebook, runs under
+>    `workerVPython`, and raises `NameError` on the default runtime.
+>
+>    This is a packaging difference, not the namespace rule: nothing is being
+>    seeded either way. Aligning them means adding the math/random names to the
+>    bespoke package's `__all__`, which changes what `from vpython import *` means
+>    on the default runtime — a product call, deliberately left to Steve rather
+>    than folded into the seeding removal.
+>
+>    🚫 **Do not "fix" this by stripping the imports from vpython-jupyter**
+>    (`vpython/__init__.py:53-56`, `from math import *` / `from numpy import
+>    arange` / `from random import random`). That was considered and rejected,
+>    and the reason is the distinction this whole caveat rests on:
+>
+>    * A module importing things into **its own namespace** is ordinary Python.
+>      `import vpython as vp` still requires `vp.random` — nothing has been done
+>      to the script's namespace. A developer who writes `from vpython import *`
+>      has explicitly asked for whatever that module exposes.
+>    * What WebVPython's interpreter does — and what trinket copied — is inject
+>      names into **the running script's own namespace, before the script runs**.
+>      The script never asked. *That* is the thing this rule forbids, and it is
+>      what was removed above.
+>
+>    So vpython-jupyter is not violating the rule and needs no change; removing
+>    those lines would break `from vpython import *` for every notebook and
+>    desktop user of the published PyPI package, to fix something that is not a
+>    problem.
+
+Default **`false`**. When enabled, Web VPython programs run through the
+`vpython-jupyter` package inside the Web Worker and GlowScript draws the scene on
+the page. The animation becomes killable — the page cannot freeze, and Stop halts
+a VPython loop the same way it halts any other worker program. The flag is
+**independent of `workerRuntime`**: a deploy can worker-ize VPython without
+worker-izing plain python3, or the other way round.
+
+```yaml
+features:
+  workerVPython: true
+```
+
+**The flag is the only gate.** `?runtime=worker` does **not** opt a program into
+this path — it cannot be enabled per-trinket by URL. `?runtime=main` still
+escapes it, sending the program back to the untouched main-thread bridge.
+
+**Which build is this deploy serving?** The two files this path adds
+(`public/components/vpython-worker/`) are build artifacts of the vpython-jupyter
+repo, copied in by `scripts/sync-vpython-worker.sh` — so "did the sync actually
+happen?" is a real question. The page answers it: run a VPython program with the
+flag on and the browser console prints, once,
+`[vpython] worker path: front-end 7.6.5 (…/glowcomm_host.js), wheel vpython-7.6.5-py3-none-any.whl`.
+The two versions should match; the sync script refuses to run if they do not.
+
+**Which *source* built that wheel?** Versions cannot answer this: the common
+mistake is editing vpython-jupyter, forgetting to rebuild, and syncing last
+week's wheel — same filename, same version, both gates pass. Two things address
+it. The sync script refuses when any source file under `$VPJ/vpython` is newer
+than the wheel in `dist/`, and it writes
+`public/components/vpython-worker/BUILD-INFO` recording the vpython-jupyter
+commit the wheel was built from (flagged `+ UNCOMMITTED CHANGES` when that
+checkout was dirty), which is committed alongside the binary so trinket's own
+history can answer the question. Note the `sha256:` line identifies *that
+artifact*, not the source: wheels are not byte-reproducible, so two builds of
+the same commit differ. The `source:` line is the one to read.
+
+**What changes when this is on:**
+
+| | |
+|---|---|
+| a static VPython scene | drawn by GlowScript from the worker's updates |
+| a VPython animation loop | paces normally and **Stop halts it** with the page responsive throughout — the point of the whole path |
+| Stop | discards the worker interpreter — the scene freezes where it stood and stays on screen, so it can still be orbited; it is not resumable |
+| Run pressed during a running animation | restarts the program from the top (the same fresh interpreter as any other Run) |
+| a re-run | replaces the scene and renders normally — no page reload needed, no objects stacking up from the previous run |
+| Python state | does **not** carry over between Runs — each Run is a fresh interpreter. This differs from **both** the main-thread VPython path *and* `workerRuntime` python3 runs, where variables from an earlier Run stay visible. Deliberate — see caveat 1 |
+| mouse / camera | `scene.bind('click', …)` and friends fire, and orbit/zoom/pan work. Key bindings ride the same path but are untested |
+| `gcurve` / `gdots` | plot — but `size=` at construction is ignored (see caveat 6) |
+| the interactive console | statements reach the scene — `ball.color = color.blue` at the prompt redraws it — but **only if `workerRuntime` is on too**, so the console and the VPython run share one interpreter |
+| `pause()` / `waitfor()` / widgets | not supported on this path; they raise `NotImplementedError` rather than silently doing nothing |
+| `compound()` / `text()` / `extrusion()` / `obj.clone()` / `scene.mouse.pick` | **also not supported**, same loud `NotImplementedError` (see caveat 4) |
+| animation speed | a `rate(N)` loop paces at ~N iterations/second with the loop body's own cost absorbed, so a heavy body runs *faster* here than on the main-thread path, which does not compensate (see caveat 5) |
+
+With the flag off, VPython behaves exactly as it always has (main thread,
+`from js import …` bridge) — that path is untouched.
+
+**Known follow-ups (none of these block a trial; all of them need an owner):**
+
+1. **`/components/` is served with `no-store`, so the 3.5 MB VPython wheel is
+   refetched on every Run.** The cheapest performance lever on this path by a
+   wide margin — the wheel already carries an etag, and a conditional GET returns
+   304 with 0 bytes, so it would revalidate happily if it were allowed to be
+   cached at all. The catch is that the header is set site-wide in `app.js`'s
+   shared `onPreResponse` extension (the same one that sets `Pragma`, `Expires`
+   and `X-Frame-Options`), with no path guard. Exempting `/components/` is a
+   **serving-policy change for the whole site** and wants its own review, not a
+   drive-by. **Needs an owner.**
+2. **The `gcurve`/`gdots` `size=` regression** (caveat 6) should be fixed
+   upstream in vpython-jupyter, in `gobj.setup`, rather than patched here.
+3. **`from time import sleep` breaks in a VPython program.** The async transform
+   awaits the *bare* names `rate` and `sleep`, so `sleep(1)` from `time` gets an
+   `await` inserted and raises `TypeError`. This is **not** a regression — it is
+   exact parity with the main-thread bridge, which shares the same transform —
+   but it is newly reachable, because VPython worker runs force the transform on.
+   `import time; time.sleep(1)` is untouched and is the workaround. The fix
+   belongs in the shared `_async_transform.py`, which has its own 35-test suite
+   and an obligation to stay in sync upstream.
+4. **A REPL statement in flight during a live VPython run may wedge the restart —
+   reasoned from the code, NOT reproduced.** `worker-client.js` tracks a single
+   in-flight `current` slot, so a console statement submitted mid-animation
+   overwrites the run's resolver; a Run pressed at that moment would settle the
+   REPL promise instead of the run, `finishRun()` would never fire, `rerunQueued`
+   would stay set and the Stop button would keep showing. It needs all three
+   conditions at once: **`workerRuntime` on as well** (otherwise the REPL never
+   goes through the worker at all — `pushRepl` is unreachable), the console open
+   with a statement in flight, and a live animation. Pre-existing shape, newly
+   reachable now that Run-during-a-run restarts. Recorded as a hypothesis with a
+   clear mechanism; it should be reproduced before it is fixed.
+5. **Widgets, `scene.pause()` / `scene.waitfor()`, and `compound()` / `text()` /
+   `extrusion()` / `obj.clone()` / `scene.mouse.pick` remain deferred** (design
+   decision V5). They raise a clear `NotImplementedError` naming the feature —
+   deliberately loud, because a `pause()` that does not pause changes what the
+   program means, and a `compound()` that deadlocks says nothing at all. The
+   five in caveat 4 are the ones worth *undeferring* one day: each is a
+   synchronous wait on a browser reply, and each would need the same treatment
+   `rate()` got — a coroutine the async transform can `await` — plus a way for
+   the library's own internal callers to await it too. That is a real piece of
+   work, not a patch.
+6. **PRE-EXISTING, NOT CAUSED BY THIS PATH — the console prompt disappears after
+   a normal Run, on every deploy, with no flags at all.** `replActive` in
+   `pyodide.js` is a latch: it is set when a prompt is armed and never cleared,
+   while `resetOutput()` kills the armed prompt on every Run and only `stopCode()`
+   re-arms it. So: open the Console, Run a program that *finishes*, and the
+   prompt is gone for good — and the Console menu entry does nothing to bring it
+   back, because it is guarded on `if (!replActive)` and `replActive` is still
+   true. Reproduce it on any current deploy before blaming `workerVPython`; this
+   branch neither causes it nor makes it worse (its change to `stopCode` restores
+   the prompt in strictly more cases than before). It wants its own issue and its
+   own fix — clearing the latch is a one-liner, but the surrounding REPL
+   lifecycle deserves a look at the same time.
 ## Optional: cache static assets (`app.cache.enabled`)
 
 Off by default. The stock behaviour sends `no-store` on **every** response, so

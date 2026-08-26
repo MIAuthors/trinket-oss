@@ -20,8 +20,15 @@ var PYODIDE_INDEX_URL = window.__PYODIDE_INDEX_URL__ || 'https://cdn.jsdelivr.ne
 // box, rate(), …) — the approach proven by webvpython's wmWVPRunner. The glow
 // library is the same build the `glowscript` trinket uses; the bridge zip is
 // the webvpython `vpython` package.
-var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.2.min.js';
+// 3.2.3 = the rsWVPRunner GCS build the Dockerfile provisions; 3.2.2 was the stale components-tarball fallback (spec 2026-08-10, decision V3).
+var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.3.min.js';
 var VPYTHON_ZIP_URL = '/js/embed/wvpython/vpython.zip';
+// The vpython-jupyter wheel the WORKER path installs (spec 2026-08-10) — a
+// different package from the main-thread bridge zip above. This name is the ONE
+// place the page says which file to fetch; scripts/sync-vpython-worker.sh reads
+// it back and refuses to sync a wheel that does not match, because a bump on one
+// side alone is a run-time 404 with nothing pointing at the cause.
+var VPYTHON_WHEEL_NAME = 'vpython-7.6.6.dev0-py3-none-any.whl';
 
 // Python code injected before user code runs each time a matplotlib program
 // executes.  Pyodide 0.28+ ships a Pyodide-patched WebAgg backend that reads
@@ -408,6 +415,23 @@ function replUsesWorker() {
   } catch (e) { return false; }
 }
 
+// A console statement can change the scene — `ball.color = color.blue` is the
+// whole point of having a REPL next to a 3D canvas — but only when both flags are
+// on, so the REPL and the VPython run share one worker interpreter. The update it
+// makes lands in the transport's buffer and stays there: the transport is
+// request/reply, and the clock that does the asking belongs to the RUN, which
+// ended. Nothing would flush it until some unrelated browser event happened to,
+// which for a still scene is never.
+//
+// So: one ping when the statement settles, which is the tick that statement is
+// owed. Deliberately the bare trigger rather than frontend.tick() — the clock is
+// stopped, pacingStopped() has already put the front-end in its flush-everything
+// state, and tick() would undo that.
+function flushVPythonAfterRepl() {
+  if (!vpythonFrontend || !workerClient) return;
+  workerClient.sendSceneEvent('[{"trigger":1}]');
+}
+
 // One REPL turn: read a (possibly multi-line) statement, evaluate, print, repeat.
 function startReplPrompt() {
   if (!jqconsole) return;
@@ -429,6 +453,7 @@ function startReplPrompt() {
       $('.stop-it').removeClass('hide');
       ensureWorkerClient().pushRepl(input).then(function() {
         $('.stop-it').addClass('hide');
+        flushVPythonAfterRepl();
         startReplPrompt();
       });
       return;
@@ -698,7 +723,8 @@ function setCancelRequested(v) {
   window.__trinket_cancel_requested = v;
 }
 var rerunQueued = false;      // a Run was clicked mid-run; re-run once it stops
-var runningIsVpython = false; // the in-flight run is a VPython program (cancellable)
+var runningIsVpython = false; // the in-flight run is a MAIN-THREAD VPython program (cancellable)
+var runningIsWorkerVPython = false; // ...and the worker-path equivalent (restartable by terminate)
 var vpythonBaselineCaptured = false; // folded vpython star-imports into the explorer baseline once
 
 // Wrap the global rate() so it rejects when cancellation is requested. Must run
@@ -931,19 +957,25 @@ function setupGlowScene() {
   return glowScene;
 }
 
-// Fetch + unpack the vpython package into Pyodide's FS and import it (plus the
-// math/random star-imports VPython programs assume). Memoized; assumes Pyodide
-// is ready and GlowScript globals exist. Mirrors wmWVPRunner's run sequence.
+// Fetch + unpack the vpython package into Pyodide's FS so `import vpython`
+// resolves. Memoized; assumes Pyodide is ready and GlowScript globals exist.
+//
+// NOTHING IS IMPORTED INTO THE USER'S NAMESPACE HERE — that is the rule, not an
+// omission (Steve's ruling, 2026-08-10; docs/DEPLOY-OVERLAY-GUIDE.md known-gap 7).
+// This used to run `from math import *`, `from random import *` and
+// `from vpython import *` before every program usesVPython() matched, a sequence
+// copied from wmWVPRunner. wmWVPRunner is a WEB VPYTHON runner, where those names
+// ARE the environment (the RapydScript compiler makes `from vpython import *` the
+// default). Here the trinket is a PLAIN PYTHON trinket that merely mentions
+// vpython, and seeding it shadowed builtins with names the student never imported
+// — propping up programs (`import vpython as vp`, then a bare `color.red`) that
+// fail in desktop VPython, in a notebook and in plain Python. A python3 trinket
+// now gets exactly what it imports, on both runtimes.
 function ensureVpython() {
   if (vpythonLoading) return vpythonLoading;
   vpythonLoading = fetch(VPYTHON_ZIP_URL)
     .then(function(r) { return r.arrayBuffer(); })
-    .then(function(buf) {
-      pyodide.unpackArchive(buf, 'zip');
-      return pyodide.runPythonAsync('from math import *');
-    })
-    .then(function() { return pyodide.runPythonAsync('from random import *'); })
-    .then(function() { return pyodide.runPythonAsync('from vpython import *'); });
+    .then(function(buf) { pyodide.unpackArchive(buf, 'zip'); });
   return vpythonLoading;
 }
 
@@ -983,19 +1015,35 @@ function runVpython(prog) {
     return ensureVpython();
   }).then(function() {
     // The bridge binds `scene` and `rate` to window.* at import time (once).
-    // Re-point them in Python before the user code imports them:
+    // Re-point them ON THE MODULE before the user code imports anything:
     //  - scene: the canvas was rebuilt above, so target the fresh one.
-    //  - rate:  bind to the cancellation-wrapped window.rate so a re-run can
-    //           interrupt the loop (the import-time binding caught the
-    //           unwrapped rate, defeating cancellation otherwise).
+    //  - rate:  bind to the cancellation-wrapped window.rate so a re-run (or
+    //           Stop) can interrupt the loop.
+    //
+    // MODULE ATTRIBUTES ONLY — no bare `scene = …` / `rate = …` globals. Those
+    // were removed with the star-imports above (known-gap 7): a python3 trinket
+    // gets only what it imports. The re-pointing is unaffected, because
+    // `import vpython as _vpy` binds THE module object in sys.modules — the very
+    // same object a student's own `from vpython import *` then reads from, and it
+    // reads at import time, i.e. after these two assignments. Both names are in
+    // vpython's `__all__`, so a student who writes that import still receives the
+    // WRAPPED rate and the CURRENT scene. Proven by poisoning it: setting
+    // `_vpy.rate = None` makes her `rate(30)` raise TypeError, so this really is
+    // the channel her namespace is filled from.
+    //
+    // `_vpy.scene` is load-bearing every run — setupGlowScene() destroyed the old
+    // canvas, so without it a re-run draws into a dead one. `_vpy.rate` is
+    // currently belt-and-braces: installRateCancellation() above wraps
+    // window.rate BEFORE ensureVpython() is awaited, so core_funcs' import-time
+    // `from js import rate` already captured the wrapped one, and removing this
+    // line does not break Stop today (measured). Keep it anyway — it is what pins
+    // the guarantee if that ordering is ever changed. Not dead code.
     return pyodide.runPythonAsync(
       'import vpython as _vpy\n' +
       'from js import scene as _js_scene\n' +
       'from js import rate as _wrapped_rate\n' +
       '_vpy.scene = _vpy.canvas(jsObj=_js_scene)\n' +
-      '_vpy.rate = _wrapped_rate\n' +
-      'scene = _vpy.scene\n' +
-      'rate = _wrapped_rate\n'
+      '_vpy.rate = _wrapped_rate\n'
     );
   }).then(function() {
     // Load bundled packages the program imports (numpy, matplotlib, …).
@@ -1009,10 +1057,15 @@ function runVpython(prog) {
       return pyodide.runPythonAsync(MATPLOTLIB_SETUP_CODE);
     }
   }).then(function() {
-    // Everything in globals now is library/bootstrap (the vpython/math/random
-    // star-imports, scene, rate, …). Fold it into the explorer baseline once so
-    // those names are hidden — but only once, so vars created by earlier runs
-    // stay visible on re-runs.
+    // Everything in globals now is library/bootstrap, not the student's. Since
+    // the star-imports went (known-gap 7) that is a much shorter list: the
+    // `_vpy` module handle, the `_js_scene` / `_wrapped_rate` js handles, and
+    // whatever `import vpython` / the matplotlib setup left behind (`matplotlib`
+    // itself; MATPLOTLIB_SETUP_CODE dels its own `_plt`). Fold it into the
+    // explorer baseline once so those names are hidden — but only once, so vars
+    // created by earlier runs stay visible on re-runs. Still needed even though
+    // the underscore trio is also in VARS_HELPER's _SKIP: _SKIP does not know
+    // about the module-level names an import drags in.
     if (!vpythonBaselineCaptured) {
       try { pyodide.runPython('__trinket_baseline__ |= set(globals().keys())'); } catch (e) {}
       vpythonBaselineCaptured = true;
@@ -2059,6 +2112,7 @@ function ensureWorkerClient() {
     varsHelper   : VARS_HELPER,
     onStdout   : function(text) { writeStream(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
+    onSceneOps : function(msg) { handleWorkerSceneOps(msg); },
     onInputRequest : function(prompt) {
       // The same jq-console widget console.input() uses, so a prompt looks
       // identical whichever runtime is executing.
@@ -2213,6 +2267,272 @@ function applyMplToolbarIcons(fig) {
   });
 }
 
+// --- Worker VPython: page host for the vpython-jupyter front-end -----------
+//
+// The page half of the `scene-ops` stream (spec 2026-08-10). vpython's
+// trinket_worker transport, running in the worker, emits glowcomm-format
+// packages; createGlowFrontend — the port that LIVES IN vpython-jupyter and
+// knows nothing about trinket — turns them into GlowScript objects. This shim
+// owns the three things the front-end deliberately does not: the DOM the scene
+// lives in, the pacing clock the transport is built around, and the generation
+// counter that tells a live scene from a torn-down one.
+var GLOWCOMM_HOST_SRC = '/components/vpython-worker/glowcomm_host.js';
+var SCENE_PACE_MS     = 33;    // glowcomm.js's canvas_update rate
+var SCENE_DRAIN_MS    = 500;   // how long the clock keeps running past the run's end
+
+var vpythonFrontend        = null;  // the front-end for the CURRENT generation
+var vpythonFrontendLoading = null;  // memoized glow + glowcomm_host.js load
+var vpythonGeneration      = 0;     // bumped by resetVPythonScene, every run
+var vpythonPacer           = null;  // the trigger loop
+var vpythonDrainTimer      = null;  // its post-run wind-down
+var vpythonSceneFailed     = false; // report a broken scene once, not 30×/second
+var vpythonUnsolicited     = 0;     // packages the program pushed since the last tick
+
+// Read by the browser specs, like window.__trinketRuntime: the live generation,
+// how many packages were rendered vs. dropped as stale, and the front-end itself
+// (whose _objs() is how a test sees whether a package actually landed). Nothing
+// on the page consumes it — it is the only observable the generation contract
+// and the render path have.
+window.__vpythonScene = { generation: 0, handled: 0, dropped: 0, frontend: null };
+
+// The transport is request/reply: it flushes buffered updates only when the host
+// pings it (or when rate() flushes from inside the program), exactly as
+// glowcomm.js drives the Jupyter kernel from the browser's canvas_update timer.
+// Without this clock a program that never calls rate() — any static scene —
+// would build its objects in Python and never draw a single one.
+//
+// The clock belongs to the RUN, not to the scene. It is a polling loop against
+// another thread, so leaving it on for a finished program costs 30 worker round
+// trips a second for as long as the tab is open, and buys nothing: orbiting the
+// camera is glow's own work on this thread, and trinket_worker._dispatch answers
+// every event we send with a flush — so a live scene needs a ping only when there
+// is actually something to say, which is exactly when we are already sending.
+// TWO CLOCKS. There are two things that can make the worker flush: this pacer,
+// and rate() inside the student's own loop (trinket_worker._async_rate triggers
+// a render up to rate_control.MAX_RENDERS=60 times a second). While an animation
+// is running the second one is doing the whole job, and the handshake this timer
+// sends is pure packet overhead on the hottest path in the system — measured at
+// 91 host messages against 254 packages over three seconds, i.e. ~36% of the
+// traffic buying nothing.
+//
+// It is NOT redundant the rest of the time: a static scene, and every event
+// after a program has ended, arrive only because this clock asked. So the pacer
+// asks only while nothing is flushing on its own, and while the program IS
+// flushing it does the half of a tick that is still needed — send the browser's
+// queued events and any camera/mouse change, and otherwise stay quiet.
+//
+// "Flushing on its own" is not guessed from message rates: the kernel marks
+// every package `solicited`, false when the send did not happen inside a
+// scene-event dispatch (pyodide-worker.js). Without that flag the signal would
+// be circular — the transport answers EVERY trigger we send with a flush, so
+// inbound traffic alone can never distinguish a busy program from our own echo.
+function startVPythonPacer() {
+  if (vpythonPacer) return;
+  vpythonUnsolicited = 0;
+  vpythonPacer = setInterval(function() {
+    if (!workerClient) { stopVPythonPacer(); return; }
+    var selfFlushing = vpythonUnsolicited > 0;
+    vpythonUnsolicited = 0;
+    // The page owns WHEN a tick happens; the front-end owns WHAT is in it —
+    // mouse position, camera state the student orbited to, and any events
+    // queued since the last tick (Task 9). fe.tick() sends through the same
+    // `send` this shim gave it, so the wire is unchanged for a still scene: a
+    // bare {event:'update_canvas', trigger:1}. Before the front-end exists (the
+    // first ticks of a cold run, while glow is still loading) the page sends
+    // that handshake itself so the transport's request/reply rhythm never stops.
+    if (vpythonFrontend) {
+      if (selfFlushing) vpythonFrontend.poll();
+      else vpythonFrontend.tick();
+    } else if (!selfFlushing) {
+      workerClient.sendSceneEvent('[{"trigger":1}]');
+    }
+  }, SCENE_PACE_MS);
+}
+
+function stopVPythonPacer() {
+  if (vpythonPacer) { clearInterval(vpythonPacer); vpythonPacer = null; }
+  if (vpythonDrainTimer) { clearTimeout(vpythonDrainTimer); vpythonDrainTimer = null; }
+  // TELL the front-end, rather than leaving it to infer from how long ago the
+  // last tick was. The inference has a window: an event arriving in the ~100 ms
+  // after the final tick still looks like it has a tick coming, so it waits for
+  // one that will never happen. Only the page knows the clock is gone.
+  if (vpythonFrontend) { try { vpythonFrontend.pacingStopped(); } catch (e) {} }
+}
+
+// The run has settled (finished, or failed). Wind the clock down: keep ticking
+// briefly, because the objects a program created in its final moments are still
+// sitting in the transport's buffer, and only a ping gets them out. Then stop
+// for good.
+//
+// The drain is unconditional, deliberately. An earlier version skipped it when
+// nothing had come back yet, to avoid pinging a worker whose wheel install had
+// failed — but "nothing back yet" is not a reliable sign of a broken run, and
+// getting it wrong deadlocks the scene rather than the reverse. Draining
+// regardless costs a failed run ~15 no-op messages and orphans nothing.
+function finishVPythonPacing() {
+  if (!vpythonPacer || vpythonDrainTimer) return;
+  vpythonDrainTimer = setTimeout(function() {
+    vpythonDrainTimer = null;
+    stopVPythonPacer();
+  }, SCENE_DRAIN_MS);
+}
+
+// Say, once, what this page is actually serving.
+//
+// `public/components/vpython-worker/` holds build artifacts of ANOTHER
+// repository (vpython-jupyter), fetched from a sha256-pinned upstream release
+// (Dockerfile ARG block; scripts/sync-vpython-worker.sh for local dev). The
+// front-end JS and the Python wheel are two halves of one protocol, and
+// nothing at run time checks that they match. The spec's two-repo mitigation
+// was "wheel filename carries the version; host shim logs both at boot"; this
+// is that line. It turns "is my stack serving what I just built?" into
+// something answerable from devtools instead of by unzipping a wheel. Once
+// per page: it fires from the memoized loader, not per run.
+var vpythonVersionsLogged = false;
+function logVPythonVersions() {
+  if (vpythonVersionsLogged) return;
+  vpythonVersionsLogged = true;
+  var fe = window.createGlowFrontend;
+  var feVersion = (fe && fe.version) || 'unknown';
+  try {
+    console.log('[vpython] worker path: front-end ' + feVersion +
+                ' (' + GLOWCOMM_HOST_SRC + '), wheel ' + VPYTHON_WHEEL_NAME);
+  } catch (e) { /* no console: nothing to do, and nothing to break */ }
+}
+
+// Load glow (the main path's loader — same library, same build, one copy) and
+// the front-end factory. Memoized; a failure is not cached, so a transient fetch
+// error does not poison every later run (see ensureConsoleTransform).
+function ensureVPythonFrontendLib() {
+  if (vpythonFrontendLoading) return vpythonFrontendLoading;
+  vpythonFrontendLoading = ensureGlow().then(function() {
+    if (typeof window.createGlowFrontend === 'function') { logVPythonVersions(); return; }
+    return new Promise(function(resolve, reject) {
+      var s = document.createElement('script');
+      s.src = GLOWCOMM_HOST_SRC;
+      s.onload = function() { logVPythonVersions(); resolve(); };
+      s.onerror = function() { reject(new Error('Failed to load the VPython scene renderer.')); };
+      document.head.appendChild(s);
+    });
+  }).catch(function(e) {
+    vpythonFrontendLoading = null;
+    throw e;
+  });
+  return vpythonFrontendLoading;
+}
+
+// The front-end for the current generation, creating it (and its DOM) on first
+// use. The scene gets its own child of #graphic — the same pane matplotlib
+// figures use — because resetOutput() empties #graphic on every run, which is
+// precisely the "the scene does not survive a run" behaviour we want.
+function ensureVPythonFrontend() {
+  if (vpythonFrontend) return Promise.resolve(vpythonFrontend);
+  var gen = vpythonGeneration;
+  return ensureVPythonFrontendLib().then(function() {
+    if (vpythonFrontend) return vpythonFrontend;   // a concurrent call got there first
+
+    // A reset raced the one-off glow load — which takes long enough for a student
+    // to hit Run again. The caller checks this too, but too late: by then this
+    // function has already built the scene's DOM and split the output pane, so a
+    // console-only run would open a graphic pane it never uses. Nothing to build.
+    if (gen !== vpythonGeneration) return null;
+
+    var holder = document.getElementById('vpython-scene');
+    if (!holder) {
+      holder = document.createElement('div');
+      holder.id = 'vpython-scene';
+      holder.className = 'glowscript';
+      (document.getElementById('graphic') || document.body).appendChild(holder);
+    }
+    showGraphic();
+
+    // GlowScript reads its mount point off window.__context. The factory merges
+    // into that object when the canvas cmd arrives, but glow's own scratch space
+    // (canvas_selected, canvas_all, print_container) has to exist first, and the
+    // container has to be the jQuery object glow expects — never a raw element.
+    var ctx = window.__context || (window.__context = {});
+    ctx.glowscript_container = $(holder);
+
+    vpythonFrontend = window.createGlowFrontend({
+      container: holder,
+      // Outbound events — mouse and key events, camera state, picks, compound
+      // geometry — ride the same channel the pacing trigger does.
+      send: function(events) {
+        if (workerClient) { workerClient.sendSceneEvent(JSON.stringify(events)); }
+      }
+    });
+    window.__vpythonScene.frontend = vpythonFrontend;
+    return vpythonFrontend;
+  });
+}
+
+// One update package from the worker's vpython transport.
+function handleWorkerSceneOps(msg) {
+  // Ops from a scene this page has already torn down. A vpython re-run discards
+  // the whole interpreter, but terminate() does not un-post what the dying
+  // worker already put on the page's message queue, so packages belonging to the
+  // previous scene can still arrive after the new one starts; the generation tag
+  // is the only thing that distinguishes them. Drop them — drawing them into the
+  // new scene would mix two runs' objects.
+  if ((msg.generation | 0) !== vpythonGeneration) {
+    window.__vpythonScene.dropped++;
+    return;
+  }
+
+  // The program flushed this one itself (rate()), rather than it being the reply
+  // to a trigger we sent. That is what tells the pacer to get out of the way —
+  // see startVPythonPacer. `=== false` and not `!msg.solicited`: an absent flag
+  // must mean "keep pacing", the behaviour that was here before the flag was.
+  if (msg.solicited === false) { vpythonUnsolicited++; }
+
+  var gen = vpythonGeneration;
+  ensureVPythonFrontend().then(function(fe) {
+    // A reset raced the library load. (`fe` is null for the same reason — see
+    // ensureVPythonFrontend — but check the generation too: a package can also
+    // arrive against a front-end built for a scene that has since been replaced.)
+    if (!fe || gen !== vpythonGeneration) return;
+
+    // The FIRST package after the transport boots is the bare string "trigger",
+    // not an ops object (the eager boot flushes an empty buffer). handle()
+    // treats it as the no-op handshake it is.
+    var ops = null;
+    try { ops = JSON.parse(msg.ops); } catch (e) { return; }
+    window.__vpythonScene.handled++;
+    fe.handle(ops);
+  }).catch(function(e) {
+    if (vpythonSceneFailed) return;             // the pacer would repeat this 30×/second
+    vpythonSceneFailed = true;
+    writeOut('[vpython] the 3D scene could not be drawn: ' +
+             ((e && e.message) || e) + '\n');
+  });
+}
+
+// A scene belongs to ONE run. Called at the start of EVERY run — including
+// python3 and ?runtime=main runs, which is the point: a scene must not outlive
+// the program that drew it whatever the next program turns out to be. Runs
+// before the run message is posted, so the generation the kernel is told is
+// already the new one.
+function resetVPythonScene() {
+  vpythonGeneration++;
+  window.__vpythonScene.generation = vpythonGeneration;
+  vpythonSceneFailed = false;
+  // Drop the reference BEFORE stopping the clock. stopVPythonPacer() flushes the
+  // front-end's queue on the way out, which is right when a live scene loses its
+  // clock — but not here: these events name idxs from the scene being torn down,
+  // and Python's registry (which survives the run) would resolve them against
+  // whatever the next generation puts at those idxs.
+  var dying = vpythonFrontend;
+  vpythonFrontend = null;
+  stopVPythonPacer();
+  if (dying) {
+    try { dying.destroy(); } catch (e) {}
+  }
+  window.__vpythonScene.frontend = null;
+  // Usually already gone — resetOutput() empties #graphic just before this.
+  var holder = document.getElementById('vpython-scene');
+  if (holder) { holder.innerHTML = ''; }
+}
+
 function handleWorkerFigure(msg) {
   var wrap = document.getElementById('graphic');
   if (!wrap) return;
@@ -2266,10 +2586,54 @@ function handleWorkerFigure(msg) {
   }
 }
 
-function runInWorker(program, files, serialized) {
+// `decision` is the runtime-router result for this program; `decision.vpython`
+// marks the opt-in worker VPython path so the kernel can install the wheel.
+function runInWorker(program, files, serialized, decision) {
   workerRunError = null;
   mplFigures = {};              // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
+
+  // A VPython run starts from a FRESH INTERPRETER (spec V7a).
+  //
+  // This is the HOST'S semantics, not a workaround: Jupyter, Colab and VS Code
+  // keep a kernel alive between cell runs, and Web VPython and trinket do not —
+  // pressing Run here means "run this program from the top", and there is no
+  // persistent namespace for a student to reason about. vpython's
+  // `scene = canvas()` at import time only makes that unavoidable: on a warm
+  // worker the import is already done, so run 2's objects attach to run 1's
+  // canvas, which the page tore down when it bumped the generation, and run 2
+  // draws nothing at all (measured before this line existed: generation 2, 53
+  // packages handled by the page across both runs, zero objects in the scene).
+  //
+  // The cost is a cold start per run: a Pyodide boot, loadPackage('numpy',
+  // 'micropip'), and unpacking/installing the wheel. ~4 s on the dev stack.
+  // MEASURED, because the obvious guess is wrong: Pyodide's own artifacts (2.4 MB
+  // stdlib, 2.7 MB wasm, 3.1 MB numpy) come from jsdelivr and are served from the
+  // browser cache on run 2, but OUR wheel is refetched in full — all 3,516,355
+  // bytes — because app.js:65 puts `no-store` on every response trinket sends.
+  // It carries an etag, so exempting /components/ from that blanket policy would
+  // make it a 304. See the spec (V7a) for that and the standby-worker lever.
+  // python3 runs never take this branch.
+  if (decision && decision.vpython) {
+    runningIsWorkerVPython = true;   // Run-while-running restarts this; see runCode()
+    var hadInterpreter = workerClient.discardWorker();
+    // ...and if the student had a console session in that interpreter, its
+    // variables have just gone. stopCode() says so when Stop discards the
+    // interpreter; a Run that discards it owes the same explanation, or `x` is
+    // simply undefined at the next prompt for no visible reason. resetOutput()
+    // has already cleared the console, so this is the first line they see.
+    //
+    // replUsesWorker() is the third condition and it is not redundant:
+    // `replActive` only means a prompt is up, and the REPL follows
+    // `workerRuntime`, NOT `workerVPython` (see replUsesWorker). With
+    // workerVPython on and workerRuntime off the console session lives in the
+    // page's own pyodide.globals, which this discard does not touch — so the
+    // message would tell the student their session was reset when it was not.
+    // A false statement in the console is worse than no statement.
+    if (hadInterpreter && replActive && replUsesWorker()) {
+      writeOut('[console session reset — a VPython run starts a fresh interpreter]\n');
+    }
+  }
 
   writeOut('Loading Python (Pyodide)…\n');
 
@@ -2287,8 +2651,38 @@ function runInWorker(program, files, serialized) {
   });
   if (!graphicWidth) { graphicWidth = Math.round(window.innerWidth / 2); }
 
-  return workerClient.run(program, files, { graphicWidth: graphicWidth }).then(function() {
+  // Start the pacing clock BEFORE the run: the transport only flushes when the
+  // host pings it, so the clock has to exist before there is anything to flush.
+  //
+  // Every vpython run now boots its own interpreter, so the transport's eager
+  // boot handshake does arrive unprompted on every run and the clock could in
+  // principle be started by it instead. It is not, for two reasons: the boot
+  // flush is the only unprompted one — everything after it needs a ping, so a
+  // handshake lost to a race would strand the whole scene — and a run whose
+  // wheel install FAILS never sends anything at all, which would leave the page
+  // waiting on a signal that is not coming. Pings that arrive before the
+  // transport exists are dropped in the worker, by design (createSceneChannel).
+  if (decision && decision.vpython) { startVPythonPacer(); }
+
+  return workerClient.run(program, files, {
+    graphicWidth: graphicWidth,
+    vpython: !!(decision && decision.vpython),
+    wheelUrl: '/components/vpython-worker/' + VPYTHON_WHEEL_NAME,
+    // resetVPythonScene() bumped this in startRun, before we got here.
+    sceneGeneration: vpythonGeneration
+  }).then(function() {
+    // Resolves on success AND on error (worker-client settles both), which is
+    // what we want: a wheel that failed to install must not leave the clock
+    // ticking at a worker that has no transport to answer it.
+    finishVPythonPacing();
+    // finishRun() consumes rerunQueued and may start the next run SYNCHRONOUSLY,
+    // so read it first. A restart (Run clicked during a live animation) must not
+    // then snapshot: by the time the reply came back it would be describing the
+    // NEW run's half-built namespace, and it would be asking a worker that is
+    // busy booting.
+    var restarting = rerunQueued;
     finishRun(serialized, workerRunError);
+    if (restarting) return;
 
     // finishRun() takes the MAIN-THREAD namespace snapshot, which is empty here
     // because this page's Pyodide never ran the program. Ask the worker instead
@@ -2349,6 +2743,25 @@ function runCode() {
     if (runningIsVpython) {
       setCancelRequested(true);
       rerunQueued = true;
+      return;
+    }
+
+    // The same promise for the WORKER VPython path, by the mechanism that path
+    // already uses. This is the shape the whole feature exists for: a VPython
+    // program is `while True: rate(60)`, it never ends, and a student edits a
+    // number and hits Run. Without this, Run does nothing until they think to
+    // press Stop first — and on the main-thread bridge the same click restarts.
+    //
+    // Not cooperative cancellation: there is nothing to cancel cooperatively,
+    // because a worker run is killed by terminate(). discardWorker() IS the
+    // restart — it settles the in-flight run, whose completion handler sees
+    // rerunQueued and starts the fresh one, and the next run was going to
+    // discard the interpreter anyway (V7a). Deliberately vpython-only:
+    // Run-while-running is ignored for python3 worker runs exactly as it is on
+    // the main thread, and nothing here changes that.
+    if (runningIsWorkerVPython && workerClient && workerClient.isRunning()) {
+      rerunQueued = true;
+      workerClient.discardWorker();
     }
     return;
   }
@@ -2363,6 +2776,7 @@ function startRun() {
   $('.stop-it').removeClass('hide');
   rerunQueued = false;
   runningIsVpython = false;
+  runningIsWorkerVPython = false;
 
   if (window.parent) {
     window.parent.postMessage("started", "*");
@@ -2373,6 +2787,13 @@ function startRun() {
   initConsoleOutput();
   resetOutput();
   $('#console-output').removeClass('console-mode');
+
+  // resetOutput() has just destroyed the graphic pane's contents, so any worker
+  // VPython scene from the previous run is now a detached DOM node with a live
+  // render loop. Tear it down and take the next generation — unconditionally,
+  // because a stale scene must not survive a run that isn't VPython at all (or
+  // that escaped to the main thread with ?runtime=main) either.
+  resetVPythonScene();
 
   // Default to a console-only layout each run; showGraphic() re-splits the pane
   // when the code uses matplotlib.
@@ -2398,6 +2819,7 @@ function startRun() {
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
+    workerVPython : !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython),
     queryRuntime  : queryRuntime,
     storedRuntime : getStoredRuntime()
   });
@@ -2411,7 +2833,7 @@ function startRun() {
 
   if (decision.runtime === 'worker') {
     running = true;
-    return runInWorker(workerProgram, workerFiles, serializedCode);
+    return runInWorker(workerProgram, workerFiles, serializedCode, decision);
   }
 
   if (!pyodideReady) {
@@ -2517,21 +2939,44 @@ function stopCode() {
     rerunQueued = false;             // Stop means stop, not restart
     workerClient.stop();
 
+    // The interpreter is gone, so there is nothing left to ping: stop the clock
+    // but leave the scene on the page. A stopped VPython program freezes where
+    // it stood rather than vanishing — the student can still look at it (and
+    // orbit it: rotation is glow's, on this thread).
+    stopVPythonPacer();
+
     // Terminating discards the interpreter, so there is no post-run namespace.
     // With the explorer on, an empty table would read as "your program defined
     // nothing" — say why instead, in the console the student is already reading.
     // (#debug-note belongs to the step debugger, which may not be enabled.)
-    if (replActive) {
+    // The MESSAGE is gated on replUsesWorker(), not on `replActive` alone: a
+    // prompt being up does NOT mean the session lives in the worker we just
+    // killed. The REPL follows `workerRuntime`, while a VPython run reaches this
+    // branch under `workerVPython` — so in the workerVPython-only config the
+    // console session is in the page's own pyodide, untouched by terminate(),
+    // and telling the student it was reset would be false.
+    if (replActive && replUsesWorker()) {
       // Terminating discards the interpreter, so the console session's variables
       // are gone. Say so rather than letting a student wonder why `x` vanished.
       writeOut('\n[stopped — console session reset]\n');
-      startReplPrompt();
     } else if (variableExplorerEnabled()) {
       writeOut('\n[stopped — variables unavailable, the interpreter was discarded]\n');
       try { renderVariables([]); } catch (e) {}
     } else {
       writeOut('\n[stopped]\n');
     }
+
+    // The PROMPT comes back regardless of which of those was printed, and this
+    // is deliberately NOT gated the way the message is. resetOutput() calls
+    // jqconsole.Reset() at the start of every run, which kills the armed prompt,
+    // and this is the only site that re-arms one afterwards (a normal completion
+    // has no re-arm at all). Gating it would leave a page-hosted REPL — the case
+    // where the session genuinely survived — with no prompt and no way back:
+    // the Console menu entry is `if (!replActive) startRepl()` and `replActive`
+    // is never cleared anywhere, so re-selecting Console is a no-op and only a
+    // reload recovers. Re-arming is most honest exactly where the message is
+    // wrong: the session really is still there.
+    if (replActive) startReplPrompt();
     return;                          // the run promise settles and calls finishRun()
   }
 
