@@ -45,6 +45,77 @@ describe('chooseRuntime', () => {
   });
 });
 
+describe('workerVPython (opt-in worker path for VPython)', () => {
+  it('routes VPython to the worker when the flag is on', () => {
+    const r = chooseRuntime('from vpython import *\nsphere()', { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.runtime).toBe('worker');
+    expect(r.reason).toMatch(/vpython.*worker|workerVPython/i);
+  });
+  it('flag off → VPython stays on main (D2 unchanged)', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: false });
+    expect(r.runtime).toBe('main');
+  });
+  it('?runtime=main beats the flag (escape hatch)', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true, queryRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+  });
+  it('a stored runtime=main beats the flag too — #141 stored setting is an author decision', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true, storedRuntime: 'main' });
+    expect(r.runtime).toBe('main');
+  });
+  it('?runtime=worker does NOT enable the vpython path by URL', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: false, queryRuntime: 'worker' });
+    expect(r.runtime).toBe('main');
+  });
+  it('marks the decision so the kernel can install the wheel', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.vpython).toBe(true);
+  });
+  // The two flags are independent: workerVPython is not "workerRuntime, plus
+  // VPython". A deploy may run python3 on the main thread and still opt VPython
+  // into the worker. This is the direction that matters — it fails if the rule
+  // is ever moved BELOW the `workerEnabled` check.
+  it('does not require workerRuntime — the vpython flag stands alone', () => {
+    const r = chooseRuntime('sphere()', { ...OPTS, usesVPython: true, workerVPython: true, workerEnabled: false });
+    expect(r.runtime).toBe('worker');
+    expect(r.vpython).toBe(true);
+  });
+  it('a non-vpython program is not marked', () => {
+    expect(chooseRuntime('print(1)', OPTS).vpython).toBeFalsy();
+  });
+
+  // The lambda/comprehension guard applies HERE TOO, and the consequence of
+  // skipping it is worse than on the python3 path. In a vpython worker run
+  // `rate`/`sleep` are coroutine factories, so a call the transform could not
+  // put `await` in front of constructs a coroutine and throws it away: no
+  // flush, no pacing, no yield — a hot spin drawing nothing. The same program
+  // on the main thread works, because there `rate` is synchronous. So the flag
+  // must not take it off the main thread.
+  const COMPREHENSION_VPYTHON =
+    'from vpython import *\nballs = [sphere(pos=vec(i,0,0)) for i in range(3)]\n' +
+    'while True:\n    [rate(30) for b in balls]\n';
+  const LAMBDA_VPYTHON =
+    'from vpython import *\nb = sphere()\nstep = lambda: rate(30)\n' +
+    'while True:\n    step()\n';
+
+  it('a comprehension calling rate() stays on main even with the flag on', () => {
+    const r = chooseRuntime(COMPREHENSION_VPYTHON, { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.runtime).toBe('main');
+    expect(r.vpython).toBeFalsy();
+  });
+  it('a lambda calling rate() stays on main even with the flag on', () => {
+    const r = chooseRuntime(LAMBDA_VPYTHON, { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.runtime).toBe('main');
+    expect(r.vpython).toBeFalsy();
+  });
+  it('the guard is about the CALL SITE, not the word: rate() in a loop still routes', () => {
+    const r = chooseRuntime('from vpython import *\nb = sphere()\nwhile True:\n    rate(30)\n',
+                            { ...OPTS, usesVPython: true, workerVPython: true });
+    expect(r.runtime).toBe('worker');
+    expect(r.vpython).toBe(true);
+  });
+});
+
 describe('hasUnawaitableCall', () => {
   it('flags input() inside a list comprehension', () => {
     expect(hasUnawaitableCall('xs = [input() for _ in range(3)]')).toBe(true);

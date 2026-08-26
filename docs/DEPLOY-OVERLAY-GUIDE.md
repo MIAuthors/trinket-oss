@@ -133,22 +133,9 @@ color carries text:
 | `pageBg` | page (body) background | — | it's the backdrop everything else is measured against |
 | `heading` | `h1`/`h2`/`h3` | yes | 4.5:1 vs `pageBg` (3:1 if ≥24px) |
 | `navItem` | nav dropdown item background | — | — |
-| `primary` | **display fills**: hero banner, course sidebar current item, nav active fills | no | none — no small text sits on it |
-| `link` | anchor color + text accents (breadcrumbs, status text, toolbar titles) | yes | **4.5:1 vs `pageBg`** |
-| `button` | interactive chrome: filled buttons, outline-button text/border, labels, pagination | yes (white label) | **4.5:1 vs white** |
-
-Five more **optional shade keys** (#149) cover the hover/disabled shades and the
-second accent color that Sass used to compute at build time. When unset, every
-use falls back to the exact stock shade — set them alongside the keys above so
-hovers match your palette instead of staying green:
-
-| key | applies to | stock fallback |
-|---|---|---|
-| `buttonDark` | hover text/border of outline buttons, alert-box border | `darken(green, 10%)` |
-| `buttonPale` | pale hover/disabled fill of outline buttons | `lighten(green, 40%)` |
-| `secondary` | second accent: completed-status text, secondary buttons | dark green `#006400` |
-| `secondaryDark` | hover shade of `secondary` | `darken(#006400, 10%)` |
-| `secondaryPale` | pale fill of `secondary` | `lighten(#006400, 40%)` |
+| `primary` | **display only**: hero banner and other large fills | no | none — no small text sits on it |
+| `link` | anchor color | yes | **4.5:1 vs `pageBg`** |
+| `button` | filled primary/success button background | yes (white label) | **4.5:1 vs white** |
 
 `link` and `button` were split out of `primary` because Foundation derived *both*
 the anchor color and filled-button backgrounds from `$primary-color`. That made one
@@ -619,6 +606,37 @@ With the flag off, VPython behaves exactly as it always has (main thread,
    the prompt in strictly more cases than before). It wants its own issue and its
    own fix — clearing the latch is a one-liner, but the surrounding REPL
    lifecycle deserves a look at the same time.
+## Optional: cache static assets (`app.cache.enabled`)
+
+Off by default. The stock behaviour sends `no-store` on **every** response, so
+each page view re-downloads the whole front end (measured: 29 same-origin
+assets, ~933 KB, uncacheable by browser and CDN alike). Turning this on lets
+version-stamped asset URLs (`/cache-prefix-<token>/...`) be cached hard:
+
+```yaml
+# config/local.yaml (or local-production.yaml)
+app:
+  cache:
+    enabled: true
+    # staticMaxAge: 31536000   # optional; seconds, default 1 year
+```
+
+What changes — and what does not:
+
+* **Only** version-stamped asset paths get `public, max-age=..., immutable`.
+  Every dynamic response (HTML, API) keeps the exact `no-store` header it
+  always had.
+* The stamp is the deployed commit (see `lib/util/assetVersion.js`), so asset
+  URLs change on deploy and clients pick up new assets immediately. Safe to
+  cache "forever" for exactly that reason.
+* A shared cache/CDN in front of the deploy can now serve those assets from
+  its edge. Without a CDN you still get browser caching — the second page view
+  stops re-downloading the front end.
+
+Verify after enabling: `curl -sI https://<host>/cache-prefix-<token>/css/base.css`
+(copy a real asset URL from the page source) should show `cache-control:
+public, max-age=31536000, immutable`, while `curl -sI https://<host>/` keeps
+`no-store`.
 
 ## Example — prod-only infra in `config/local-production.yaml`
 
@@ -661,15 +679,7 @@ TRINKET_DEPLOY=<name> docker compose up -d --build   # rebuild + restart with th
 
 `--build` is only needed for dependency/Dockerfile changes; for a config-only edit,
 `docker compose restart app` is enough (the bind-mount means the file is already
-there).
-
-⚠️ **A dependency change needs more than `--build`.** `node_modules` is a named
-volume that a rebuild does not refresh, so a commit that adds a package runs
-against the previous dependency set and crash-loops on `Cannot find module` —
-with a build log that looks clean. Either install into the volume
-(`docker compose exec -T app npm ci`) or, better, run servers from the image
-with `docker-compose.prod.yml`. See
-[UPDATING-A-RUNNING-DEPLOY.md](UPDATING-A-RUNNING-DEPLOY.md). On **Cloud Run** there's no bind-mount — the overlay's `config/`, `views/`,
+there). On **Cloud Run** there's no bind-mount — the overlay's `config/`, `views/`,
 `public/` are baked into the image at build (the `.env`/`.pem` are **not** — see
 above), so there you redeploy with `deploy-cloudrun.sh`.
 
@@ -685,6 +695,16 @@ compose backends: `docker compose up mongodb redis garage-init`, then
 `TRINKET_DEPLOY=<name> node app.js` — a template edit then only needs a page reload.
 
 ---
+
+## Why this is nice
+
+- **No fork** — track the public repo and `git pull`; your config lives in its own repo.
+- **Secrets stay out of the public repo _and the image_** — they're in your private
+  overlay's `.env`, which `.dockerignore` excludes from the build; on Cloud Run they're
+  injected via Secret Manager at deploy time.
+- **One checkout, many deploys** — clone several overlay repos side by side under
+  `deploys/` and pick per run.
+- **Branding without patching** — shadow any page or asset at the same relative path.
 
 ## Verify the deploy (do this every time)
 
@@ -717,13 +737,3 @@ TRINKET_BASE_URL=https://trial-merge.spvi.net      ...   # self-hosted / Mongo
 
 If a test fails, `test/browser/test-results/` holds a screenshot of the page at
 the moment it failed.
-
-## Why this is nice
-
-- **No fork** — track the public repo and `git pull`; your config lives in its own repo.
-- **Secrets stay out of the public repo _and the image_** — they're in your private
-  overlay's `.env`, which `.dockerignore` excludes from the build; on Cloud Run they're
-  injected via Secret Manager at deploy time.
-- **One checkout, many deploys** — clone several overlay repos side by side under
-  `deploys/` and pick per run.
-- **Branding without patching** — shadow any page or asset at the same relative path.
