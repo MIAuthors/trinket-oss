@@ -32,3 +32,19 @@ describe('Export.findPendingOrProcessing ignores stale records', () => {
     expect(found).toBeNull();
   });
 });
+
+describe('Model.findByIdAndUpdate options argument', () => {
+  it('accepts the two-argument form without options', async () => {
+    // findByIdAndUpdate(id, update) threw on `options.select` because options
+    // was undefined. Callers avoided it by reaching for the raw model — the
+    // habit that broke exports on firestore, where the raw model is only
+    // exposed under NODE_ENV=test and production silently fell back to mongoose.
+    const u = new User({ fullname: 'fbiau', username: 'fbiau', email: 'fbiau@example.com', password: 'password' });
+    await u.save();
+    const rec = await new Export({ _owner: u.id, type: 'course-submissions', status: 'pending' }).save();
+    const updated = await Export.findByIdAndUpdate(rec.id, { status: 'processing' });
+    expect(updated).toBeTruthy();
+    const reread = await Export.findById(rec.id);
+    expect(reread.status).toBe('processing');
+  });
+});
