@@ -63,7 +63,11 @@ const fs             = require('fs');
 const path           = require('path');
 
 
-const cache_control = 'private, s-maxage=0, max-age=0, no-cache, no-store, must-revalidate, proxy-revalidate';
+// Which responses may be cached — see lib/util/cacheControl. Dynamic responses
+// keep the exact header this constant always carried; only version-stamped
+// static assets are allowed to differ, and only when a deploy opts in via
+// app.cache.enabled.
+const cacheControl = require('./lib/util/cacheControl');
 
 // Main async initialization
 const init = async () => {
@@ -260,18 +264,20 @@ const init = async () => {
         }
       }
 
-      response.output.headers['Cache-Control'] = cache_control;
-      response.output.headers['Pragma'] = 'no-cache';
-      response.output.headers['Expires'] = '0';
+      const boomHeaders = cacheControl.headersFor(request.path, statusCode, config.app);
+      Object.keys(boomHeaders).forEach((name) => {
+        response.output.headers[name] = boomHeaders[name];
+      });
 
       if (addXFrame) {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
     }
     else if (response.header) {
-      response.header('Cache-Control', cache_control);
-      response.header('Pragma', 'no-cache');
-      response.header('Expires', '0');
+      const headers = cacheControl.headersFor(request.path, response.statusCode, config.app);
+      Object.keys(headers).forEach((name) => {
+        response.header(name, headers[name]);
+      });
 
       if (addXFrame) {
         response.header('X-Frame-Options', 'deny');
