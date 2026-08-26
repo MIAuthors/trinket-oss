@@ -52,6 +52,17 @@ features:
     glowscript-blocks: 'Web VPython Blocks'
     music: 'Music'
   pyodideVersion: '0.28.1'  # Pyodide CDN version — single source of truth for bootstrap script and indexURL
+  markdown:
+    # Engine for NEWLY CREATED courses: legacy | modern. Existing courses keep
+    # whatever they have (absent = legacy). See docs/superpowers/specs/
+    # 2026-08-15-markdown-engine-bridge-design.md.
+    #
+    # Ships as `legacy` on purpose: the modern engine arrives as a per-course
+    # option instructors can opt into, so nothing changes for anyone until they
+    # choose it. Deployments that want the modern engine for new courses can set
+    # this to `modern`; the decision about a global default belongs with the
+    # evidence from real adoption, not with this PR.
+    newCourseDefault: legacy
 
 auth:
   # Auth provider — a deployment uses exactly ONE ('local' or 'firebase').
@@ -297,6 +308,9 @@ app:
       - '//cdnjs.cloudflare.com/ajax/libs/angular-ui-ace/0.2.3/ui-ace.min.js'
       - '/js/services/config.js'
       - '/js/trinket-markdown.js'
+      - '/js/vendor/marked-modern.js'
+      - '/js/vendor/purify.min.js'
+      - '/js/trinket-markdown-modern.js'
       - '/js/services/markdown.js'
       - '/js/services/util.js'
       - '/js/services/roles.js'
@@ -323,6 +337,9 @@ app:
       - '/components/angular-scrollfix.js'
       - '/components/angular-slugify.js'
       - '/js/trinket-markdown.js'
+      - '/js/vendor/marked-modern.js'
+      - '/js/vendor/purify.min.js'
+      - '/js/trinket-markdown-modern.js'
       - '/js/services/markdown.js'
       - '/js/services/util.js'
       - '/js/services/submissions.js'
