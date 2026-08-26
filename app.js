@@ -32,6 +32,7 @@ require('./config/deploy-dir');
 log = require('./config/log');
 
 const startupCheck   = require('./lib/util/startup-check');
+const publicHostname = require('./lib/util/publicHostname');
 const Hapi           = require('@hapi/hapi');
 const Boom           = require('@hapi/boom');
 const Inert          = require('@hapi/inert');
@@ -286,7 +287,13 @@ const init = async () => {
     const response = request.response;
     if (response && response.variety === 'view' &&
         response.source && response.source.context) {
-      response.source.context._hostname = request.info.hostname;
+      // Behind a CDN/proxy the request host is the backend's own, not the
+      // browser's — honour a forwarded host, but only one this deploy claims.
+      response.source.context._hostname = publicHostname.resolve(
+        request.headers,
+        request.info.hostname,
+        [config.app.url.hostname].concat(config.app.url.knownHosts || [])
+      );
     }
     return h.continue;
   });
