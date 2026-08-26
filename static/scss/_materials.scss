@@ -49,7 +49,7 @@
     overflow: hidden;
 
     .title {
-      color: $primary-color;
+      color: var(--brand-link, #{$primary-color});
     }
 
     .save {

@@ -114,6 +114,14 @@ app:
     primary: '#123456'                  # ⚠️ does NOT cover links/buttons — see below
     link:    '#123456'
     button:  '#123456'
+    # Optional shade keys (#149) — without them, hovers/disabled fills and the
+    # second accent stay stock green even on a branded deploy. See the table
+    # below for what each covers.
+    # buttonDark:    '#0e2e46'          # hover/border shade of `button`
+    # buttonPale:    '#e6eef5'          # pale hover/disabled fill
+    # secondary:     '#333333'          # second accent (completed-status, secondary buttons)
+    # secondaryDark: '#1f1f1f'
+    # secondaryPale: '#eeeeee'
 
 # Which trinket types appear in the New-Trinket menu AND are allowed to run.
 # Omit this block to inherit the stock set; override only what you want to change:
@@ -133,9 +141,22 @@ color carries text:
 | `pageBg` | page (body) background | — | it's the backdrop everything else is measured against |
 | `heading` | `h1`/`h2`/`h3` | yes | 4.5:1 vs `pageBg` (3:1 if ≥24px) |
 | `navItem` | nav dropdown item background | — | — |
-| `primary` | **display only**: hero banner and other large fills | no | none — no small text sits on it |
-| `link` | anchor color | yes | **4.5:1 vs `pageBg`** |
-| `button` | filled primary/success button background | yes (white label) | **4.5:1 vs white** |
+| `primary` | **display fills**: hero banner, course sidebar current item, nav active fills | no | none — no small text sits on it |
+| `link` | anchor color + text accents (breadcrumbs, status text, toolbar titles) | yes | **4.5:1 vs `pageBg`** |
+| `button` | interactive chrome: filled buttons, outline-button text/border, labels, pagination | yes (white label) | **4.5:1 vs white** |
+
+Five more **optional shade keys** (#149) cover the hover/disabled shades and the
+second accent color that Sass used to compute at build time. When unset, every
+use falls back to the exact stock shade — set them alongside the keys above so
+hovers match your palette instead of staying green:
+
+| key | applies to | stock fallback |
+|---|---|---|
+| `buttonDark` | hover text/border of outline buttons, alert-box border | `darken(green, 10%)` |
+| `buttonPale` | pale hover/disabled fill of outline buttons | `lighten(green, 40%)` |
+| `secondary` | second accent: completed-status text, secondary buttons | dark green `#006400` |
+| `secondaryDark` | hover shade of `secondary` | `darken(#006400, 10%)` |
+| `secondaryPale` | pale fill of `secondary` | `lighten(#006400, 40%)` |
 
 `link` and `button` were split out of `primary` because Foundation derived *both*
 the anchor color and filled-button backgrounds from `$primary-color`. That made one

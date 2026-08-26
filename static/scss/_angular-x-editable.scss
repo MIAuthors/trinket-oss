@@ -20,7 +20,7 @@
 .editable-click:hover, a.editable-click:hover  {
 	// border-bottom: none;
 	cursor: pointer;
-	color: $primary-color;
+	color: var(--brand-link, #{$primary-color});
 }
 
 .editable-input {
