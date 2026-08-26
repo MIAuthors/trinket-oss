@@ -208,7 +208,7 @@
                   {% if canImport %}
                   <li><a href="/account/import"><i class="fa fa-upload"></i> Import Trinkets</a></li>
                   {% endif %}
-                  {% if user.isInstructor or user.hasRole("admin") %}
+                  {% if canConnectLms %}
                   <li><a href="/lti/connect"><i class="fa fa-plug"></i> Connect LMS</a></li>
                   {% endif %}
                   {% if user.hasRole("admin") or user.loggedInAs() %}
