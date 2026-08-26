@@ -21,7 +21,12 @@ WORKDIR /usr/local/node/trinket
 
 # Install dependencies first — cached unless package.json changes
 COPY --chown=trinket:trinket package.json package-lock.json ./
-RUN npm install --legacy-peer-deps
+# `ci`, not `install`: it installs exactly the tree package-lock.json records,
+# so two builds of the same commit produce the same dependencies. That matters
+# more now that production runs the image's node_modules rather than a volume
+# someone once populated. --legacy-peer-deps is carried over from the previous
+# install step; dropping it needs the peer conflicts resolved first.
+RUN npm ci --legacy-peer-deps
 
 # Download frontend components — cached unless the release URL changes
 RUN curl -L --silent -o ./public-components.tgz \
