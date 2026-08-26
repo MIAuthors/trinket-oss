@@ -12,6 +12,14 @@ This document covers two workflows:
    window. Only use when the site is already broken and you need to ship a
    fix immediately.
 
+> **Shortcut — per-deploy `make` targets.** If your overlay repo ships its own
+> `deploys/<name>/Makefile` (see [docs/DEPLOY-OVERLAY-GUIDE.md](docs/DEPLOY-OVERLAY-GUIDE.md)),
+> the root Makefile dispatches to it: `make deploy`, `make verify`,
+> `make deploy-clean-dry` / `make deploy-clean` — with `TRINKET_DEPLOY` read
+> from the environment or this checkout's `.env`. The overlay Makefile carries
+> the project ID/hostname and guards against running against the wrong
+> checkout, so the targets "just work" without remembering env vars.
+
 ---
 
 ## Prerequisites

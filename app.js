@@ -32,6 +32,7 @@ require('./config/deploy-dir');
 log = require('./config/log');
 
 const startupCheck   = require('./lib/util/startup-check');
+const publicHostname = require('./lib/util/publicHostname');
 const Hapi           = require('@hapi/hapi');
 const Boom           = require('@hapi/boom');
 const Inert          = require('@hapi/inert');
@@ -39,6 +40,7 @@ const Vision         = require('@hapi/vision');
 const Yar            = require('@hapi/yar');
 const config         = require('./config/app.config');
 const Helpers        = require('./lib/util/helpers');
+const embedCsp       = require('./lib/util/embedCsp');
 const Authentication = require('./lib/auth/passport.js');
 // gleak is not compatible with Node 16+ (uses GLOBAL which was removed)
 // Use a no-op fallback for now
@@ -62,7 +64,11 @@ const fs             = require('fs');
 const path           = require('path');
 
 
-const cache_control = 'private, s-maxage=0, max-age=0, no-cache, no-store, must-revalidate, proxy-revalidate';
+// Which responses may be cached — see lib/util/cacheControl. Dynamic responses
+// keep the exact header this constant always carried; only version-stamped
+// static assets are allowed to differ, and only when a deploy opts in via
+// app.cache.enabled.
+const cacheControl = require('./lib/util/cacheControl');
 
 // Main async initialization
 const init = async () => {
@@ -203,6 +209,16 @@ const init = async () => {
     const response = request.response;
     const addXFrame = config.app.xframeDeny && config.app.xframeDeny.indexOf(request.url.pathname) >= 0;
 
+    // One embed policy for both branches below. knownHosts is included so a
+    // deploy behind a CDN front door (Firebase Hosting, Cloudflare) still names
+    // the origin the BROWSER is actually using — request.url.origin is only the
+    // backend's own host there (see lib/util/publicHostname.js for the same
+    // problem on the template side).
+    const embedPolicy = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
+      request.query && request.query.runMode,
+      [config.url, request.url && request.url.origin]
+        .concat((config.app.url && config.app.url.knownHosts) || []));
+
     if (response.isBoom) {
       const statusCode = response.output.statusCode;
 
@@ -259,21 +275,31 @@ const init = async () => {
         }
       }
 
-      response.output.headers['Cache-Control'] = cache_control;
-      response.output.headers['Pragma'] = 'no-cache';
-      response.output.headers['Expires'] = '0';
+      const boomHeaders = cacheControl.headersFor(request.path, statusCode, config.app);
+      Object.keys(boomHeaders).forEach((name) => {
+        response.output.headers[name] = boomHeaders[name];
+      });
 
       if (addXFrame) {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
+
+      if (embedPolicy) {
+        response.output.headers['Content-Security-Policy'] = embedPolicy;
+      }
     }
     else if (response.header) {
-      response.header('Cache-Control', cache_control);
-      response.header('Pragma', 'no-cache');
-      response.header('Expires', '0');
+      const headers = cacheControl.headersFor(request.path, response.statusCode, config.app);
+      Object.keys(headers).forEach((name) => {
+        response.header(name, headers[name]);
+      });
 
       if (addXFrame) {
         response.header('X-Frame-Options', 'deny');
+      }
+
+      if (embedPolicy) {
+        response.header('Content-Security-Policy', embedPolicy);
       }
     }
 
@@ -286,7 +312,13 @@ const init = async () => {
     const response = request.response;
     if (response && response.variety === 'view' &&
         response.source && response.source.context) {
-      response.source.context._hostname = request.info.hostname;
+      // Behind a CDN/proxy the request host is the backend's own, not the
+      // browser's — honour a forwarded host, but only one this deploy claims.
+      response.source.context._hostname = publicHostname.resolve(
+        request.headers,
+        request.info.hostname,
+        [config.app.url.hostname].concat(config.app.url.knownHosts || [])
+      );
     }
     return h.continue;
   });

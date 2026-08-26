@@ -13,7 +13,8 @@ features:
   accessibilityToggle: false  # Show accessibility toggle in embed toolbar (for screen reader mode)
   variableExplorer: false  # Show the Variables tab (namespace inspector) in Pyodide/Python3 trinkets
   stepDebugger: false  # "Step through" record & replay debugger in the Variables tab (requires variableExplorer)
-  workerRuntime: false  # Run python3 programs in a Web Worker (#108) so the page cannot freeze and Stop always works. VPython always stays on the main thread. Per-trinket override: ?runtime=main / ?runtime=worker
+  workerRuntime: false  # Run python3 programs in a Web Worker (#108) so the page cannot freeze and Stop always works. VPython stays on the main thread unless workerVPython (below) is also on. Per-trinket override: ?runtime=main / ?runtime=worker
+  workerVPython: false  # Run Web VPython through vpython-jupyter in the Web Worker (#108 follow-on). Opt-in; ?runtime=main escapes. See docs/superpowers/specs/2026-08-10-vpython-jupyter-adoption-design.md
   requireAuthToFork: false  # Require login to fork/share a trinket; false = allow anonymous forks (trinket.io default)
   courseImport: true   # Show an "Import a Course" button on the home page. Instructor-only via canCreateCourse; deploys without an instructor concept render it hidden regardless of the flag.
   accessCodeEnrollment: false  # Self-service course join via access code (instructor mints a code, students enter it). Off by default; enable per-deploy for public/self-serve servers without LMS/SMTP. Gates the instructor UI, the student UI, AND the server endpoints together.
@@ -51,6 +52,17 @@ features:
     glowscript-blocks: 'Web VPython Blocks'
     music: 'Music'
   pyodideVersion: '0.28.1'  # Pyodide CDN version — single source of truth for bootstrap script and indexURL
+  markdown:
+    # Engine for NEWLY CREATED courses: legacy | modern. Existing courses keep
+    # whatever they have (absent = legacy). See docs/superpowers/specs/
+    # 2026-08-15-markdown-engine-bridge-design.md.
+    #
+    # Ships as `legacy` on purpose: the modern engine arrives as a per-course
+    # option instructors can opt into, so nothing changes for anyone until they
+    # choose it. Deployments that want the modern engine for new courses can set
+    # this to `modern`; the decision about a global default belongs with the
+    # evidence from real adoption, not with this PR.
+    newCourseDefault: legacy
 
 auth:
   # Auth provider — a deployment uses exactly ONE ('local' or 'firebase').
@@ -117,6 +129,16 @@ app:
     # text. This darker green measures 5.13:1 in both roles.
     link: '#2E7D32'      # anchor color
     button: '#2E7D32'    # filled primary/success button background (white label text)
+    # --- #149: optional derived-shade keys, NO defaults on purpose. When unset,
+    # every use falls back (in the compiled CSS) to the exact Sass-computed
+    # stock shade, so leaving these out changes nothing. A branded deploy that
+    # sets link/button/primary/secondary should usually set these too:
+    #   buttonDark:    hover/border shade of `button`  (stock: darken(green,10%))
+    #   buttonPale:    pale hover/disabled fill        (stock: lighten(green,40%))
+    #   secondary:     the second accent (completed-status, secondary buttons;
+    #                  stock: dark green #006400)
+    #   secondaryDark: hover shade of `secondary`
+    #   secondaryPale: pale fill of `secondary`
   siteUrl: ''
   supportEmail: ''
   adminEmail: ''
@@ -135,6 +157,10 @@ app:
   url:
     protocol: https
     hostname: trinket.dev
+    # Extra hostnames this deploy also answers on (CDN front door, alternate
+    # domains). Used to validate X-Forwarded-Host (lib/util/publicHostname.js)
+    # and for embed-URL rewriting; hostnames only, no scheme or port.
+    knownHosts: []
     port:
   start: true
   usersubdomains: false
@@ -251,6 +277,12 @@ app:
     user: ''      # SMTP username
     pass: ''      # SMTP password
     secure: false # true for port 465, false for other ports
+  # Static-asset caching. Off by default: turning it on tells browsers and any
+  # shared cache to keep version-stamped assets, which is only safe because the
+  # stamp rolls on deploy. Dynamic responses stay no-store either way.
+  cache:
+    enabled: false
+    staticMaxAge: 31536000   # 1 year; the URL changes on deploy, so this is safe
   cachePrefix: cache-prefix-
   prefixes: # static routes
     components:
@@ -286,6 +318,9 @@ app:
       - '//cdnjs.cloudflare.com/ajax/libs/angular-ui-ace/0.2.3/ui-ace.min.js'
       - '/js/services/config.js'
       - '/js/trinket-markdown.js'
+      - '/js/vendor/marked-modern.js'
+      - '/js/vendor/purify.min.js'
+      - '/js/trinket-markdown-modern.js'
       - '/js/services/markdown.js'
       - '/js/services/util.js'
       - '/js/services/roles.js'
@@ -302,6 +337,7 @@ app:
       - '/js/courseEditor/controllers/root.js'
       - '/js/courseEditor/controllers/materialControl.js'
       - '/js/courseEditor/controllers/toolbarControl.js'
+      - '/js/courseEditor/studentListParser.js'
       - '/js/courseEditor/controllers/usersControl.js'
       - '/js/courseEditor/controllers/dashboardControl.js'
       - '/js/courseEditor/controllers/assignmentEditorControl.js'
@@ -311,6 +347,9 @@ app:
       - '/components/angular-scrollfix.js'
       - '/components/angular-slugify.js'
       - '/js/trinket-markdown.js'
+      - '/js/vendor/marked-modern.js'
+      - '/js/vendor/purify.min.js'
+      - '/js/trinket-markdown-modern.js'
       - '/js/services/markdown.js'
       - '/js/services/util.js'
       - '/js/services/submissions.js'
@@ -492,6 +531,55 @@ app:
     - '/signup'
     - '/contact'
     - '/educators'
+
+  # Content-Security-Policy for /embed/* responses.
+  #
+  # Test mode (runMode=calculator) should be self-contained: what the student
+  # sees is what the trinket contains, with nothing pulled in from outside.
+  # Normal embeds stay permissive about images and media so existing course
+  # material (remote textures) keeps working. Frames are disallowed in both.
+  #
+  # These policies reach the program itself: glowscript runs it in a `srcdoc`
+  # iframe, which inherits the embedding page's policy, and the same policy
+  # governs a blob: Web Worker (the pyodide worker runtime).
+  #
+  # {origin} is substituted with this deployment's own origin(s). It is not
+  # redundant with 'self': the program runs in a sandboxed frame with an opaque
+  # origin, and 'self' matches nothing there, so the frame could not load the
+  # runtime libraries without naming the origin explicitly.
+  #
+  # cdnOrigins lists the third-party hosts the runtimes still need. Vendoring
+  # them locally (build-resilience work) lets this list empty out, and the
+  # policies tighten with no code change.
+  csp:
+    enabled: true
+    # Scheme-less on purpose: the embed pulls several of these with
+    # protocol-relative URLs, so they resolve to http on a local stack and
+    # https in production. A host with no scheme matches both.
+    cdnOrigins:
+      - 'cdnjs.cloudflare.com'   # MathJax, jQuery, Modernizr, moment, highlight.js (+ their CSS)
+      - 'cdn.jsdelivr.net'       # pyodide.js + wheels, fetched at runtime
+    fontOrigins:
+      - 'fonts.googleapis.com'   # the stylesheet
+      - 'fonts.gstatic.com'      # the font files it references
+    # Normal embeds: keep remote images/media so textures in existing course
+    # material keep working. frame-src is 'none' even here — no program has a
+    # reason to embed a frame.
+    standard: >-
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src * data: blob:;
+      media-src * data: blob:; font-src 'self' {origin} data: {cdn} {fonts}; connect-src * data: blob:;
+      frame-src 'none'; child-src 'none'; worker-src 'self' {origin} blob:;
+      object-src 'none'; base-uri 'none'; form-action 'none'
+    # runMode=calculator (exam/test mode): no third-party content at all.
+    # Deliberately breaks uploaded images and remote textures — during an exam
+    # that is the point.
+    exam: >-
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src 'self' {origin} data: blob:;
+      media-src 'self' {origin} data: blob:; font-src 'self' {origin} data: {cdn} {fonts};
+      connect-src 'self' {origin} {cdn}; frame-src 'none'; child-src 'none';
+      worker-src 'self' {origin} blob:; object-src 'none'; base-uri 'none'; form-action 'none'
 workers:
   trinkets:
     outputDir: '/tmp/' # should be readable by nginx

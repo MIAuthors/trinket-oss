@@ -2,6 +2,8 @@
 {% block content %}
 <div class="row"><div class="small-12 medium-8 columns small-centered">
   <h3>Connect your LMS to Trinket</h3>
+
+  <h4>Modern LMS (LTI 1.3) — Canvas, Moodle, Brightspace…</h4>
   <p>Generate a one-time registration link, then send it to your LMS administrator. They paste it into
      your LMS's <em>Dynamic Registration</em> field (Canvas: Developer Keys &rarr; + LTI Registration;
      Moodle: External tools &rarr; Tool registration URL). Trinket activates the connection after review.</p>
@@ -13,6 +15,35 @@
     <p>Send this link to your LMS admin (valid 7 days, single use):</p>
     <input id="reg-url" type="text" readonly style="width:100%">
   </div>
+
+  <hr>
+
+  <h4>Legacy LMS or WileyPLUS course (LTI 1.1) — no admin needed</h4>
+  <p>Some platforms only let <em>you</em> (the course admin) install tools with a key and secret —
+     WileyPLUS-hosted Canvas courses work this way. Generate a key pair, then in your course:
+     <strong>Settings &rarr; Apps &rarr; View App Configurations &rarr; + App</strong>, Configuration
+     Type <strong>By URL</strong>, and paste the three values below. The config URL pre-fills the
+     launch address, the privacy level, and which Trinket course your students land in.</p>
+  <form id="gen11-form">
+    <label>Label (optional) <input type="text" name="label" placeholder="e.g. PHYS-230 WileyPLUS"></label>
+    <label>Trinket course your students should land in
+      <select id="course-select">
+        <option value="">— none (students land on their home page) —</option>
+        {% for c in myCourses %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="button">Generate key &amp; secret</button>
+  </form>
+  <div id="gen11-result" class="hide">
+    <p><strong>Copy these now</strong> — paste them into your course's <em>+ App</em> form:</p>
+    <label>Config URL <input id="cfg-url" type="text" readonly style="width:100%"></label>
+    <label>Consumer Key <input id="cfg-key" type="text" readonly style="width:100%"></label>
+    <label>Shared Secret <input id="cfg-secret" type="text" readonly style="width:100%"></label>
+    <p class="help-text">Tip: when you add Trinket to an assignment or module, check
+      <em>“Load in a new tab”</em> — browsers that block third-party cookies (Safari, Chrome
+      incognito) need it. Student work is reviewed here on Trinket (your course dashboard);
+      LTI&nbsp;1.1 connections do not create LMS gradebook entries.</p>
+  </div>
 </div></div>
 {% endblock %}
 {% block extra_js %}
@@ -23,6 +54,20 @@
     fetch('/lti/connect/token', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ label: label }) })
       .then(function(r){ return r.json(); })
       .then(function(res){ document.getElementById('reg-url').value = res.url; document.getElementById('gen-result').classList.remove('hide'); });
+  });
+  document.getElementById('gen11-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var label = this.label.value;
+    fetch('/lti/connect/lti11-key', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ label: label }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        var course = document.getElementById('course-select').value;
+        var cfg = location.origin + '/lti11/config.xml' + (course ? ('?course=' + encodeURIComponent(course)) : '');
+        document.getElementById('cfg-url').value = cfg;
+        document.getElementById('cfg-key').value = res.key;
+        document.getElementById('cfg-secret').value = res.secret;
+        document.getElementById('gen11-result').classList.remove('hide');
+      });
   });
 </script>
 {% endblock %}

@@ -173,7 +173,8 @@
           self.$scope.courseForm = {
             name        : course.name,
             description : course.description,
-            contentDefault : course.globalSettings.contentDefault
+            contentDefault : course.globalSettings.contentDefault,
+            markdownEngine : (course.globalSettings && course.globalSettings.markdownEngine) || 'legacy'
           };
           self.$scope.coursePageUrl = self.defaultCoursePageUrl = self.trinketConfig.getClassUrl(self.$scope.userSlug, self.$scope.courseSlug)
 

@@ -119,8 +119,8 @@ body#home {
   #pro-banner {
     width: 100%;
     background: #f9f9f9;
-    border: 1px solid $secondary-color;
-    box-shadow: 0 8px 6px -6px $secondary-color;
+    border: 1px solid var(--brand-secondary, #{$secondary-color});
+    box-shadow: 0 8px 6px -6px var(--brand-secondary, #{$secondary-color});
     padding: 20px 20px 0 20px;
     margin-bottom: 20px;
     p {
@@ -163,7 +163,7 @@ body#home {
         max-height: 100%;
       }
       &:hover {
-        box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+        box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
       }
     }
 
@@ -209,7 +209,7 @@ body#home {
     text-align: center;
     color: #FFF !important;
     padding: 40px 20px 25px;
-    background: $primary-color;
+    background: var(--brand-primary, #{$primary-color});
     h1 {
       color: #FFF;
       padding: 20px 0 0 0;
@@ -309,7 +309,7 @@ body#home {
   }
   #logo-embed {
     margin: 0 auto;
-    background: $primary-color;
+    background: var(--brand-primary, #{$primary-color});
     width: 143px;
     height: 143px;
     border-radius: 50%;
@@ -320,7 +320,7 @@ body#home {
   }
   #logo-user {
     margin: 0 auto;
-    background: $secondary-color;
+    background: var(--brand-secondary, #{$secondary-color});
     width: 143px;
     height: 143px;
     border-radius: 50%;
@@ -346,7 +346,7 @@ body#home {
       }
 
       &:hover {
-        border: 1px solid $primary-color;
+        border: 1px solid var(--brand-primary, #{$primary-color});
         background-color: $blue-40;
       }
     }
@@ -382,7 +382,7 @@ body#home {
       border: solid 1px #eee;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
       &:hover {
-        box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+        box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
       }
       .trinket-type-image {
         padding: 10px;
@@ -423,7 +423,7 @@ body#home {
       position: relative;
 
       &:hover {
-        box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+        box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
       }
     }
   }

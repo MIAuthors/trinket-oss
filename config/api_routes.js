@@ -35,7 +35,8 @@ module.exports = [
           name           : Joi.string().max(140).required(),
           description    : Joi.string().max(500),
           courseType     : Joi.string().valid('public', 'private', 'open').optional(),
-          contentDefault : Joi.string().valid('publish', 'draft').optional()
+          contentDefault : Joi.string().valid('publish', 'draft').optional(),
+          markdownEngine : Joi.string().valid('legacy', 'modern').optional()
         }
       }
     }
@@ -73,7 +74,8 @@ module.exports = [
           name           : Joi.string().max(140),
           description    : Joi.string().max(500),
           courseType     : Joi.string().valid('public', 'private', 'open').optional(),
-          contentDefault : Joi.string().valid('publish', 'draft').optional()
+          contentDefault : Joi.string().valid('publish', 'draft').optional(),
+          markdownEngine : Joi.string().valid('legacy', 'modern').optional()
         }
       }
     }
