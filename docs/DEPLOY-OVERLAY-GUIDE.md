@@ -133,9 +133,22 @@ color carries text:
 | `pageBg` | page (body) background | — | it's the backdrop everything else is measured against |
 | `heading` | `h1`/`h2`/`h3` | yes | 4.5:1 vs `pageBg` (3:1 if ≥24px) |
 | `navItem` | nav dropdown item background | — | — |
-| `primary` | **display only**: hero banner and other large fills | no | none — no small text sits on it |
-| `link` | anchor color | yes | **4.5:1 vs `pageBg`** |
-| `button` | filled primary/success button background | yes (white label) | **4.5:1 vs white** |
+| `primary` | **display fills**: hero banner, course sidebar current item, nav active fills | no | none — no small text sits on it |
+| `link` | anchor color + text accents (breadcrumbs, status text, toolbar titles) | yes | **4.5:1 vs `pageBg`** |
+| `button` | interactive chrome: filled buttons, outline-button text/border, labels, pagination | yes (white label) | **4.5:1 vs white** |
+
+Five more **optional shade keys** (#149) cover the hover/disabled shades and the
+second accent color that Sass used to compute at build time. When unset, every
+use falls back to the exact stock shade — set them alongside the keys above so
+hovers match your palette instead of staying green:
+
+| key | applies to | stock fallback |
+|---|---|---|
+| `buttonDark` | hover text/border of outline buttons, alert-box border | `darken(green, 10%)` |
+| `buttonPale` | pale hover/disabled fill of outline buttons | `lighten(green, 40%)` |
+| `secondary` | second accent: completed-status text, secondary buttons | dark green `#006400` |
+| `secondaryDark` | hover shade of `secondary` | `darken(#006400, 10%)` |
+| `secondaryPale` | pale fill of `secondary` | `lighten(#006400, 40%)` |
 
 `link` and `button` were split out of `primary` because Foundation derived *both*
 the anchor color and filled-button backgrounds from `$primary-color`. That made one
@@ -679,7 +692,15 @@ TRINKET_DEPLOY=<name> docker compose up -d --build   # rebuild + restart with th
 
 `--build` is only needed for dependency/Dockerfile changes; for a config-only edit,
 `docker compose restart app` is enough (the bind-mount means the file is already
-there). On **Cloud Run** there's no bind-mount — the overlay's `config/`, `views/`,
+there).
+
+⚠️ **A dependency change needs more than `--build`.** `node_modules` is a named
+volume that a rebuild does not refresh, so a commit that adds a package runs
+against the previous dependency set and crash-loops on `Cannot find module` —
+with a build log that looks clean. Either install into the volume
+(`docker compose exec -T app npm ci`) or, better, run servers from the image
+with `docker-compose.prod.yml`. See
+[UPDATING-A-RUNNING-DEPLOY.md](UPDATING-A-RUNNING-DEPLOY.md). On **Cloud Run** there's no bind-mount — the overlay's `config/`, `views/`,
 `public/` are baked into the image at build (the `.env`/`.pem` are **not** — see
 above), so there you redeploy with `deploy-cloudrun.sh`.
 
@@ -695,6 +716,38 @@ compose backends: `docker compose up mongodb redis garage-init`, then
 `TRINKET_DEPLOY=<name> node app.js` — a template edit then only needs a page reload.
 
 ---
+
+## Verify the deploy (do this every time)
+
+A deploy that silently did nothing looks exactly like a deploy that worked. The
+deploy smoke answers that in well under a minute, against the real server:
+
+```bash
+cd test/browser
+npm install                      # first time only
+npx playwright install chromium  # first time only
+
+EXPECT_COMMIT=$(git rev-parse --short HEAD) \
+TRINKET_BASE_URL=https://<your-host> \
+  npx playwright test -c playwright.deploy.config.js
+```
+
+Every test is anonymous and read-only, so this is safe to run against
+production. It checks that the build being served is the one you deployed
+(`EXPECT_COMMIT` makes a no-op deploy fail loudly), that `NODE_ENV=production`
+is actually set, that embeds carry the expected content policy in both run
+modes, that a Web VPython scene and a python3 program both really run, and that
+a program cannot pull in third-party content.
+
+Current trials, for reference:
+
+```bash
+TRINKET_BASE_URL=https://rba-merge-trial.spvi.net  ...   # Cloud Run / Firestore
+TRINKET_BASE_URL=https://trial-merge.spvi.net      ...   # self-hosted / Mongo
+```
+
+If a test fails, `test/browser/test-results/` holds a screenshot of the page at
+the moment it failed.
 
 ## Why this is nice
 
