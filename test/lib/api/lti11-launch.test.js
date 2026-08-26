@@ -16,9 +16,9 @@ beforeEach(() => { flow.cookies = {}; });
 // same function, same inputs (inject with an absolute URL pins the host
 // header), so the strings match by construction.
 const AUTHORITY = 'localhost';
-function serverLaunchUrl() {
+function serverLaunchUrl(path) {
   return v.launchUrlFromRequest(
-    { headers: { host: AUTHORITY }, info: { hostname: AUTHORITY }, path: '/lti/launch' },
+    { headers: { host: AUTHORITY }, info: { hostname: AUTHORITY }, path: path || '/lti11/launch' },
     config.app.url, publicHostname.resolve);
 }
 
@@ -37,7 +37,7 @@ function signedLaunch(consumer, extra) {
     oauth_signature_method: 'HMAC-SHA1',
     oauth_version: '1.0',
   }, extra || {});
-  p.oauth_signature = v.sign('POST', serverLaunchUrl(), p, consumer.secret);
+  p.oauth_signature = v.sign('POST', serverLaunchUrl('/lti11/launch'), p, consumer.secret);
   return p;
 }
 
@@ -56,7 +56,7 @@ describe('LTI 1.1 launch (integration)', () => {
     const consumer = await seedConsumer();
 
     const params = signedLaunch(consumer, { custom_trinket_course: course.id });
-    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', params);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti11/launch', params);
 
     expect(flow.lastResponse.statusCode, JSON.stringify(flow.lastResponse.body).slice(0, 200)).toBe(302);
     expect(flow.lastResponse.headers.location).toContain('/courses/' + course.slug);
@@ -78,31 +78,48 @@ describe('LTI 1.1 launch (integration)', () => {
   it('rejects a launch signed with the wrong secret', async () => {
     const consumer = await seedConsumer();
     const params = signedLaunch({ key: consumer.key, secret: 'not-the-secret' }, {});
-    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', params);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti11/launch', params);
     expectRejected();
   });
 
   it('rejects a replayed launch (same nonce twice)', async () => {
     const consumer = await seedConsumer();
     const params = signedLaunch(consumer, {});
-    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', params);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti11/launch', params);
     const first = flow.lastResponse.statusCode;
-    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', params);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti11/launch', params);
     expect(first).toBe(302);
     expectRejected();
   });
 
   it('rejects an unknown consumer key', async () => {
     const params = signedLaunch({ key: 'nope', secret: 'x' }, {});
-    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', params);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti11/launch', params);
     expectRejected();
+  });
+
+  it('also accepts a launch on the shared /lti/launch (payload-shape dispatch, back-compat)', async () => {
+    await flow.switchUser('user');
+    await flow.createCourse({ name: 'Lti11 Shared URL' });
+    const course = flow.lastResponse.body.course;
+    const consumer = await seedConsumer();
+    // sign for /lti/launch specifically (the URL the platform posts to)
+    const p = signedLaunch(consumer, { custom_trinket_course: course.id });
+    p.oauth_nonce = 'shared-' + Math.random();
+    p.oauth_signature = v.sign('POST',
+      v.launchUrlFromRequest({ headers:{host:AUTHORITY}, info:{hostname:AUTHORITY}, path:'/lti/launch' }, config.app.url, publicHostname.resolve),
+      p, consumer.secret);
+    await flow._inject('POST', 'http://' + AUTHORITY + '/lti/launch', p);
+    expect(flow.lastResponse.statusCode).toBe(302);
+    expect(flow.lastResponse.headers.location).toContain('/courses/' + course.slug);
   });
 
   it('serves a config XML that pre-fills launch URL, privacy, and the course custom field', async () => {
     await flow.get('/lti11/config.xml?course=abcDEF123');
     const xml = flow.lastResponse.body;
     const text = typeof xml === 'string' ? xml : JSON.stringify(xml);
-    expect(text).toContain('/lti/launch');
+    expect(text).toContain('/lti11/launch');
+    expect(text).not.toMatch(/<blti:launch_url>[^<]*\/lti\/launch</);  // dedicated URL, not the 1.3 one
     expect(text).toContain('privacy_level');
     expect(text).toContain('trinket_course');
     expect(text).toContain('abcDEF123');
