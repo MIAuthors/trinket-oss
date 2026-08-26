@@ -447,6 +447,12 @@ routes = [
     }
   },
   {
+    route : 'POST /lti11/launch lti.launch11',
+    config : {
+      auth : false
+    }
+  },
+  {
     route : 'GET /lti/jwks lti.jwks',
     config : {
       auth : false
