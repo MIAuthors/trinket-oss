@@ -56,11 +56,12 @@ ARG GLOW_SHA256=1587799056b9d5aa5a854ec653653e0c0b6c11ab708a9783e3bffc126104f5ca
 ARG RSCOMPILER_SHA256=ada7775620cdea6472de0e7bd4175e126a3f232c74bf6392dbf238350c14c588
 ARG RSRUN_SHA256=2735844b615f87b4147e9cb2b90bf8a7a15da208fc8876eae469fc98861e429d
 RUN set -eu; \
+    RETRY="--retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors"; \
     base="https://storage.googleapis.com/rswvprunner/package"; \
     dir="public/components/vpython-glowscript/package"; \
-    curl -fL --silent -o "$dir/glow.3.2.3.min.js"       "$base/glow.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
-    curl -fL --silent -o "$dir/RScompiler.3.2.3.min.js" "$base/RScompiler.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
-    curl -fL --silent -o "$dir/RSrun.3.2.3.min.js"      "$base/RSrun.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
+    curl -fL --silent $RETRY -o "$dir/glow.3.2.3.min.js"       "$base/glow.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
+    curl -fL --silent $RETRY -o "$dir/RScompiler.3.2.3.min.js" "$base/RScompiler.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
+    curl -fL --silent $RETRY -o "$dir/RSrun.3.2.3.min.js"      "$base/RSrun.3.2.min.js?build=${GLOWSCRIPT_PACKAGE_BUILD}"; \
     echo "${GLOW_SHA256}  $dir/glow.3.2.3.min.js"             | sha256sum -c -; \
     echo "${RSCOMPILER_SHA256}  $dir/RScompiler.3.2.3.min.js" | sha256sum -c -; \
     echo "${RSRUN_SHA256}  $dir/RSrun.3.2.3.min.js"           | sha256sum -c -
@@ -77,12 +78,13 @@ ARG VPYTHON_WHEEL_RELEASE=v7.6.6.dev0
 ARG VPYTHON_WHEEL_SHA256=1b319fd882f409fc32445bf464ff7787cac6571f3bd6accb2ee37d217a9c5050
 ARG GLOWCOMM_HOST_SHA256=6cf90f51deec78c91b6a6c768b0c4389631218ca31dbdc9b06c6d977d0fced32
 RUN set -eu; \
+    RETRY="--retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors"; \
     base="https://github.com/vpython/vpython-jupyter/releases/download/${VPYTHON_WHEEL_RELEASE}"; \
     dir="public/components/vpython-worker"; \
     mkdir -p "$dir"; \
     wheel="vpython-${VPYTHON_WHEEL_RELEASE#v}-py3-none-any.whl"; \
-    curl -fL --silent -o "$dir/$wheel"            "$base/$wheel"; \
-    curl -fL --silent -o "$dir/glowcomm_host.js"  "$base/glowcomm_host.js"; \
+    curl -fL --silent $RETRY -o "$dir/$wheel"            "$base/$wheel"; \
+    curl -fL --silent $RETRY -o "$dir/glowcomm_host.js"  "$base/glowcomm_host.js"; \
     echo "${VPYTHON_WHEEL_SHA256}  $dir/$wheel"            | sha256sum -c -; \
     echo "${GLOWCOMM_HOST_SHA256}  $dir/glowcomm_host.js"  | sha256sum -c -
 
