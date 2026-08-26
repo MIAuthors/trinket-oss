@@ -40,6 +40,7 @@ const Vision         = require('@hapi/vision');
 const Yar            = require('@hapi/yar');
 const config         = require('./config/app.config');
 const Helpers        = require('./lib/util/helpers');
+const embedCsp       = require('./lib/util/embedCsp');
 const Authentication = require('./lib/auth/passport.js');
 // gleak is not compatible with Node 16+ (uses GLOBAL which was removed)
 // Use a no-op fallback for now
@@ -208,6 +209,16 @@ const init = async () => {
     const response = request.response;
     const addXFrame = config.app.xframeDeny && config.app.xframeDeny.indexOf(request.url.pathname) >= 0;
 
+    // One embed policy for both branches below. knownHosts is included so a
+    // deploy behind a CDN front door (Firebase Hosting, Cloudflare) still names
+    // the origin the BROWSER is actually using — request.url.origin is only the
+    // backend's own host there (see lib/util/publicHostname.js for the same
+    // problem on the template side).
+    const embedPolicy = embedCsp.policyFor(config.app.csp, request.url && request.url.pathname,
+      request.query && request.query.runMode,
+      [config.url, request.url && request.url.origin]
+        .concat((config.app.url && config.app.url.knownHosts) || []));
+
     if (response.isBoom) {
       const statusCode = response.output.statusCode;
 
@@ -272,6 +283,10 @@ const init = async () => {
       if (addXFrame) {
         response.output.headers['X-Frame-Options'] = 'deny';
       }
+
+      if (embedPolicy) {
+        response.output.headers['Content-Security-Policy'] = embedPolicy;
+      }
     }
     else if (response.header) {
       const headers = cacheControl.headersFor(request.path, response.statusCode, config.app);
@@ -281,6 +296,10 @@ const init = async () => {
 
       if (addXFrame) {
         response.header('X-Frame-Options', 'deny');
+      }
+
+      if (embedPolicy) {
+        response.header('Content-Security-Policy', embedPolicy);
       }
     }
 
