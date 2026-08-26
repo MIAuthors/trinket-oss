@@ -434,8 +434,24 @@ routes = [
     route : 'POST /lti/connect/token connectLms.createToken',
     config : { auth : 'session', pre : [ 'canInitiateLtiRegistration(user)' ] }
   },
+  {
+    route : 'POST /lti/connect/lti11-key connectLms.createLti11Key',
+    config : { auth : 'session', pre : [ 'canInitiateLtiRegistration(user)' ] }
+  },
   // ── LTI 1.3 (Tool) ──────────────────────────────────────────────────────────
   // Public (no session); the launch establishes the session. See docs/lti/LTI-SPEC.md.
+  {
+    route : 'GET /lti11/config.xml lti.configXml11',
+    config : {
+      auth : false
+    }
+  },
+  {
+    route : 'POST /lti11/launch lti.launch11',
+    config : {
+      auth : false
+    }
+  },
   {
     route : 'GET /lti/jwks lti.jwks',
     config : {
