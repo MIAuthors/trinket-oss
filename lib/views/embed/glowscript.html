@@ -181,11 +181,24 @@ while True:
         </style>
         <link type="text/css" href="{{url}}/{{prefix}}components/{{path}}/css/redmond/IDE/jquery-ui.custom.css" rel="stylesheet" />
         <link type="text/css" href="{{url}}/{{prefix}}components/{{path}}/css/ide.css" rel="stylesheet" />
+        <script type="text/javascript">
+          /* A runtime file the scene cannot work without failed to load
+             (measured: Cloud Run sheds the largest one under a cold-start
+             herd). Tell the page, which rebuilds this runner with backoff —
+             inside a lockdown browser the student cannot refresh, so the
+             page must recover on its own. */
+          function __lf(el) {
+            try {
+              window.parent.postMessage(JSON.stringify(
+                { "glowscript.loadfail": (el && el.src) || "?" }), "*");
+            } catch (e) {}
+          }
+        </script>
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.3/MathJax.js?config=TeX-AMS_HTML"></script>
         {{jqueryList}}
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/{{path}}/package/glow.{{version}}.min.js"></script>
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/{{path}}/package/RSrun.{{version}}.min.js"></script>
-        <script type="text/javascript" src="{{url}}/{{prefix}}components/{{path}}/package/RScompiler.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/{{path}}/package/glow.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/{{path}}/package/RSrun.{{version}}.min.js"></script>
+        <script type="text/javascript" onerror="__lf(this)" src="{{url}}/{{prefix}}components/{{path}}/package/RScompiler.{{version}}.min.js"></script>
       </head>
       <body>
         <div id="loading">Loading your Web VPython program</div>
@@ -370,6 +383,7 @@ while True:
        '/js/util/guid.js',
        '/js/plugins/code-editor.js',
        '/js/embed/analytics/activity-log.js',
+       '/js/embed/runner-retry.js',
        '/js/embed/glowscript.js'
      ])
   %}
