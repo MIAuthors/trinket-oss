@@ -756,6 +756,23 @@ TRINKET_BASE_URL=https://trial-merge.spvi.net      ...   # self-hosted / Mongo
 
 If a test fails, `test/browser/test-results/` holds a screenshot of the page at
 the moment it failed.
+## Optional: a per-deploy Makefile (`deploys/<name>/Makefile`)
+
+An overlay repo may ship a Makefile carrying that deployment's project ID,
+hostname and cleanup recipe. The root Makefile dispatches to it — `make
+deploy`, `make verify`, `make deploy-clean-dry`, `make deploy-clean` — with
+`TRINKET_DEPLOY` read from the environment or the checkout's `.env`.
+
+The contract:
+
+* **Targets**: provide `deploy`, `verify`, `clean`, `clean-dry` (the root
+  targets `deploy-clean*` map to your `clean*`).
+* **cwd is the trinket-oss checkout root**, not the overlay directory — the
+  dispatch uses `make -f deploys/<name>/Makefile <target>` from the root, so
+  refer to repo files as `./deploy-cloudrun.sh` etc., and to your own files as
+  `deploys/<name>/...`. A guard that verifies it is running in the right
+  checkout (e.g. compare `.env`'s project against your own) is strongly
+  recommended.
 
 ## Why this is nice
 
