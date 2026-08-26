@@ -78,12 +78,13 @@ ARG VPYTHON_WHEEL_RELEASE=v7.6.6.dev0
 ARG VPYTHON_WHEEL_SHA256=1b319fd882f409fc32445bf464ff7787cac6571f3bd6accb2ee37d217a9c5050
 ARG GLOWCOMM_HOST_SHA256=6cf90f51deec78c91b6a6c768b0c4389631218ca31dbdc9b06c6d977d0fced32
 RUN set -eu; \
+    RETRY="--retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors"; \
     base="https://github.com/vpython/vpython-jupyter/releases/download/${VPYTHON_WHEEL_RELEASE}"; \
     dir="public/components/vpython-worker"; \
     mkdir -p "$dir"; \
     wheel="vpython-${VPYTHON_WHEEL_RELEASE#v}-py3-none-any.whl"; \
-    curl -fL --silent -o "$dir/$wheel"            "$base/$wheel"; \
-    curl -fL --silent -o "$dir/glowcomm_host.js"  "$base/glowcomm_host.js"; \
+    curl -fL --silent $RETRY -o "$dir/$wheel"            "$base/$wheel"; \
+    curl -fL --silent $RETRY -o "$dir/glowcomm_host.js"  "$base/glowcomm_host.js"; \
     echo "${VPYTHON_WHEEL_SHA256}  $dir/$wheel"            | sha256sum -c -; \
     echo "${GLOWCOMM_HOST_SHA256}  $dir/glowcomm_host.js"  | sha256sum -c -
 
