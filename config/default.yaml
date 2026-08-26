@@ -136,6 +136,10 @@ app:
   url:
     protocol: https
     hostname: trinket.dev
+    # Extra hostnames this deploy also answers on (CDN front door, alternate
+    # domains). Used to validate X-Forwarded-Host (lib/util/publicHostname.js)
+    # and for embed-URL rewriting; hostnames only, no scheme or port.
+    knownHosts: []
     port:
   start: true
   usersubdomains: false
@@ -252,6 +256,12 @@ app:
     user: ''      # SMTP username
     pass: ''      # SMTP password
     secure: false # true for port 465, false for other ports
+  # Static-asset caching. Off by default: turning it on tells browsers and any
+  # shared cache to keep version-stamped assets, which is only safe because the
+  # stamp rolls on deploy. Dynamic responses stay no-store either way.
+  cache:
+    enabled: false
+    staticMaxAge: 31536000   # 1 year; the URL changes on deploy, so this is safe
   cachePrefix: cache-prefix-
   prefixes: # static routes
     components:
@@ -303,6 +313,7 @@ app:
       - '/js/courseEditor/controllers/root.js'
       - '/js/courseEditor/controllers/materialControl.js'
       - '/js/courseEditor/controllers/toolbarControl.js'
+      - '/js/courseEditor/studentListParser.js'
       - '/js/courseEditor/controllers/usersControl.js'
       - '/js/courseEditor/controllers/dashboardControl.js'
       - '/js/courseEditor/controllers/assignmentEditorControl.js'
@@ -493,6 +504,55 @@ app:
     - '/signup'
     - '/contact'
     - '/educators'
+
+  # Content-Security-Policy for /embed/* responses.
+  #
+  # Test mode (runMode=calculator) should be self-contained: what the student
+  # sees is what the trinket contains, with nothing pulled in from outside.
+  # Normal embeds stay permissive about images and media so existing course
+  # material (remote textures) keeps working. Frames are disallowed in both.
+  #
+  # These policies reach the program itself: glowscript runs it in a `srcdoc`
+  # iframe, which inherits the embedding page's policy, and the same policy
+  # governs a blob: Web Worker (the pyodide worker runtime).
+  #
+  # {origin} is substituted with this deployment's own origin(s). It is not
+  # redundant with 'self': the program runs in a sandboxed frame with an opaque
+  # origin, and 'self' matches nothing there, so the frame could not load the
+  # runtime libraries without naming the origin explicitly.
+  #
+  # cdnOrigins lists the third-party hosts the runtimes still need. Vendoring
+  # them locally (build-resilience work) lets this list empty out, and the
+  # policies tighten with no code change.
+  csp:
+    enabled: true
+    # Scheme-less on purpose: the embed pulls several of these with
+    # protocol-relative URLs, so they resolve to http on a local stack and
+    # https in production. A host with no scheme matches both.
+    cdnOrigins:
+      - 'cdnjs.cloudflare.com'   # MathJax, jQuery, Modernizr, moment, highlight.js (+ their CSS)
+      - 'cdn.jsdelivr.net'       # pyodide.js + wheels, fetched at runtime
+    fontOrigins:
+      - 'fonts.googleapis.com'   # the stylesheet
+      - 'fonts.gstatic.com'      # the font files it references
+    # Normal embeds: keep remote images/media so textures in existing course
+    # material keep working. frame-src is 'none' even here — no program has a
+    # reason to embed a frame.
+    standard: >-
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src * data: blob:;
+      media-src * data: blob:; font-src 'self' {origin} data: {cdn} {fonts}; connect-src * data: blob:;
+      frame-src 'none'; child-src 'none'; worker-src 'self' {origin} blob:;
+      object-src 'none'; base-uri 'none'; form-action 'none'
+    # runMode=calculator (exam/test mode): no third-party content at all.
+    # Deliberately breaks uploaded images and remote textures — during an exam
+    # that is the point.
+    exam: >-
+      default-src 'none'; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' {cdn};
+      style-src 'self' {origin} 'unsafe-inline' {cdn} {fonts}; img-src 'self' {origin} data: blob:;
+      media-src 'self' {origin} data: blob:; font-src 'self' {origin} data: {cdn} {fonts};
+      connect-src 'self' {origin} {cdn}; frame-src 'none'; child-src 'none';
+      worker-src 'self' {origin} blob:; object-src 'none'; base-uri 'none'; form-action 'none'
 workers:
   trinkets:
     outputDir: '/tmp/' # should be readable by nginx

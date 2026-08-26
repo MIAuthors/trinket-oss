@@ -606,6 +606,37 @@ With the flag off, VPython behaves exactly as it always has (main thread,
    the prompt in strictly more cases than before). It wants its own issue and its
    own fix — clearing the latch is a one-liner, but the surrounding REPL
    lifecycle deserves a look at the same time.
+## Optional: cache static assets (`app.cache.enabled`)
+
+Off by default. The stock behaviour sends `no-store` on **every** response, so
+each page view re-downloads the whole front end (measured: 29 same-origin
+assets, ~933 KB, uncacheable by browser and CDN alike). Turning this on lets
+version-stamped asset URLs (`/cache-prefix-<token>/...`) be cached hard:
+
+```yaml
+# config/local.yaml (or local-production.yaml)
+app:
+  cache:
+    enabled: true
+    # staticMaxAge: 31536000   # optional; seconds, default 1 year
+```
+
+What changes — and what does not:
+
+* **Only** version-stamped asset paths get `public, max-age=..., immutable`.
+  Every dynamic response (HTML, API) keeps the exact `no-store` header it
+  always had.
+* The stamp is the deployed commit (see `lib/util/assetVersion.js`), so asset
+  URLs change on deploy and clients pick up new assets immediately. Safe to
+  cache "forever" for exactly that reason.
+* A shared cache/CDN in front of the deploy can now serve those assets from
+  its edge. Without a CDN you still get browser caching — the second page view
+  stops re-downloading the front end.
+
+Verify after enabling: `curl -sI https://<host>/cache-prefix-<token>/css/base.css`
+(copy a real asset URL from the page source) should show `cache-control:
+public, max-age=31536000, immutable`, while `curl -sI https://<host>/` keeps
+`no-store`.
 
 ## Example — prod-only infra in `config/local-production.yaml`
 
