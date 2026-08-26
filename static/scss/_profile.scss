@@ -15,8 +15,8 @@
   .file-upload {
     position: relative;
     background-color: #fff;
-    border: 1px solid $primary-color;
-    color: $primary-color;
+    border: 1px solid var(--brand-button, #{$primary-color});
+    color: var(--brand-button, #{$primary-color});
     overflow: hidden;
   }
 

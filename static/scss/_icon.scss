@@ -40,7 +40,7 @@ i.trinket-key {
     position: relative;
 
     &.premium, &.green {
-      background-color: $secondary-color;
+      background-color: var(--brand-secondary, #{$secondary-color});
     }
     &.yellow {
       background-color: $yellow;

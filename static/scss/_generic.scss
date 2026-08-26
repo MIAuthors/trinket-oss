@@ -176,7 +176,7 @@ body#thanks {
 	.editable {
 		border-bottom: 1px dashed #666;
 		&:hover {
-			color: $primary-color;
+			color: var(--brand-link, #{$primary-color});
 		}
 	}
 }
@@ -194,9 +194,9 @@ body#thanks {
 
 .reset {
   background: #FFF;
-  border: 1px solid $primary-color;
-  color: $primary-color;
-  &:hover { color: $primary-color; background: lighten($primary-color, 40%); }
+  border: 1px solid var(--brand-button, #{$primary-color});
+  color: var(--brand-button, #{$primary-color});
+  &:hover { color: var(--brand-button, #{$primary-color}); background: var(--brand-button-pale, #{lighten($primary-color, 40%)}); }
 }
 
 .fade {
@@ -232,7 +232,7 @@ p.caption {
     max-height: 320px;
     overflow: auto;
     &:hover {
-      box-shadow: 0 0 2px 2px rgba($primary-color, 0.5);
+      box-shadow: 0 0 2px 2px color-mix(in srgb, var(--brand-primary, #{$primary-color}) 50%, transparent);
     }
   }
 }
@@ -340,7 +340,7 @@ section#banner {
   width: 100%;
   padding: 40px;
   text-align: center;
-  background: $primary-color;
+  background: var(--brand-primary, #{$primary-color});
   font-weight: bold;
   &.yellow {
     background: $yellow;

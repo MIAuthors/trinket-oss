@@ -54,3 +54,89 @@ a {
     filter: brightness(0.93);
   }
 }
+
+// =============================================================================
+// #149: coverage for Foundation-COMPILED brand greens.
+//
+// Foundation derives these from $primary-color inside the vendored components
+// tarball, so they cannot be converted at their source the way static/scss/
+// files were. Re-pointed here instead — imported last, so these win. Every
+// fallback is the exact color Foundation compiles today; with no --brand-*
+// custom properties set, rendering is unchanged.
+//
+// Shade provenance: #5E9D37 = darken($picup-green, 10%), #9ED27F =
+// lighten($picup-green, 14%) — Foundation's own derivations, frozen here as
+// fallbacks. Branded deploys override via theme.buttonDark / theme.link etc.
+// =============================================================================
+
+// Cascade-safety note (verified): the bare `.alert-box` / `.label` rules
+// below are (0,1,0); Foundation's own variant rules (`.alert-box.alert`,
+// `.alert-box.warning`, `.label.alert`, ...) are (0,2,0) and therefore keep
+// winning REGARDLESS of stylesheet order — only the default (green) variant
+// is re-pointed. Do not "tidy" these selectors up to `.alert-box.success`-only:
+// the bare default with no class is the primary-colored one being themed.
+
+// Breadcrumb trail text and links.
+.breadcrumbs > * {
+  color: var(--brand-link, #{$_brand-primary});
+  a { color: var(--brand-link, #{$_brand-primary}); }
+}
+
+// Inline labels (tags). White text sits on these — a text-bearing role.
+.label,
+.label.success {
+  background-color: var(--brand-button, #{$_brand-primary});
+}
+
+// Pagination: the current page chip (white label).
+ul.pagination li.current a,
+ul.pagination li.current button {
+  background: var(--brand-button, #{$_brand-primary});
+  &:hover,
+  &:focus {
+    background: var(--brand-button, #{$_brand-primary});
+    filter: brightness(0.93);
+  }
+}
+
+// Icon bar hover/active fill.
+.icon-bar > a {
+  &:hover,
+  &.active {
+    background: var(--brand-button, #{$_brand-primary});
+  }
+}
+
+// Side-nav active/hover link text (Foundation compiles a LIGHTENED green
+// here). The side-nav renders on a LIGHT background (page bg; #eee headings,
+// #ddd borders — _generic.scss `body.side-nav-with-content`), so the stock
+// #9ED27F was the low-contrast choice and --brand-link (specified 4.5:1
+// against pageBg) is an upgrade on the very surface it is measured for. If a
+// deploy ever gives the side-nav a dark fill, this key stops being the right
+// one — re-verify then.
+.side-nav li {
+  a:not(.button):not(.faux-button) {
+    &:hover,
+    &:active { color: var(--brand-link, #9ED27F); }
+  }
+  &.active > a:first-child:not(.button):not(.faux-button) {
+    color: var(--brand-link, #9ED27F);
+  }
+}
+
+// Callout panel links.
+.panel.callout a:not(.button):not(.faux-button) {
+  color: var(--brand-link, #{$_brand-primary});
+  &:hover,
+  &:focus {
+    color: var(--brand-link, #{$_brand-primary});
+    filter: brightness(0.85);
+  }
+}
+
+// Success alert boxes (white text on the fill).
+.alert-box,
+.alert-box.success {
+  background-color: var(--brand-button, #{$_brand-primary});
+  border-color: var(--brand-button-dark, #64A83B);  // Foundation's own alert border shade
+}
