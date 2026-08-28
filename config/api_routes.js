@@ -574,6 +574,16 @@ module.exports = [
     }
   },
   {
+    // Refreshes "has the LMS graded this?" for one assignment. Separate from the
+    // dashboard fetch on purpose: it talks to the LMS, and that must not sit on a
+    // page load. See course.lmsGrades.
+    route : 'POST /api/courses/{courseId}/materials/{materialId}/lms-grades course.lmsGrades',
+    config : {
+      auth: 'session',
+      pre : ['course(params.courseId)']
+    }
+  },
+  {
     route : 'GET /api/courses/{courseId}/lessons/{lessonId}/materials/{materialId}/submissions course.getMaterialSubmissionsForAllUsers',
     config : {
       auth: 'session',
