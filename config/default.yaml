@@ -311,6 +311,8 @@ app:
       - /js/vendor/purify.min.js
       - /js/trinket-markdown-modern.js
       - /js/services/markdown.js
+      - //cdnjs.cloudflare.com/ajax/libs/moment.js/2.18.1/moment.min.js
+      - //cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.13/moment-timezone-with-data.min.js
       - /js/services/util.js
       - /js/services/submissions.js
       - /partials/directives/trinket-feedback.js
