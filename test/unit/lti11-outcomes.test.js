@@ -145,3 +145,100 @@ describe('postSubmission', () => {
     await expect(o.postSubmission(args)).rejects.toThrow(/HTTP 401/);
   });
 });
+
+// --- readResult -------------------------------------------------------------
+// Asking the platform what score a human entered, so trinket can stop asking the
+// instructor to mark the same submission done twice. The subtle case is that
+// "nobody has graded it yet" comes back as SUCCESS with an empty score, not as an
+// error — treat that as a grade and every submission looks graded the moment a
+// line item exists.
+describe('buildReadResult', () => {
+  it('asks for the result of one sourcedid', () => {
+    const xml = o.buildReadResult({ sourcedId: 'sid-1', messageId: 'm-1' });
+    expect(xml).toContain('<readResultRequest>');
+    expect(xml).toContain('<sourcedId>sid-1</sourcedId>');
+  });
+
+  it('escapes the sourcedid', () => {
+    expect(o.buildReadResult({ sourcedId: 'a&b<c', messageId: 'm' })).toContain('a&amp;b&lt;c');
+  });
+});
+
+describe('readScore', () => {
+  const env = (inner, major = 'success') =>
+    `<imsx_statusInfo><imsx_codeMajor>${major}</imsx_codeMajor></imsx_statusInfo>${inner}`;
+
+  it('reports a real score as graded', () => {
+    const r = o.readScore(env('<result><resultScore><language>en</language><textString>0.92</textString></resultScore></result>'));
+    expect(r.graded).toBe(true);
+    expect(r.score).toBe(0.92);
+  });
+
+  it('treats a ZERO score as graded — a zero is a grade', () => {
+    const r = o.readScore(env('<result><resultScore><textString>0</textString></resultScore></result>'));
+    expect(r.graded).toBe(true);
+    expect(r.score).toBe(0);
+  });
+
+  it('treats an EMPTY score as not-yet-graded, not as an error', () => {
+    const r = o.readScore(env('<result><resultScore><textString></textString></resultScore></result>'));
+    expect(r.ok).toBe(true);
+    expect(r.graded).toBe(false);
+    expect(r.score).toBeNull();
+  });
+
+  it('treats a missing resultScore as not-yet-graded', () => {
+    const r = o.readScore(env('<result></result>'));
+    expect(r.ok).toBe(true);
+    expect(r.graded).toBe(false);
+  });
+
+  it('does not report graded when the platform says failure', () => {
+    const r = o.readScore(env('<result><resultScore><textString>0.5</textString></resultScore></result>', 'failure'));
+    expect(r.ok).toBe(false);
+    expect(r.graded).toBe(false);
+  });
+
+  it('ignores a non-numeric score rather than trusting it', () => {
+    const r = o.readScore(env('<result><resultScore><textString>N/A</textString></resultScore></result>'));
+    expect(r.graded).toBe(false);
+    expect(r.score).toBeNull();
+  });
+});
+
+describe('readResult over the wire', () => {
+  const args = { serviceUrl: SERVICE, consumerKey: KEY, secret: SECRET, sourcedId: 'sid-1' };
+  let calls;
+  beforeEach(() => { calls = []; });
+  afterEach(() => { delete global.fetch; });
+  const stubFetch = (status, text) => {
+    global.fetch = (url, init) => { calls.push({ url, init });
+      return Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(text) }); };
+  };
+  const ok = (inner) =>
+    `<imsx_statusInfo><imsx_codeMajor>success</imsx_codeMajor></imsx_statusInfo>${inner}`;
+
+  it('signs the body it sends, like replaceResult does', async () => {
+    stubFetch(200, ok('<resultScore><textString>1</textString></resultScore>'));
+    await o.readResult(args);
+    expect(calls[0].init.headers.authorization)
+      .toContain(encodeURIComponent(o.bodyHash(calls[0].init.body)));
+    expect(calls[0].init.body).toContain('readResultRequest');
+  });
+
+  it('returns graded:false for an ungraded submission without throwing', async () => {
+    stubFetch(200, ok('<resultScore><textString></textString></resultScore>'));
+    await expect(o.readResult(args)).resolves.toMatchObject({ graded: false, score: null });
+  });
+
+  it('throws when the platform reports failure', async () => {
+    stubFetch(200, '<imsx_statusInfo><imsx_codeMajor>failure</imsx_codeMajor>' +
+                   '<imsx_description>Unknown sourcedid</imsx_description></imsx_statusInfo>');
+    await expect(o.readResult(args)).rejects.toThrow(/Unknown sourcedid/);
+  });
+
+  it('throws on a transport error', async () => {
+    stubFetch(500, 'nope');
+    await expect(o.readResult(args)).rejects.toThrow(/HTTP 500/);
+  });
+});
