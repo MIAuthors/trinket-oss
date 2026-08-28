@@ -71,7 +71,7 @@ describe('LTI 1.1 review launch (SpeedGrader)', () => {
 
     expect(flow.lastResponse.statusCode,
       JSON.stringify(flow.lastResponse.body).slice(0, 200)).toBe(302);
-    expect(flow.lastResponse.headers.location).toBe('/assignment-embed-feedback/python3/sub-1');
+    expect(flow.lastResponse.headers.location).toBe('/lti/review-panel/sub-1');
   });
 
   it('refuses a grader with no feedback permission on the submission course', async () => {
@@ -84,7 +84,7 @@ describe('LTI 1.1 review launch (SpeedGrader)', () => {
 
     // 403 not 404: the route ran and refused, rather than never existing.
     expect(flow.lastResponse.statusCode).toBe(403);
-    expect(flow.lastResponse.headers.location || '').not.toContain('/assignment-embed-feedback');
+    expect(flow.lastResponse.headers.location || '').not.toContain('/lti/review-panel');
   });
 
   it('does not leak a feedback view for a submission that does not exist', async () => {
@@ -99,7 +99,7 @@ describe('LTI 1.1 review launch (SpeedGrader)', () => {
     // so pin the thing that differs: the handler looked the submission up.
     expect(spy).toHaveBeenCalledWith('sub-missing');
     expect(flow.lastResponse.statusCode).toBe(404);
-    expect(flow.lastResponse.headers.location || '').not.toContain('/assignment-embed-feedback');
+    expect(flow.lastResponse.headers.location || '').not.toContain('/lti/review-panel');
   });
 
   it('still rejects a review launch signed with the wrong secret', async () => {

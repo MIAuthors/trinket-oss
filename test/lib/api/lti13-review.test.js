@@ -95,7 +95,7 @@ describe('LTI 1.3 review launch (SpeedGrader)', () => {
 
     expect(flow.lastResponse.statusCode,
       JSON.stringify(flow.lastResponse.body).slice(0, 300)).toBe(302);
-    expect(flow.lastResponse.headers.location).toBe('/assignment-embed-feedback/python3/sub-13');
+    expect(flow.lastResponse.headers.location).toBe('/lti/review-panel/sub-13');
   });
 
   it('refuses a launcher with no feedback permission on the submission course', async () => {
@@ -107,7 +107,7 @@ describe('LTI 1.3 review launch (SpeedGrader)', () => {
     await reviewLaunch('/lti/review/sub-13b', defaults.user.email);
 
     expect(flow.lastResponse.statusCode).toBe(403);
-    expect(flow.lastResponse.headers.location || '').not.toContain('/assignment-embed-feedback');
+    expect(flow.lastResponse.headers.location || '').not.toContain('/lti/review-panel');
   });
 
   it('404s a review launch for a submission that does not exist', async () => {
@@ -129,6 +129,6 @@ describe('LTI 1.3 review launch (SpeedGrader)', () => {
     await reviewLaunch('/lti/launch', defaults.user.email);
 
     expect(spy, 'a plain launch must not look up a submission').not.toHaveBeenCalled();
-    expect(flow.lastResponse.headers.location || '').not.toContain('/assignment-embed-feedback');
+    expect(flow.lastResponse.headers.location || '').not.toContain('/lti/review-panel');
   });
 });

@@ -54,8 +54,11 @@ describe('ltiReview.canReview', () => {
 });
 
 describe('ltiReview.redirectPath', () => {
-  it('targets the feedback embed for the submission language', () => {
+  it('targets the feedback PANEL, not the bare embed', () => {
+    // The embed shows the work and inline comments but has no comments-to-student
+    // form, so a grader arriving from the LMS could see the submission and had no
+    // way to respond without leaving for the course dashboard.
     expect(r.redirectPath({ id: 'sub123', lang: 'python3' }))
-      .toBe('/assignment-embed-feedback/python3/sub123');
+      .toBe('/lti/review-panel/sub123');
   });
 });
