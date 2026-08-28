@@ -462,6 +462,13 @@ routes = [
     }
   },
   {
+    // Where an LTI review launch lands: the feedback panel, chrome-free, sized for
+    // an LMS grader pane. Session established by the launch itself.
+    route : 'GET /lti/review-panel/{trinketId} lti.reviewPanel',
+    html  : 'lti/review-panel.html',
+    config: { auth: 'session' }
+  },
+  {
     route : 'GET /lti/jwks lti.jwks',
     config : {
       auth : false

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submission feedback</title>
+  {% for stylesheet in config.app.assets.css %}
+    <link rel="stylesheet" type="text/css" media="all" href="{{ stylesheet | cachePrefix }}">
+  {% endfor %}
+  <style>
+    /* The panel is the whole page here: no site chrome, and it must survive being
+       rendered in a short LMS grader pane, so it scrolls internally rather than
+       forcing the surrounding iframe to grow. */
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .review-panel-host { padding: 0.75rem; }
+  </style>
+  {% for script in config.app.assets.jshead %}
+    <script src="{{ script | cachePrefix }}"></script>
+  {% endfor %}
+</head>
+<body ng-app="reviewPanel">
+  <span id="userdata" data-user-id="{{ user.id }}" style="display:none">{{ user.username }}</span>
+
+  <div class="review-panel-host" ng-controller="ReviewPanelCtrl">
+    <trinket-feedback
+      material="material"
+      submission="submission"
+      cancel="cancelFeedback"
+      can-send-feedback="canSendFeedback"></trinket-feedback>
+  </div>
+
+  <script>
+    window.TRINKET_REVIEW_PANEL = {
+      material   : {{ material | dump | safe }},
+      submission : {{ submission | dump | safe }}
+    };
+  </script>
+  {% for script in config.app.assets.jsbody %}
+    <script src="{{ script | cachePrefix }}"></script>
+  {% endfor %}
+  {% for script in config.app.ngapps.reviewPanel %}
+    <script src="{{ script | cachePrefix }}"></script>
+  {% endfor %}
+</body>
+</html>
