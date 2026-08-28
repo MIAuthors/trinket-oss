@@ -98,6 +98,28 @@ describe('LTI 1.1 deep linking', () => {
 });
 
 describe('LTI 1.1 config XML', () => {
+  it('takes a title so two Trinket tools are distinguishable in the picker', async () => {
+    // Canvas lists tools by title. A deploy carrying both a 1.3 and a 1.1 tool
+    // otherwise shows two identical "Trinket" rows, and the only way to name one
+    // was Manual Entry — which gets no placements, so no picker.
+    await flow.get('/lti11/config.xml?title=GCR%20Trial%20LTI-1.1');
+    const xml = String(flow.lastResponse.body);
+    expect(xml).toContain('<blti:title>GCR Trial LTI-1.1</blti:title>');
+    expect(xml).toContain('<lticm:property name="text">GCR Trial LTI-1.1</lticm:property>');
+  });
+
+  it('escapes a title rather than letting it break the XML', async () => {
+    await flow.get('/lti11/config.xml?title=' + encodeURIComponent('A & B <script>'));
+    const xml = String(flow.lastResponse.body);
+    expect(xml).toContain('A &amp; B &lt;script&gt;');
+    expect(xml).not.toContain('<script>');
+  });
+
+  it('falls back to the default title when none is given', async () => {
+    await flow.get('/lti11/config.xml');
+    expect(String(flow.lastResponse.body)).toContain('<blti:title>Trinket</blti:title>');
+  });
+
   it('declares the deep-linking placements, or Canvas offers no picker', async () => {
     await flow.get('/lti11/config.xml');
     const xml = String(flow.lastResponse.body);
