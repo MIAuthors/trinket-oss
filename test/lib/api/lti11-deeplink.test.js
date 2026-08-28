@@ -120,6 +120,21 @@ describe('LTI 1.1 config XML', () => {
     expect(String(flow.lastResponse.body)).toContain('<blti:title>Trinket</blti:title>');
   });
 
+  it('asks for the content-item message explicitly on every placement', async () => {
+    // Canvas placements default to the LEGACY resource-selection flow, which sends a
+    // plain basic-lti-launch-request — the tool then renders as an ordinary launch
+    // with no way to return a selection. The IMS content-item message only happens
+    // if the placement names it. Observed live: without this, clicking the picker
+    // opened our course page with nothing to select.
+    await flow.get('/lti11/config.xml');
+    const xml = String(flow.lastResponse.body);
+    const placements = xml.split('<lticm:options').slice(1);
+    expect(placements.length, 'both placements present').toBe(2);
+    placements.forEach((p) => {
+      expect(p).toContain('<lticm:property name="message_type">ContentItemSelectionRequest</lticm:property>');
+    });
+  });
+
   it('declares the deep-linking placements, or Canvas offers no picker', async () => {
     await flow.get('/lti11/config.xml');
     const xml = String(flow.lastResponse.body);
