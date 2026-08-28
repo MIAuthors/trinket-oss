@@ -14,6 +14,10 @@
     html, body { margin: 0; padding: 0; background: #fff; }
     .review-panel-host { padding: 0.75rem; }
   </style>
+  {# Same bootstrap base.html emits: /js/trinket-config.js dereferences
+     window.trinket.config at load, and without it trinketConfig never registers,
+     so injecting it into trinket-feedback fails and the panel renders blank. #}
+  {% include "includes/app-config.html" %}
   {% for script in config.app.assets.jshead %}
     <script src="{{ script | cachePrefix }}"></script>
   {% endfor %}

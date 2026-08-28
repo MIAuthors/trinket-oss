@@ -35,77 +35,7 @@
   </style>
   {% endif %}
   {% block extra_css %}{% endblock %}
-  <script type="text/javascript">
-    trinket = {
-      config : {
-        apphostname    : '{{config.app.url.hostname}}{% if config.app.url.port and config.app.url.port != 80 and config.app.url.port != 443 %}:{{config.app.url.port}}{% endif %}',
-        usersubdomains : {{config.app.usersubdomains}},
-        protocol       : '{{config.app.url.protocol}}',
-        cachePrefix    : '{{config.app.cachePrefix}}',
-        assetToken     : '{{ assetToken() }}',
-        prefixes       : {{ config.app.prefixes | json | safe }},
-        components     : {{ config.app.components | json | safe }},
-        vendorHost     : '{{ config.aws.buckets.vendorassets.host }}',
-        trinketTypes   : [
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.python %}
-          { lang : 'python',     image : '{{config.aws.buckets.appassets.host}}/python.png',     label : {{ (config.features.trinketLabels.python or 'Python') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.pyodide %}
-          { lang : 'pyodide',    image : '{{config.aws.buckets.appassets.host}}/python.png',     label : {{ (config.features.trinketLabels.pyodide or 'Pyodide') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.python3 %}
-          { lang : 'python3',    image : '{{config.aws.buckets.appassets.host}}/python.png',     label : {{ (config.features.trinketLabels.python3 or 'Python3') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.pygame %}
-          { lang : 'pygame',     image : '{{config.aws.buckets.appassets.host}}/python.png',     label : {{ (config.features.trinketLabels.pygame or 'Pygame') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.java %}
-          { lang : 'java',       image : '{{config.aws.buckets.appassets.host}}/java.png',       label : {{ (config.features.trinketLabels.java or 'Java') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.R %}
-          { lang : 'R',          image : '{{config.aws.buckets.appassets.host}}/R.png',          label : {{ (config.features.trinketLabels.R or 'R') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.blocks %}
-          { lang : 'blocks',     image : '{{config.aws.buckets.appassets.host}}/blocks.png',     label : {{ (config.features.trinketLabels.blocks or 'Blocks') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.html %}
-          { lang : 'html',       image : '{{config.aws.buckets.appassets.host}}/html.png',       label : {{ (config.features.trinketLabels.html or 'HTML') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.glowscript %}
-          { lang : 'glowscript', image : '{{config.aws.buckets.appassets.host}}/glowscript.png', label : {{ (config.features.trinketLabels.glowscript or 'Web VPython') | json | safe }} },
-          {% endif %}
-          {% if config.features and config.features.trinkets and config.features.trinkets['glowscript-blocks'] %}
-          { lang : 'glowscript-blocks', image : '{{config.aws.buckets.appassets.host}}/glowscript.png', label : {{ (config.features.trinketLabels['glowscript-blocks'] or 'Web VPython Blocks') | json | safe }} },
-          {% endif %}
-          {% if not config.features or not config.features.trinkets or config.features.trinkets.music %}
-          { lang : 'music',      image : '{{config.aws.buckets.appassets.host}}/music.png',      label : {{ (config.features.trinketLabels.music or 'Music') | json | safe }} },
-          {% endif %}
-        ],
-        autorun           : ["{{ config.app.autorun      | join('","') | safe }}"],
-        outputOnly        : ["{{ config.app.outputOnly   | join('","') | safe }}"],
-        toggleCode        : ["{{ config.app.toggleCode   | join('","') | safe }}"],
-        downloadable      : ["{{ config.app.downloadable | join('","') | safe }}"],
-        uploadable        : ["{{ config.app.uploadable   | join('","') | safe }}"],
-        hideGeneratedCode : ["{{ config.app.hideGeneratedCode | join('","') | safe }}"],
-        runtimeOption     : ["{{ config.app.runtimeOption | join('","') | safe }}"],
-        calculatorOption  : ["{{ config.app.calculatorOption | join('","') | safe }}"],
-        runOption         : {{ config.app.runOption      | json        | safe }},
-        emailEnabled      : {{ 'true' if emailEnabled else 'false' }},
-        assetsEnabled     : {{ 'true' if config.features.assets else 'false' }},
-        accessCodeEnrollment : {{ 'true' if config.features.accessCodeEnrollment else 'false' }},
-        {# Whether this user may reach /account/import. Injected here because the
-           My Trinkets page is an Angular SPA with no server-side user context,
-           and its Import button must be gated exactly like the route (issue #6) —
-           a button that bounces the user to /account/profile is worse than none.
-           addUserContext computes it with the same helper the route gate uses. #}
-        canImport         : {{ 'true' if canImport else 'false' }},
-        largeUpload       : {
-          enabled   : {{ 'true' if (config.imports and config.imports.largeUpload and config.imports.largeUpload.enabled) else 'false' }},
-          threshold : {{ config.imports.largeUpload.thresholdBytes if (config.imports and config.imports.largeUpload) else 0 }}
-        }
-      }
-    };
-  </script>
+  {% include "includes/app-config.html" %}
   {% for script in config.app.assets.jshead %}
     <script src="{{ script | cachePrefix }}"></script>
   {% endfor %}
