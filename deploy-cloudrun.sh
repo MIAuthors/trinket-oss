@@ -99,6 +99,19 @@ if [[ -n "${TRINKET_DEPLOY:-}" ]]; then
     echo "Error: TRINKET_DEPLOY='"'"'${TRINKET_DEPLOY}'"'"' but deploys/${TRINKET_DEPLOY}/ does not exist" >&2
     exit 1
   fi
+  # Non-secret deploy config, TRACKED in the overlay repo. `.env` holds secrets
+  # and is untracked, so anything non-secret parked there is invisible to review
+  # and silently lost when a checkout is rebuilt from the Secret Manager backup.
+  # That is not theoretical: restoring per SECRETS.md would have dropped
+  # HOSTING_* (disabling the CDN publish) and MEMORY (reverting mandi's 2Gi bump
+  # for large course imports), with no error either time.
+  #
+  # Sourced BEFORE .env so .env still wins — existing boxes keep working, and a
+  # per-box override remains possible.
+  if [[ -f "${SCRIPT_DIR}/deploys/${TRINKET_DEPLOY}/deploy.env" ]]; then
+    # shellcheck disable=SC1090
+    source "${SCRIPT_DIR}/deploys/${TRINKET_DEPLOY}/deploy.env"
+  fi
   if [[ -f "${SCRIPT_DIR}/deploys/${TRINKET_DEPLOY}/.env" ]]; then
     # shellcheck disable=SC1090
     source "${SCRIPT_DIR}/deploys/${TRINKET_DEPLOY}/.env"
