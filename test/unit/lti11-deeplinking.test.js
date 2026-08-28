@@ -12,7 +12,25 @@ const KEY = 'ck', SECRET = 'cs';
 const fixed = { nonce: 'n1', timestamp: 1700000000 };
 
 describe('content items', () => {
-  it('carries per-placement targeting as custom params', () => {
+  it('puts targeting in the URL, because Canvas ignores custom on 1.1 items', () => {
+    // Observed live: every launch from a deep-linked item arrived with no
+    // trinket_course, so the student landed on their own trinkets instead of the
+    // assignment. Canvas replays the stored URL verbatim, so targeting rides there.
+    const a = d.assignmentContentItem({ courseId: 'c1', materialId: 'm1', title: 'HW 1' });
+    expect(a.url).toContain('course=c1');
+    expect(a.url).toContain('assignment=m1');
+
+    const topic = d.linkContentItem({ courseId: 'c1', lessonId: 'l1', title: 'T' });
+    expect(topic.url).toContain('topic=l1');
+
+    // A bare course link carries only the course.
+    const course = d.linkContentItem({ courseId: 'c1', title: 'C' });
+    expect(course.url).toContain('course=c1');
+    expect(course.url).not.toContain('topic=');
+    expect(course.url).not.toContain('assignment=');
+  });
+
+  it('still sends custom as well — it is spec-correct and other platforms honour it', () => {
     const item = d.assignmentContentItem({ courseId: 'c1', materialId: 'm1', title: 'HW 1' });
     expect(item.custom.trinket_course).toBe('c1');
     expect(item.custom.trinket_assignment).toBe('m1');
