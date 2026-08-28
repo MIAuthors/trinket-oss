@@ -242,3 +242,20 @@ describe('readResult over the wire', () => {
     await expect(o.readResult(args)).rejects.toThrow(/HTTP 500/);
   });
 });
+
+describe('request deadline', () => {
+  let calls;
+  beforeEach(() => { calls = []; });
+  afterEach(() => { delete global.fetch; });
+
+  it('gives every outcomes call an abort signal, so a stalled LMS cannot hang a page', async () => {
+    global.fetch = (url, init) => { calls.push(init);
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(
+        '<imsx_statusInfo><imsx_codeMajor>success</imsx_codeMajor></imsx_statusInfo>') }); };
+    await o.postSubmission({ serviceUrl: SERVICE, consumerKey: KEY, secret: SECRET,
+                             sourcedId: 's', launchUrl: 'https://t/x' });
+    await o.readResult({ serviceUrl: SERVICE, consumerKey: KEY, secret: SECRET, sourcedId: 's' });
+    expect(calls.length).toBe(2);
+    calls.forEach((init) => expect(init.signal, 'no deadline on an outcomes call').toBeTruthy());
+  });
+});
