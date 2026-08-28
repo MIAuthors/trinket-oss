@@ -628,6 +628,56 @@ else
   echo "    Could not determine billing account — skipping budget alert"
 fi
 
+# --- Publish this deploy's assets to the CDN --------------------------------
+# Cloud Run and Firebase Hosting are SEPARATE deploys. A CDN-fronted deploy
+# serves static files from Hosting under /cache-prefix-<commit>/, so shipping
+# the app without republishing leaves it emitting a prefix the CDN has never
+# seen: every asset falls through the rewrite to Cloud Run. Nothing breaks, it
+# just silently stops being a CDN — which is how mandi and uindy spent the
+# morning of 2026-08-28 serving 32 MB of assets from the origin, unnoticed,
+# after three deploys.
+#
+# Opt-in per deploy: set HOSTING_SITE (with FIREBASE_PROJECT and
+# HOSTING_REWRITES) in deploys/<name>/.env. Unset means "not CDN-fronted".
+if [[ -n "${HOSTING_SITE:-}" ]]; then
+  if [[ "${NO_TRAFFIC}" =~ ^(1|true|yes)$ ]]; then
+    # The candidate is not serving, so ${SERVICE_URL}/version still reports the
+    # PREVIOUS commit — publishing now would upload under the wrong prefix.
+    echo ""
+    echo "--- Skipping CDN publish (NO_TRAFFIC) ---"
+    echo "    Run scripts/deploy-hosting.sh after promoting this revision."
+  else
+    echo ""
+    echo "--- Publishing assets to the CDN ---"
+    if ! command -v docker &>/dev/null; then
+      echo "    docker not found. Assets are extracted from the BUILT IMAGE, not" >&2
+      echo "    the source tree: components/ (glowscript runner, ACE modes) is" >&2
+      echo "    provisioned during the build and is absent from public/." >&2
+      echo "    The app IS deployed; the CDN is STALE. Re-run where docker exists:" >&2
+      echo "      FIREBASE_PROJECT=${FIREBASE_PROJECT:-${GOOGLE_CLOUD_PROJECT}} \\" >&2
+      echo "      HOSTING_SITE=${HOSTING_SITE} HOSTING_REWRITES='<json>' \\" >&2
+      echo "      SERVICE_URL=${SERVICE_URL} scripts/deploy-hosting.sh" >&2
+      exit 1
+    fi
+    # HOSTING_REWRITES is never inferred: `firebase deploy --only hosting`
+    # REPLACES the site config, so a wrong value silently strips the run
+    # rewrite and leaves the site serving static files only.
+    : "${HOSTING_REWRITES:?set HOSTING_REWRITES alongside HOSTING_SITE (a hosting deploy REPLACES site config; it is never inferred)}"
+    if ! FIREBASE_PROJECT="${FIREBASE_PROJECT:-${GOOGLE_CLOUD_PROJECT}}" \
+         HOSTING_SITE="${HOSTING_SITE}" \
+         HOSTING_REWRITES="${HOSTING_REWRITES}" \
+         SERVICE_URL="${SERVICE_URL}" \
+         IMAGE="${IMAGE}" \
+         bash "${SCRIPT_DIR}/scripts/deploy-hosting.sh"; then
+      echo "" >&2
+      echo "!!! App deployed, but the CDN publish FAILED." >&2
+      echo "    Assets will fall through to Cloud Run: working, but uncached." >&2
+      echo "    Re-run scripts/deploy-hosting.sh once the cause is fixed." >&2
+      exit 1
+    fi
+  fi
+fi
+
 echo ""
 echo "=== Deployment complete ==="
 echo "URL: ${SERVICE_URL}"
