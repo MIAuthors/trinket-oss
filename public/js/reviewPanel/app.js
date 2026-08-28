@@ -14,17 +14,20 @@
   // the provider unregistered and Angular threw
   //   [$injector:unpr] trinketConfigProvider <- trinketConfig <- trinketFeedbackDirective
   // which renders as a silently blank panel.
-  angular.module('reviewPanel', ['trinket.feedback', 'trinket.config', 'trinket.markdown', 'trinket.util'])
-    .controller('ReviewPanelCtrl', ['$scope', function ($scope) {
+  angular.module('reviewPanel', ['restangular', 'trinket.feedback', 'trinket.config', 'trinket.markdown', 'trinket.util'])
+    .controller('ReviewPanelCtrl', ['$scope', 'Restangular', function ($scope, Restangular) {
       var boot = window.TRINKET_REVIEW_PANEL || {};
 
-      // trinketSubmissions.getUserSubmissionsForMaterial(user, material) reaches for
-      // material.parentResource.parentResource.id — the course — which Restangular
-      // supplies in the dashboard. Nothing else of the chain is used, so provide
-      // exactly that rather than dragging Restangular's object graph in here.
-      $scope.material = angular.extend({}, boot.material || {}, {
-        parentResource: { parentResource: { id: boot.courseId } }
-      });
+      // A REAL Restangular element, not a hand-made lookalike. The directive both
+      // reads material.parentResource.parentResource (to fetch submissions) and calls
+      // material.customPOST(..., 'feedback') to send feedback — and customPOST is a
+      // Restangular method no plain object has. Faking the chain was enough to render
+      // and not enough to submit: Send Feedback threw
+      //   TypeError: material.customPOST is not a function
+      // and the spinner spun forever, because the promise never settled.
+      var course = Restangular.one('courses', boot.courseId);
+      var lesson = course.one('lessons', boot.lessonId);
+      $scope.material = Restangular.restangularizeElement(lesson, boot.material || {}, 'materials');
       $scope.submission = boot.submission;
 
       // The route already required send-submission-feedback before rendering, so

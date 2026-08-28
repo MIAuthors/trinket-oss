@@ -80,6 +80,30 @@ test.describe('LTI review panel renders standalone', () => {
     // catches it.
     await expect(page.locator('.feedback-editor.ace_editor').first()).toBeVisible();
 
+    // Rendering the form is not the same as being able to USE it. The directive calls
+    // material.customPOST(..., 'feedback') — a Restangular method — so a hand-made
+    // material object rendered fine and then threw on click, leaving the button
+    // spinning forever. Click it for real and require the request to land.
+    // An impatient instructor clicks the moment the panel paints, before the embedded
+    // trinket iframe has loaded. That used to throw inside sendFeedback and strand
+    // sendingFeedback=true, so the button spun forever and the feedback was never sent.
+    // The click must be a no-op that leaves the panel usable.
+    await page.locator('a', { hasText: /send feedback/i }).first().click();
+
+    // canSubmit (and scope.api) only go true when the embedded trinket iframe fires
+    // load, so the control is live-but-disabled until then. Wait for that rather than
+    // racing it.
+    const send = page.locator('a', { hasText: /send feedback/i }).first();
+    await expect(send).not.toHaveClass(/disabled/, { timeout: 20_000 });
+
+    await page.locator('.feedback-editor.ace_editor').first().click();
+    await page.keyboard.type('looks good');
+    const [feedbackRes] = await Promise.all([
+      page.waitForResponse((r) => /\/feedback$/.test(new URL(r.url()).pathname), { timeout: 20_000 }),
+      send.click(),
+    ]);
+    expect(feedbackRes.status(), 'Send Feedback must actually reach the server').toBe(200);
+
     // A blank panel produced console errors and nothing else, so treat them as fatal.
     expect(consoleErrors, 'panel must bootstrap with a clean console:\n' + consoleErrors.join('\n'))
       .toEqual([]);
