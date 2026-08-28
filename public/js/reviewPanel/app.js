@@ -8,7 +8,13 @@
 (function (angular) {
   'use strict';
 
-  angular.module('reviewPanel', ['trinket.feedback'])
+  // trinket-feedback injects trinketConfig (trinket.config) and markdownParser
+  // (trinket.markdown) but does NOT declare them — it relies on the host app having
+  // pulled them in, which the course app does. Listing only 'trinket.feedback' left
+  // the provider unregistered and Angular threw
+  //   [$injector:unpr] trinketConfigProvider <- trinketConfig <- trinketFeedbackDirective
+  // which renders as a silently blank panel.
+  angular.module('reviewPanel', ['trinket.feedback', 'trinket.config', 'trinket.markdown'])
     .controller('ReviewPanelCtrl', ['$scope', function ($scope) {
       var boot = window.TRINKET_REVIEW_PANEL || {};
 
