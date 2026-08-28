@@ -6,6 +6,12 @@
 const o = require('../../lib/util/lti11Outcomes');
 const v = require('../../lib/util/lti11Verify');
 
+// Node 20 exposes fetch as a global getter, and removing it with `delete` takes it
+// away for the WHOLE worker — a later test, or any library, then throws
+// "fetch is not defined". Observed live: 12 CI failures on the firestore leg while
+// mongo passed, purely on test ordering. Stub by assignment, restore the original.
+const REAL_FETCH = global.fetch;
+
 const SERVICE = 'https://lms.example/outcomes';
 const KEY = 'consumer-key';
 const SECRET = 'consumer-secret';
@@ -109,7 +115,7 @@ describe('postSubmission', () => {
     global.fetch = (url, init) => { calls.push({ url, init });
       return Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(text) }); };
   };
-  afterEach(() => { delete global.fetch; });
+  afterEach(() => { global.fetch = REAL_FETCH; });
 
   const ok = '<imsx_POXEnvelopeResponse><imsx_statusInfo><imsx_codeMajor>success</imsx_codeMajor></imsx_statusInfo></imsx_POXEnvelopeResponse>';
 
@@ -210,7 +216,7 @@ describe('readResult over the wire', () => {
   const args = { serviceUrl: SERVICE, consumerKey: KEY, secret: SECRET, sourcedId: 'sid-1' };
   let calls;
   beforeEach(() => { calls = []; });
-  afterEach(() => { delete global.fetch; });
+  afterEach(() => { global.fetch = REAL_FETCH; });
   const stubFetch = (status, text) => {
     global.fetch = (url, init) => { calls.push({ url, init });
       return Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(text) }); };
@@ -246,7 +252,7 @@ describe('readResult over the wire', () => {
 describe('request deadline', () => {
   let calls;
   beforeEach(() => { calls = []; });
-  afterEach(() => { delete global.fetch; });
+  afterEach(() => { global.fetch = REAL_FETCH; });
 
   it('gives every outcomes call an abort signal, so a stalled LMS cannot hang a page', async () => {
     global.fetch = (url, init) => { calls.push(init);
