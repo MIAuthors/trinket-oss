@@ -13,6 +13,16 @@
        forcing the surrounding iframe to grow. */
     html, body { margin: 0; padding: 0; background: #fff; }
     .review-panel-host { padding: 0.75rem; }
+
+    /* The shipped height for the comments editor is ancestor-scoped to the course
+       dashboard:
+           trinket-assignment .feedback-editor.ace_editor            { height:200px }
+           .dashboard-content.dashboard-list trinket-feedback ...    { height:200px }
+       This page renders <trinket-feedback> with neither ancestor, so ace initialised
+       (the element gets .ace_editor) but collapsed to height:0 — the instructor saw a
+       Send Feedback button and no box to type in. Give it the same height here rather
+       than borrowing dashboard class names this page has no business claiming. */
+    .feedback-editor.ace_editor { height: 200px; }
   </style>
   {# Same bootstrap base.html emits: /js/trinket-config.js dereferences
      window.trinket.config at load, and without it trinketConfig never registers,

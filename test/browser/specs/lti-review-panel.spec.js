@@ -73,10 +73,12 @@ test.describe('LTI review panel renders standalone', () => {
     // not match it.
     await expect(page.locator('a', { hasText: /send feedback/i }).first())
       .toBeVisible({ timeout: 20_000 });
-    // Deliberately NOT asserting on the comments editor: ui-ace initialises lazily
-    // here and its backing textarea is hidden, so it is a flaky proxy for "the
-    // instructor can respond". The Send Feedback control being visible is the real
-    // guarantee, and it is what every bootstrap failure destroyed.
+    // The instructor must be able to TYPE, not just click. ace only gets its height
+    // from `.feedback-editor.ace_editor { height: 200px }` once it has initialised,
+    // so if ace never runs the field collapses to nothing and the panel looks like it
+    // offers a button and no box. Reported from SpeedGrader; this assertion is what
+    // catches it.
+    await expect(page.locator('.feedback-editor.ace_editor').first()).toBeVisible();
 
     // A blank panel produced console errors and nothing else, so treat them as fatal.
     expect(consoleErrors, 'panel must bootstrap with a clean console:\n' + consoleErrors.join('\n'))
