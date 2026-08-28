@@ -14,11 +14,17 @@
   // the provider unregistered and Angular threw
   //   [$injector:unpr] trinketConfigProvider <- trinketConfig <- trinketFeedbackDirective
   // which renders as a silently blank panel.
-  angular.module('reviewPanel', ['trinket.feedback', 'trinket.config', 'trinket.markdown'])
+  angular.module('reviewPanel', ['trinket.feedback', 'trinket.config', 'trinket.markdown', 'trinket.util'])
     .controller('ReviewPanelCtrl', ['$scope', function ($scope) {
       var boot = window.TRINKET_REVIEW_PANEL || {};
 
-      $scope.material   = boot.material;
+      // trinketSubmissions.getUserSubmissionsForMaterial(user, material) reaches for
+      // material.parentResource.parentResource.id — the course — which Restangular
+      // supplies in the dashboard. Nothing else of the chain is used, so provide
+      // exactly that rather than dragging Restangular's object graph in here.
+      $scope.material = angular.extend({}, boot.material || {}, {
+        parentResource: { parentResource: { id: boot.courseId } }
+      });
       $scope.submission = boot.submission;
 
       // The route already required send-submission-feedback before rendering, so
