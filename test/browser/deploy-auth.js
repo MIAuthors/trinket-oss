@@ -9,6 +9,58 @@
 // pass while every permission boundary went untested — the owner can do
 // everything, so it proves nothing about what a student can do.
 
+// Firebase deploys have no form to fill, which is why the journeys used to skip
+// there. They do not need one: POST /api/auth/session takes any ID token this
+// project issued and never inspects WHICH provider minted it
+// (lib/controllers/auth.js — verifyIdToken, then email/uid). So sign in through
+// the Email/Password provider over the Identity Toolkit REST API and exchange
+// the token, which is the same seam the local suite drives via the emulator.
+//
+// Nothing is weakened to make this work: the provider is already enabled, the
+// apiKey below is public by design (it ships in the login page), and the
+// email_verified gate that protects account linking still applies — the test
+// identities were marked verified once, administratively.
+//
+// Preferred over a captured storageState: passwords do not expire, and it can
+// hold TWO identities, which storageState capture cannot do without two manual
+// browser sessions.
+async function firebaseApiKey(page, baseURL) {
+  const res = await page.request.get(new URL('/login', baseURL).toString());
+  const m = /"apiKey"\s*:\s*"([^"]+)"/.exec(await res.text());
+  if (!m) throw new Error('no Firebase apiKey on /login — is this a Firebase deploy?');
+  return m[1];
+}
+
+async function signInWithFirebasePassword(page, baseURL, email, password) {
+  const key = process.env.SMOKE_FIREBASE_API_KEY || await firebaseApiKey(page, baseURL);
+  const signIn = await page.request.post(
+    'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + key,
+    { data: { email: email, password: password, returnSecureToken: true } });
+  const body = await signIn.json();
+  if (!body.idToken) {
+    throw new Error('Firebase sign-in failed for ' + email + ': '
+      + JSON.stringify(body.error || body).slice(0, 200));
+  }
+  // page.request shares the context cookie jar, so the session cookie this sets
+  // is what later page.goto() calls travel with.
+  const sess = await page.request.post(new URL('/api/auth/session', baseURL).toString(),
+    { data: { idToken: body.idToken } });
+  if (sess.status() !== 200) {
+    throw new Error('session exchange failed (' + sess.status() + '): '
+      + (await sess.text()).slice(0, 200));
+  }
+}
+
+// One entry point, so a spec does not care which kind of deploy it is pointed at:
+// a password field means form auth, its absence means Firebase.
+async function signIn(page, baseURL, email, password) {
+  const login = await page.request.get(new URL('/login', baseURL).toString());
+  const hasForm = /type="password"/.test(await login.text());
+  return hasForm
+    ? signInWithForm(page, baseURL, email, password)
+    : signInWithFirebasePassword(page, baseURL, email, password);
+}
+
 async function signInWithForm(page, baseURL, email, password) {
   await page.goto('/login');
   await page.fill('input[name="email"], input[type="email"]', email);
@@ -56,4 +108,4 @@ function assertOk(expect, res, what) {
   expect(err, what + ' — 200 with an error flash: ' + JSON.stringify(err)).toBeFalsy();
 }
 
-module.exports = { signInWithForm, apiFor, unwrap, assertOk };
+module.exports = { signIn, signInWithForm, signInWithFirebasePassword, apiFor, unwrap, assertOk };

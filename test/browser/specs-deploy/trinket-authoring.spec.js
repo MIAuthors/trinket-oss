@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const fixtures = require('../fixtures');
-const { signInWithForm, apiFor, unwrap } = require('../deploy-auth');
+const { signIn, apiFor, unwrap } = require('../deploy-auth');
 
 // Authoring, against a real deployment: create a trinket, edit it, confirm the
 // edit survived, then remix it.
@@ -34,7 +34,7 @@ test.describe('trinket authoring', () => {
       const res = await page.goto('/home');
       expect(res.status()).toBeLessThan(400);
     } else {
-      await signInWithForm(page, baseURL, EMAIL, PASSWORD);
+      await signIn(page, baseURL, EMAIL, PASSWORD);
     }
 
     // --- create -------------------------------------------------------------

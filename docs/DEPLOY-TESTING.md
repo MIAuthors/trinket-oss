@@ -73,7 +73,35 @@ get killed. Each run creates its own namespaced scope and asserts only within it
 matching the shared prefix and only past an age threshold, dry-run by default.
 The convention lives in one file so the spec and the sweeper cannot drift apart.
 
-## Signing in without a human
+## Signing in on a Firebase deploy, without a human and without weakening it
+
+`save-session.js` (below) still works, but it is no longer the only way, and it
+is no longer the preferred one: captured sessions expire, and capturing TWO of
+them (needed for the student loop) means two manual browser sessions.
+
+Instead, sign in through the **Email/Password provider** over the Identity
+Toolkit REST API and exchange the ID token at `POST /api/auth/session`. This is
+the same seam the local suite drives via the emulator. `deploy-auth.js`'s
+`signIn()` picks it automatically: a password field on `/login` means form auth,
+its absence means Firebase.
+
+Nothing is dialled down to make this work, which matters — the temptation is to
+relax the deploy instead:
+
+* the server **never inspects which provider minted the token**
+  (`lib/controllers/auth.js` → `verifyIdToken`, then email/uid), so an
+  Email/Password token is exactly as good as a Google one;
+* the provider was **already enabled** on `trinket-merge-test`;
+* the `apiKey` is **public by design** — it ships in the login page;
+* the `email_verified` gate that protects account linking
+  (GHSA-w66h-rw9x-7h24) **still applies**. The test identities were marked
+  verified once, administratively, via the Identity Toolkit admin API using a
+  short-lived `gcloud` token — **not** a long-lived service-account key.
+
+Do NOT extend this to uindy: it is Google-only by a decision documented to UIndy
+IT, and mandi/production keep the no-test-identities rule regardless.
+
+## Signing in without a human (captured sessions)
 
 Firebase-driven deploys (gcr trial, mandi, uindy) have no login form to fill.
 `test/browser/save-session.js` opens a headed Chrome, waits while you sign in —
