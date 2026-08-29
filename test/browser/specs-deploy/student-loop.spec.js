@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const fixtures = require('../fixtures');
-const { signInWithForm, apiFor, unwrap, assertOk } = require('../deploy-auth');
+const { signIn, apiFor, unwrap, assertOk } = require('../deploy-auth');
 
 // The loop that actually matters to a class, end to end, with TWO real accounts:
 //
@@ -40,7 +40,7 @@ test.describe('student loop', () => {
     const sApi = apiFor(student, baseURL);
 
     try {
-      await signInWithForm(teacher, baseURL, EMAIL, PASSWORD);
+      await signIn(teacher, baseURL, EMAIL, PASSWORD);
 
       // --- instructor sets up -------------------------------------------------
       const created = await tApi('POST', '/api/courses',
@@ -71,7 +71,7 @@ test.describe('student loop', () => {
       // --- student arrives ----------------------------------------------------
       // Signing in is also what enrols an ALREADY-EXISTING invited user (#10):
       // the invitation alone does not enrol them, the next login does.
-      await signInWithForm(student, baseURL, S_EMAIL, S_PASSWORD);
+      await signIn(student, baseURL, S_EMAIL, S_PASSWORD);
 
       const mine = await sApi('GET', '/api/courses');
       const list = (mine.body && (mine.body.data || mine.body.courses)) || [];

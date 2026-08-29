@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const fixtures = require('../fixtures');
-const { signInWithForm, apiFor, unwrap, assertOk } = require('../deploy-auth');
+const { signIn, apiFor, unwrap, assertOk } = require('../deploy-auth');
 
 // The instructor's ordinary week, against a REAL deployment: build a course,
 // rename it, add a topic, a page and an assignment, and put students on the
@@ -36,7 +36,7 @@ test.describe('instructor course journey', () => {
       expect(res.status(), 'captured session should still be valid').toBeLessThan(400);
       expect(page.url(), 'a stale session redirects to /login').not.toMatch(/\/login/);
     } else {
-      await signInWithForm(page, baseURL, EMAIL, PASSWORD);
+      await signIn(page, baseURL, EMAIL, PASSWORD);
     }
   });
 
