@@ -19,9 +19,11 @@ help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-11s %s\n", $$1, $$2}'
 
 gcp: ## GCP shape: Firestore + Firebase Auth + Storage emulators (app :3001, UI :4000)
+	bash scripts/build-info.sh
 	docker compose -f docker-compose.gcr.yml up --build
 
 mongo: ## Self-host shape: mongo + redis + garage S3 (app :3000)
+	bash scripts/build-info.sh
 	docker compose up --build
 
 down-gcp: ## Stop and remove the GCP stack
