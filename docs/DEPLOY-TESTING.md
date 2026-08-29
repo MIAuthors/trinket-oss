@@ -10,6 +10,9 @@ because most of them were reached by getting something wrong first.
 | `test/browser/specs/` | yes (Firebase Auth **emulator**) | yes | a local `make gcp` stack only |
 | `test/browser/specs-deploy/` | no | no | any deployment, including production |
 | `specs-deploy/instructor-journey.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/course-journey.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/trinket-authoring.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/student-loop.spec.js` | yes, **two accounts** | yes | **trials only**, opt-in via env |
 
 ## Why authenticated deploy tests exist at all
 
@@ -23,6 +26,31 @@ authenticated paths and were invisible to the whole suite:
 `instructor-journey.spec.js` covers that gap: sign in, revisit `/login` while
 signed in, build a course and assignment, export student work, poll to
 completion, assert the download is offered.
+
+## A 200 does not mean it worked
+
+The single most important assertion in these specs is **not** `status === 200`.
+
+This framework answers a schema rejection with **HTTP 200 and the errors in
+`flash.validation`**. That is exactly how #204 shipped: Add Students returned
+200, added nobody, and every status-only check agreed it was fine. Writing the
+student-loop spec caught a second instance immediately — a feedback POST with an
+empty `trinketId` was rejected the same silent way, and the spec's own
+`expect(status).toBe(200)` sailed past it.
+
+Use `assertOk(expect, res, what)` from `test/browser/deploy-auth.js`, which fails
+on a validation or error flash as well as on a bad status. And where you can,
+assert the OUTCOME rather than the response — the roster test re-reads the
+invitation list and requires it to have grown, because that is the thing an
+instructor actually cares about.
+
+## Two identities, not one
+
+`student-loop.spec.js` needs `SMOKE_STUDENT_EMAIL` / `SMOKE_STUDENT_PASSWORD`
+alongside the instructor pair. Submitting as the course owner would exercise
+none of the permission boundaries — the owner can do everything, so it proves
+nothing about what a student can do. The student account also exercises #10:
+an invitation does not enrol an existing user, their next sign-in does.
 
 ## Fixture policy: standing identity, ephemeral data
 
