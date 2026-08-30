@@ -642,9 +642,23 @@ function ensurePyodide() {
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
-    // Record the pristine namespace so the variable explorer can show only the
-    // names the user's program introduces, not Python built-ins / library imports.
-    try { py.runPython('__trinket_baseline__ = set(globals().keys())'); } catch (e) {}
+    // Record the pristine namespace twice:
+    //
+    // - __trinket_baseline__ is the set the Variables panel hides.
+    // - __trinket_reset_baseline__ is a shallow copy used by Clear memory to
+    //   restore the runner's own globals without re-downloading Pyodide.
+    //
+    // The self-reference is intentional. A plain dict(globals()) is evaluated
+    // before its assignment, so it would otherwise omit the reset snapshot and
+    // work only once.
+    try {
+      py.runPython([
+        '__trinket_baseline__ = set(globals().keys())',
+        '__trinket_reset_baseline__ = dict(globals())',
+        '__trinket_reset_baseline__["__trinket_reset_baseline__"] = __trinket_reset_baseline__',
+        '__trinket_baseline__.add("__trinket_reset_baseline__")'
+      ].join('\n'));
+    } catch (e) {}
     return py;
   });
 
@@ -2533,6 +2547,49 @@ function resetVPythonScene() {
   if (holder) { holder.innerHTML = ''; }
 }
 
+// Restore the interpreter's user-visible namespace to the snapshot captured
+// immediately after Pyodide's runner bootstrap. This deliberately keeps the
+// loaded interpreter and its cached packages: Clear memory should be quick and
+// reliable, not trigger another multi-megabyte Python download.
+//
+// The function uses default arguments so it retains both dictionaries after
+// clearing globals(). A temporary global would disappear halfway through the
+// reset along with the student's variables.
+function clearMainThreadMemory() {
+  if (!pyodide || !pyodideReady) return;
+  try {
+    pyodide.runPython([
+      'def _trinket_restore_namespace(_namespace=globals(), _baseline=__trinket_reset_baseline__):',
+      '    _namespace.clear()',
+      '    _namespace.update(_baseline)',
+      '_trinket_restore_namespace()'
+    ].join('\n'));
+  } catch (e) {
+    // A broken reset must not leave the UI claiming success. The next normal
+    // Run still has the existing behavior, and the console gives a useful hint.
+    writeOut('[Could not clear Python memory; reload the page to start fresh.]\n');
+    return false;
+  }
+
+  // A PyodideConsole is a proxy around the same globals dict. Recreate it next
+  // time Console is opened so a cleared session cannot retain its old prompt or
+  // execution state. Resetting the jqconsole is necessary only when a prompt is
+  // actually live; ordinary program output remains visible.
+  if (pyodideConsole && typeof pyodideConsole.destroy === 'function') {
+    try { pyodideConsole.destroy(); } catch (e) {}
+  }
+  pyodideConsole = null;
+  if (replActive) {
+    replActive = false;
+    resetOutput(true);
+  }
+
+  // These globals are established by VPython setup and must be captured again
+  // on the next VPython run, now that the ordinary namespace is pristine.
+  vpythonBaselineCaptured = false;
+  return true;
+}
+
 function handleWorkerFigure(msg) {
   var wrap = document.getElementById('graphic');
   if (!wrap) return;
@@ -2890,6 +2947,10 @@ function startRun() {
         return ensureConsoleTransform().then(function() {
           pyodide.globals.set('__user_source__', prog || '');
           var asyncProg = pyodide.runPython(
+            // Clear memory restores the bootstrap namespace, so this import is
+            // intentionally repeated instead of depending on the one global
+            // transform_source name created when the helper was first loaded.
+            'from _trinket_async_transform import transform_source\n' +
             'transform_source(__user_source__)');
           return pyodide.runPythonAsync(asyncProg);
         });
@@ -3174,6 +3235,7 @@ window.TrinketAPI = {
     $(document).on('trinket.code.edit',    $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',     $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop',    $.proxy(this.stopExecution, this));
+    $(document).on('trinket.code.clear-memory', $.proxy(this.clearMemory, this));
     $(document).on('trinket.code.console', $.proxy(this.consoleResult, this));
 
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
@@ -3307,6 +3369,42 @@ window.TrinketAPI = {
     var $msg = $(html);
     $('body').addClass('has-status-bar').append($msg);
     $msg.parent().foundation().trigger('open.fndtn.alert');
+  },
+  clearMemory : function() {
+    // Do not clear the namespace underneath an async program: a completion or
+    // exception handler could immediately put stale state back. Stop completes
+    // synchronously for a worker, but the main-thread runner needs to unwind at
+    // its next cancellation point, so require the student to stop it first.
+    if (running || debugRecording || (workerClient && workerClient.isRunning())) {
+      writeOut('[Stop the program before clearing Python memory.]\n');
+      return;
+    }
+
+    var clearedMain = clearMainThreadMemory();
+    var clearedWorker = workerClient ? workerClient.discardWorker() : false;
+
+    // A scene belongs to the interpreter that created it. Without this, a
+    // stopped VPython canvas or matplotlib figure could remain on screen after
+    // the variables it depicts have been discarded.
+    resetVPythonScene();
+    $('#graphic').empty();
+    $('#graphic-wrap').addClass('hide');
+    $('#output-dragbar').addClass('hide');
+    $('#console-wrap').css('height', '100%');
+    mplFigures = {};
+
+    if (variableExplorerEnabled()) {
+      try { renderVariables([]); } catch (e) {}
+    }
+
+    // Keep console output intact: output and memory are intentionally separate
+    // controls. The one exception is an active REPL prompt, which must be reset
+    // so it cannot submit into the newly cleared namespace.
+    if (clearedMain || clearedWorker) {
+      writeOut('[Python memory cleared.]\n');
+    } else {
+      writeOut('[Python memory is already clear.]\n');
+    }
   },
   showCode : function() {
     $('#codeOutput').addClass('hide');
