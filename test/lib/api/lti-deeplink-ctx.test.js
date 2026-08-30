@@ -213,9 +213,9 @@ describe('deep-link context survives a refused launch cookie (LTI 1.3)', () => {
 
   it('(c) POST select with a valid ctx but NO session is refused — ctx is not a credential', async () => {
     await seedPlatform();
+    const owner = await ownerSession();
     const launch = await deepLinkLaunch13();
     const ctx = ctxFromLocation(launch.headers.location);
-    const owner = await ownerSession();
 
     const s = await server();
     const res = await s.inject({

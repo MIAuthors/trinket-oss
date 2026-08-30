@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{# Shown when a deep-linking launch lands in an LMS iframe without a usable session.
+   Signing in here would fail the same way the launch did — the browser refuses
+   third-party cookies — so the only reliable route is a top-level tab, where the
+   instructor's existing first-party session applies. See issue #217.
+
+   target="_blank" is deliberate and must stay: the whole point is to leave the frame.
+   The link carries the signed context token (no identity) so the picker in the new
+   tab still knows which deep-link request it is answering. #}
+{% block content %}
+<div class="row" style="padding:2.5rem 1rem; max-width:34rem; margin:0 auto; text-align:center;">
+  <h4 style="margin-bottom:0.75rem;">Continue in a new tab</h4>
+  <p style="margin-bottom:1.25rem;">
+    Your browser blocks sign-in inside an LMS window. Open {{ siteName }} in a new tab
+    to choose the content for this assignment; your LMS finishes adding the link from
+    that tab.
+  </p>
+  <p>
+    <a class="button" href="{{ continueUrl }}" target="_blank" rel="opener">
+      Continue in a new tab
+    </a>
+  </p>
+  <p class="small" style="margin-top:1rem; color:#666;">
+    If nothing happens, make sure pop-ups are allowed for your LMS, or sign in to
+    {{ siteName }} in another tab first and relaunch this from your LMS. Allowing
+    cookies for {{ siteName }} in your browser also lets this window work directly.
+  </p>
+</div>
+{% endblock %}
