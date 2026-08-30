@@ -2572,17 +2572,13 @@ function clearMainThreadMemory() {
   }
 
   // A PyodideConsole is a proxy around the same globals dict. Recreate it next
-  // time Console is opened so a cleared session cannot retain its old prompt or
-  // execution state. Resetting the jqconsole is necessary only when a prompt is
-  // actually live; ordinary program output remains visible.
+  // time Console is opened so a cleared session cannot retain its old execution
+  // state. The jqconsole prompt itself is reset and re-armed by clearMemory():
+  // that also covers a worker-backed REPL, where no page-thread Pyodide exists.
   if (pyodideConsole && typeof pyodideConsole.destroy === 'function') {
     try { pyodideConsole.destroy(); } catch (e) {}
   }
   pyodideConsole = null;
-  if (replActive) {
-    replActive = false;
-    resetOutput(true);
-  }
 
   // These globals are established by VPython setup and must be captured again
   // on the next VPython run, now that the ordinary namespace is pristine.
@@ -3380,6 +3376,11 @@ window.TrinketAPI = {
       return;
     }
 
+    // A live REPL owns a jqconsole Prompt that is bound to the old namespace.
+    // Preserve ordinary program output, but replace a console session with a
+    // fresh prompt after clearing — the same user-facing recovery that Stop
+    // provides when it resets a console interpreter.
+    var wasReplActive = replActive;
     var clearedMain = clearMainThreadMemory();
     var clearedWorker = workerClient ? workerClient.discardWorker() : false;
 
@@ -3397,10 +3398,15 @@ window.TrinketAPI = {
       try { renderVariables([]); } catch (e) {}
     }
 
-    // Keep console output intact: output and memory are intentionally separate
-    // controls. The one exception is an active REPL prompt, which must be reset
-    // so it cannot submit into the newly cleared namespace.
-    if (clearedMain || clearedWorker) {
+    // Keep program output intact: output and memory are intentionally separate
+    // controls. The one exception is an active REPL session: reset its prompt,
+    // explain the reset, and immediately give the student a fresh >>> prompt.
+    if (wasReplActive) {
+      replActive = false;
+      resetOutput(true);
+      writeOut('[Python memory cleared — console session reset]\n');
+      startReplPrompt();
+    } else if (clearedMain || clearedWorker) {
       writeOut('[Python memory cleared.]\n');
     } else {
       writeOut('[Python memory is already clear.]\n');
