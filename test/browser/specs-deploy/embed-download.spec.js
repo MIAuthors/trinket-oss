@@ -41,4 +41,26 @@ test.describe('embed Download delivers a file', () => {
         .toHaveLength(0);
     });
   }
+
+  test('a failed download says so instead of doing nothing', async ({ page }) => {
+    // The point of moving off the hidden iframe was to give failures somewhere
+    // to go — the old design routed them into the frame, which is why a blocked
+    // download showed nothing at all. That catch path was untested in BOTH
+    // independent fixes for #224 (mine and #225), so it is asserted here.
+    // Flagged by @drewsday on #227.
+    await page.goto(`/embed/python3?code=${encodeURIComponent('print("hi")\n')}`,
+      { waitUntil: 'networkidle' });
+
+    // Stub the endpoint as failing, leaving the client path exactly as shipped.
+    await page.route('**/api/trinkets/download', (route) =>
+      route.fulfill({ status: 500, contentType: 'text/plain', body: 'nope' }));
+
+    await page.locator('#menu-button, .menu-button, [class*="hamburger"]').first()
+      .click({ timeout: 10_000 });
+    await page.locator('a:has-text("Download")').first().click();
+
+    await expect(page.locator('text=/could not be prepared/i').first(),
+      'a failed download must surface a message, not fail silently')
+      .toBeVisible({ timeout: 15_000 });
+  });
 });

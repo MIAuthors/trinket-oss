@@ -804,10 +804,9 @@ $('document').ready(function() {
         setTimeout(function() { URL.revokeObjectURL(url); }, 0);
       }).catch(function(err) {
         if (window.console && console.error) console.error('Download failed:', err);
-        var alertBox = '<div data-alert class="alert-box warning"> Your download could not be prepared. Please try again. <a href="#" class="close">&times;</a></div>';
-        $('#flashMessage').show();
-        $('#flashContent').html(alertBox);
-        $(document).foundation('alert', 'reflow');
+        // showStatusBar owns this markup (statusMessageTemplate) — building the
+        // alert inline here duplicated it. Thanks @drewsday.
+        showStatusBar('Your download could not be prepared. Please try again.', null, null, 'alert');
       });
     },
     onUpgradeClick : function(event, data) {
