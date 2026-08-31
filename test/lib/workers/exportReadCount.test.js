@@ -17,7 +17,11 @@ describe('student-work export read pattern', () => {
   beforeEach(async () => {
     student = new User({ fullname: 'Read Count', username: 'readcount', email: 'readcount@example.com', password: 'password' });
     await student.save();
-    materialId = new (require('mongoose').Types.ObjectId)();
+    // .toString(): a raw ObjectId value does not serialize on firestore
+    // ("Couldn't serialize object of type ObjectId"). Same reason as
+    // test/lib/models/export.test.js. Mongoose casts the string back for the
+    // query, so both backends see the same thing.
+    materialId = new (require('mongoose').Types.ObjectId)().toString();
     const sub = new Trinket({
       name: 'HW submission', lang: 'python3', code: 'print("student work")',
       _owner: student, _creator: student,
