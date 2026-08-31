@@ -762,45 +762,53 @@ $('document').ready(function() {
       // Track analytics
       self.callAnalytics('Interaction', 'Click', 'Download');
 
-      // Use form POST with hidden iframe target to avoid breaking the page on errors
-      var iframeName = 'download-iframe-' + Date.now();
-      var iframe = document.createElement('iframe');
-      iframe.name = iframeName;
-      iframe.style.display = 'none';
-      document.body.appendChild(iframe);
+      // Fetch + blob, NOT a form POST into a hidden iframe.
+      //
+      // The embed CSP (config/default.yaml `csp.standard`) ends with
+      // `form-action 'none'; frame-src 'none'`, so the old form+iframe was
+      // blocked twice over and the Download button did nothing at all on every
+      // deploy carrying that policy (#224). It failed SILENTLY because errors
+      // were deliberately routed into the hidden iframe "to avoid breaking the
+      // page" — with the submission blocked, that left no file, no error and no
+      // clue, indistinguishable from a dead button.
+      //
+      // connect-src already permits this POST, so this needs no CSP change and
+      // leaves `frame-src 'none'` intact — that line is deliberate and pinned by
+      // deploy-smoke.spec.js ("an injected iframe is refused").
+      //
+      // It also gives failures somewhere to go: a promise has a .catch, which
+      // the iframe never did.
+      var body = new URLSearchParams();
+      body.append('files', JSON.stringify(downloadable.files));
+      body.append('assets', JSON.stringify(downloadable.assets));
+      body.append('filename', filename);
 
-      var form = document.createElement('form');
-      form.method = 'POST';
-      form.action = '/api/trinkets/download';
-      form.target = iframeName;
-      form.style.display = 'none';
-
-      var filesInput = document.createElement('input');
-      filesInput.type = 'hidden';
-      filesInput.name = 'files';
-      filesInput.value = JSON.stringify(downloadable.files);
-      form.appendChild(filesInput);
-
-      var assetsInput = document.createElement('input');
-      assetsInput.type = 'hidden';
-      assetsInput.name = 'assets';
-      assetsInput.value = JSON.stringify(downloadable.assets);
-      form.appendChild(assetsInput);
-
-      var filenameInput = document.createElement('input');
-      filenameInput.type = 'hidden';
-      filenameInput.name = 'filename';
-      filenameInput.value = filename;
-      form.appendChild(filenameInput);
-
-      document.body.appendChild(form);
-      form.submit();
-
-      // Clean up form and iframe after a delay
-      setTimeout(function() {
-        document.body.removeChild(form);
-        document.body.removeChild(iframe);
-      }, 5000);
+      fetch('/api/trinkets/download', {
+        method      : 'POST',
+        body        : body,
+        credentials : 'same-origin',
+        headers     : { 'Content-Type': 'application/x-www-form-urlencoded' }
+      }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      }).then(function(blob) {
+        var url  = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = filename + '.zip';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        // Revoke on the next tick: revoking synchronously can cancel the
+        // download in some browsers before it has started reading the blob.
+        setTimeout(function() { URL.revokeObjectURL(url); }, 0);
+      }).catch(function(err) {
+        if (window.console && console.error) console.error('Download failed:', err);
+        var alertBox = '<div data-alert class="alert-box warning"> Your download could not be prepared. Please try again. <a href="#" class="close">&times;</a></div>';
+        $('#flashMessage').show();
+        $('#flashContent').html(alertBox);
+        $(document).foundation('alert', 'reflow');
+      });
     },
     onUpgradeClick : function(event, data) {
       this.$upgradeModal.foundation('reveal', 'open');
