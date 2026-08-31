@@ -357,6 +357,7 @@ stack's mongo/redis, or the Firebase emulators for a GCP-shape overlay).
 `TRINKET_DEPLOY` through to the app container:
 
 ```bash
+bash scripts/build-info.sh
 TRINKET_DEPLOY=mandi docker compose up --build
 ```
 
