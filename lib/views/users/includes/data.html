@@ -22,9 +22,20 @@
       </div>
     </div>
 
+    {% if exportsAvailable %}
     <button id="request-export" class="button primary">
       Download All Trinkets
     </button>
+    {% else %}
+    {# Disabled rather than hidden: the feature genuinely cannot run here (no
+       export worker), but hiding it entirely makes users hunt for a button they
+       were told about — the mistake #197 documents. Say why instead. #}
+    <button id="request-export" class="button primary" disabled
+            title="This server has no export worker running, so exports cannot be prepared here.">
+      Download All Trinkets
+    </button>
+    <p><em>Exports are not available on this server: no export worker is running.</em></p>
+    {% endif %}
   </div>
 </div>
 
