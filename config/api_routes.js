@@ -479,7 +479,15 @@ module.exports = [
           students : Joi.array().items(
             Joi.object({
               email : Joi.string().required(),
-              name  : Joi.string().allow('').optional()
+              name  : Joi.string().allow('').optional(),
+              // The client posts the parser's rows verbatim, and each carries the
+              // original `line` so a failed batch can be put back in the box
+              // unchanged. Omitting it here made validation reject EVERY row —
+              // and this framework answers a validation failure with HTTP 200
+              // plus a flash, so the client saw "success" with nothing added and
+              // reported "No new students added". Add Students was dead on every
+              // deploy from the moment the spreadsheet-paste parser shipped.
+              line  : Joi.string().allow('').optional()
             })
           ).required()
         }
