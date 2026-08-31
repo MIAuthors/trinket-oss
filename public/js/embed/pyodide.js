@@ -3401,10 +3401,17 @@ window.TrinketAPI = {
     // Keep program output intact: output and memory are intentionally separate
     // controls. The one exception is an active REPL session: reset its prompt,
     // explain the reset, and immediately give the student a fresh >>> prompt.
+    // The REPL branch must still report honestly. clearMainThreadMemory()
+    // announces its own failure, but resetOutput() below discards the queued
+    // console buffer (#142) — so that warning never reaches the student, and an
+    // unconditional success line would be the only thing they see, over a
+    // namespace that was NOT cleared.
     if (wasReplActive) {
       replActive = false;
       resetOutput(true);
-      writeOut('[Python memory cleared — console session reset]\n');
+      writeOut((clearedMain || clearedWorker)
+        ? '[Python memory cleared — console session reset]\n'
+        : '[Could not clear Python memory; reload the page to start fresh.]\n');
       startReplPrompt();
     } else if (clearedMain || clearedWorker) {
       writeOut('[Python memory cleared.]\n');
