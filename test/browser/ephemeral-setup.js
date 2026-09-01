@@ -20,6 +20,18 @@ module.exports = async () => {
   ephemeral.assertMintable(baseURL);
 
   const ctx = await request.newContext({ baseURL });
+
+  // Form-auth deploys (a password field on /login) have no Firebase to mint
+  // against — minting there throws, and a throw in globalSetup kills the WHOLE
+  // run, anonymous specs included. Detect and bow out instead: the journeys
+  // will skip for want of SMOKE_EMAIL, exactly as before this file existed.
+  const login = await (await ctx.get(new URL('/login', baseURL).toString())).text();
+  if (/type="password"/.test(login)) {
+    console.log('  ephemeral identities: form-auth deploy, nothing to mint (set SMOKE_EMAIL to run journeys here)');
+    await ctx.dispose();
+    return;
+  }
+
   const instructor = await ephemeral.mint(ctx, baseURL, 'teacher');
   const student    = await ephemeral.mint(ctx, baseURL, 'learner');
   await ctx.dispose();
