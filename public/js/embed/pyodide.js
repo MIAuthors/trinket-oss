@@ -692,11 +692,38 @@ function importsMatch(code, names) {
   var re = new RegExp('(^|\\n)\\s*(import|from)\\s+[^\\n#]*\\b(' + names + ')\\b');
   return re.test(code);
 }
-function importsPackages(code) {
-  return importsMatch(code, 'numpy|matplotlib|pandas|scipy|sympy|PIL|sklearn|micropip');
-}
 function usesMatplotlib(code) {
   return importsMatch(code, 'matplotlib');
+}
+
+// ---------------------------------------------------------------------------
+// Loading status lines (#27)
+//
+// "Loading Python (Pyodide)…" is written WITHOUT a newline and completed with
+// "ready" once the runtime is up, so the ellipsis cannot sit above the
+// program's output still reading as "loading in progress" — which is how a
+// student is led to wait for something that already finished.
+//
+// A flag rather than a bare writeOut pair, because three call sites open this
+// line (main thread, worker, VPython) and the worker's completion arrives on a
+// callback that also fires for boots nobody announced. Only a line we actually
+// opened gets closed, so a stray "ready" can never appear on its own.
+//
+// This regressed once already: a5f92de fixed it, 3890f89 (#108's worker
+// runtime) reintroduced the newline form five weeks later. Keeping the pairing
+// behind these two functions makes the next reintroduction visible as a
+// dangling openRuntimeLine() rather than a plausible-looking writeOut.
+var runtimeLineOpen = false;
+
+function openRuntimeLine(text) {
+  runtimeLineOpen = true;
+  writeOut(text);
+}
+
+function closeRuntimeLine() {
+  if (!runtimeLineOpen) return;
+  runtimeLineOpen = false;
+  writeOut('ready\n');
 }
 
 // Fraction of the output pane given to the graphic (vs. console). Default
@@ -1021,13 +1048,18 @@ function ensureConsoleTransform() {
 // header line (keeping line numbers stable), rewrite blocking rate()/sleep()
 // loops to async via the bridge's AST transformer, then execute.
 function runVpython(prog) {
-  writeOut('Loading VPython (GlowScript)…\n');
+  // No trailing newline: completed with "ready" once the library and bridge are
+  // loaded, so the ellipsis never lingers as if it were still working (#27).
+  openRuntimeLine('Loading VPython (GlowScript)… ');
   return ensureGlow().then(function() {
     installRateCancellation();  // wrap rate() before the bridge imports it
     setupGlowScene();
     showGraphic();
     return ensureVpython();
   }).then(function() {
+    // Library + bridge are up. Close the line BEFORE Pyodide narrates any
+    // package installs below, so the two don't interleave (#27).
+    closeRuntimeLine();
     // The bridge binds `scene` and `rate` to window.* at import time (once).
     // Re-point them ON THE MODULE before the user code imports anything:
     //  - scene: the canvas was rebuilt above, so target the fresh one.
@@ -2124,6 +2156,10 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     varsHelper   : VARS_HELPER,
+    // Completes the "Loading Python (Pyodide)… " line once the worker's Pyodide
+    // has booted (#27). closeRuntimeLine() is a no-op unless a line is actually
+    // open, so a boot nobody announced cannot print a stray "ready".
+    onReady    : function() { closeRuntimeLine(); },
     onStdout   : function(text) { writeStream(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
     onSceneOps : function(msg) { handleWorkerSceneOps(msg); },
@@ -2688,7 +2724,10 @@ function runInWorker(program, files, serialized, decision) {
     }
   }
 
-  writeOut('Loading Python (Pyodide)…\n');
+  // Completed by the client's onReady callback when the worker finishes booting
+  // Pyodide (#27). This path never had the completion — it was added after the
+  // original fix, so it inherited the dangling ellipsis rather than the fix.
+  openRuntimeLine('Loading Python (Pyodide)… ');
 
   // The worker cannot see the page, so it cannot know how wide the graphic pane
   // is. Pyodide's patched FigureManagerWebAgg ignores mpl.js's `resize` message
@@ -2890,12 +2929,13 @@ function startRun() {
   }
 
   if (!pyodideReady) {
-    writeOut('Loading Python (Pyodide)…\n');
+    openRuntimeLine('Loading Python (Pyodide)… ');
   }
 
   running = true;
 
   ensurePyodide().then(function() {
+    closeRuntimeLine();   // "…" -> "… ready" (#27)
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
 
     // Make time.sleep() a cancellation point so Stop can unwind a sleeping loop
@@ -2910,9 +2950,9 @@ function startRun() {
       return runVpython(prog);
     }
 
-    if (importsPackages(prog)) {
-      writeOut('Loading packages…\n');
-    }
+    // No "Loading packages…" line of our own: Pyodide narrates installs itself
+    // with "Loading numpy…" then "Loaded numpy", which already reads as
+    // complete. Ours added a second ellipsis that nothing ever closed (#27).
 
     // Auto-install any Pyodide-bundled packages the code imports (numpy,
     // matplotlib, pandas, …) from the CDN before running.
