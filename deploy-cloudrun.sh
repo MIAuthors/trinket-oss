@@ -616,30 +616,58 @@ elif command -v gtimeout &>/dev/null; then _TIMEOUT=gtimeout
 else _TIMEOUT=""; fi
 _t() { local secs="$1"; shift; if [[ -n "${_TIMEOUT}" ]]; then "${_TIMEOUT}" "${secs}" "$@"; else "$@"; fi; }
 
-_BILLING_ACCOUNT=$(_t 20 gcloud billing projects describe "${GOOGLE_CLOUD_PROJECT}" \
-  --format='value(billingAccountName)' --quiet 2>/dev/null | sed 's|billingAccounts/||')
-if [[ -n "${_BILLING_ACCOUNT}" ]]; then
-  _EXISTING_BUDGET=$(_t 20 gcloud billing budgets list \
-    --billing-account="${_BILLING_ACCOUNT}" \
-    --filter="displayName=trinket-${GOOGLE_CLOUD_PROJECT}" \
-    --format='value(name)' --quiet 2>/dev/null | head -1)
-  if [[ -z "${_EXISTING_BUDGET}" ]]; then
-    _t 30 gcloud billing budgets create \
-      --billing-account="${_BILLING_ACCOUNT}" \
+# Everything below is a COURTESY step: the app is already deployed and serving
+# by now. It must therefore never abort the script — the steps that come AFTER
+# it (notably the CDN asset publish) still have to run. Every failure here is
+# reported and swallowed.
+#
+# It used to be fatal. A uindy deploy died here on 2026-09-01: that billing
+# account denies `budgets list`, the call was silenced with 2>/dev/null, and
+# `set -euo pipefail` ended the run without a word — several steps before the
+# CDN publish. Cloud Run took the new commit while Firebase Hosting went on
+# serving the previous deploy's JavaScript.
+# Covered by test/lib/deploy/budget-alert-non-fatal.test.js.
+_budget_alert() {
+  local acct existing
+  acct=$(_t 20 gcloud billing projects describe "${GOOGLE_CLOUD_PROJECT}" \
+    --format='value(billingAccountName)' --quiet 2>/dev/null) || acct=""
+  acct="${acct#billingAccounts/}"
+  if [[ -z "${acct}" ]]; then
+    echo "    Could not determine billing account — skipping budget alert"
+    return 0
+  fi
+
+  if ! existing=$(_t 20 gcloud billing budgets list \
+      --billing-account="${acct}" \
+      --filter="displayName=trinket-${GOOGLE_CLOUD_PROJECT}" \
+      --format='value(name)' --quiet 2>/dev/null); then
+    echo "    Cannot list budgets on ${acct} (billing permission?) — skipping budget alert"
+    echo "    The deploy is unaffected; set one up by hand if you want the alert."
+    return 0
+  fi
+  existing="${existing%%$'\n'*}"
+
+  if [[ -n "${existing}" ]]; then
+    echo "    Budget alert already exists — skipping"
+    return 0
+  fi
+
+  if _t 30 gcloud billing budgets create \
+      --billing-account="${acct}" \
       --display-name="trinket-${GOOGLE_CLOUD_PROJECT}" \
       --budget-amount="${MONTHLY_BUDGET}USD" \
       --threshold-rule=percent=0.5 \
       --threshold-rule=percent=0.9 \
       --threshold-rule=percent=1.0 \
       --filter-projects="projects/${GOOGLE_CLOUD_PROJECT}" \
-      --quiet
+      --quiet; then
     echo "    Budget alert created: email at 50%, 90%, 100% of \$${MONTHLY_BUDGET}/month"
   else
-    echo "    Budget alert already exists — skipping"
+    echo "    Could not create the budget alert — skipping (the deploy is unaffected)"
   fi
-else
-  echo "    Could not determine billing account — skipping budget alert"
-fi
+}
+_budget_alert || echo "    Budget alert step failed — continuing (the deploy is unaffected)"
+
 
 # --- Publish this deploy's assets to the CDN --------------------------------
 # Cloud Run and Firebase Hosting are SEPARATE deploys. A CDN-fronted deploy
