@@ -303,6 +303,20 @@ app:
       - '//cdnjs.cloudflare.com/ajax/libs/angular-moment/1.0.1/angular-moment.min.js'
       - '/js/services/config.js'
       - '/js/app.js'
+    reviewPanel:
+      - //cdnjs.cloudflare.com/ajax/libs/angular-ui-ace/0.2.3/ui-ace.min.js
+      - /js/services/config.js
+      - /js/trinket-markdown.js
+      - /js/vendor/marked-modern.js
+      - /js/vendor/purify.min.js
+      - /js/trinket-markdown-modern.js
+      - /js/services/markdown.js
+      - //cdnjs.cloudflare.com/ajax/libs/moment.js/2.18.1/moment.min.js
+      - //cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.13/moment-timezone-with-data.min.js
+      - /js/services/util.js
+      - /js/services/submissions.js
+      - /partials/directives/trinket-feedback.js
+      - /js/reviewPanel/app.js
     courseEditor:
       - '/components/ng-file-upload.min.js'
       - '//cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-AMS_CHTML'

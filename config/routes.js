@@ -452,6 +452,22 @@ routes = [
       auth : false
     }
   },
+  // Canvas stores the review URL as a basic_lti_launch submission and RELAUNCHES the
+  // tool here when a grader opens SpeedGrader. It is a normal signed 1.1 launch, so it
+  // shares the 1.1 handler; the submission id rides in the path (see util/ltiReview).
+  {
+    route : 'POST /lti/review/{submissionId} lti.launch11',
+    config : {
+      auth : false
+    }
+  },
+  {
+    // Where an LTI review launch lands: the feedback panel, chrome-free, sized for
+    // an LMS grader pane. Session established by the launch itself.
+    route : 'GET /lti/review-panel/{trinketId} lti.reviewPanel',
+    html  : 'lti/review-panel.html',
+    config: { auth: 'session' }
+  },
   {
     route : 'GET /lti/jwks lti.jwks',
     config : {

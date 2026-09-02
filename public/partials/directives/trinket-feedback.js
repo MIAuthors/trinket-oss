@@ -120,6 +120,13 @@
       });
 
       scope.sendFeedback = function() {
+        // ng-class="{disabled:!canSubmit}" is cosmetic — ng-click still fires on the
+        // greyed-out control. Both canSubmit and api are set by the embedded trinket's
+        // iframe load handler, so an early (or double) click reached scope.api.serialize()
+        // with api still null: it threw, the promise never settled, and the button spun
+        // forever. Refuse the click while the editor is not ready.
+        if (!scope.canSubmit || !scope.api) { return; }
+
         scope.canSubmit       = false;
         scope.canUpdate       = false;
         scope.canAccept       = false;

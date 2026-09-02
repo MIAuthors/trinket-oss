@@ -4,15 +4,34 @@ const Export   = require('../../../lib/models/export');
 const User     = require('../../../lib/models/user');
 const queues   = require('../../../lib/util/queues');
 
-// These tests exercise the ENQUEUE path, which now refuses to create an export
-// on a server that has no worker to run it (the Cloud Run failure: jobs were
-// queued into a handlerless queue and silently discarded). Register a no-op
-// handler so the harness represents a deployment that can actually process.
-// The refusal itself is covered in test/lib/util/queues.test.js.
+// These endpoints no longer enqueue: they build the archive INSIDE the request
+// (see lib/controllers/course.js). The queue could not deliver on Cloud Run —
+// no worker registers there, so jobs were discarded and the record sat
+// 'pending' while the UI polled it forever.
+//
+// The archive builder itself is covered by
+// test/lib/workers/processStudentWorkExport.test.js (which stubs S3). Here we
+// stub the runner so these tests stay about the ENDPOINT contract — status,
+// record shape, permissions — rather than re-testing archive construction.
+// The controller does a lazy `require('../workers/exports')` at call time, so
+// replacing the property on the shared module object is what actually takes
+// effect here — vi.mock does not reliably intercept CommonJS require().
+// Required lazily inside beforeAll, never at module top: a top-level require
+// runs at test-file load, before the harness's config fixups, and blows up in
+// @hapi/validate ("Schema can only contain plain objects"). Same reason
+// processStudentWorkExport.test.js defers its own require.
+let workers, realRunner;
 beforeAll(() => {
-  const q = queues.exports();
-  if (typeof q.hasHandlers === 'function' && !q.hasHandlers()) q.process(() => {});
+  workers = require('../../../lib/workers/exports');
+  realRunner = workers.processStudentWorkExport;
+  workers.processStudentWorkExport = async (job) => {
+    const rec = await Export.findById(job.data.exportId);
+    rec.status = 'completed';
+    await rec.save();
+    return rec;
+  };
 });
+afterAll(() => { workers.processStudentWorkExport = realRunner; });
 
 // Reset the cookie jar before every test.
 beforeEach(() => {
@@ -33,14 +52,15 @@ describe('Course/Assignment student-work export endpoints', () => {
       materialId = flow.lastResponse.body.data.id;
     });
 
-    it('should enqueue a course-submissions export and return the exportId', async () => {
+    it('builds a course-submissions export in-request and returns it completed', async () => {
       await flow.post('/api/courses/' + courseId + '/exports/submissions');
 
       expect(flow.wasOk).toBe(true);
       expect(flow.lastResponse.statusCode).toBe(200);
       expect(flow.lastResponse.body.success).toBe(true);
       expect(flow.lastResponse.body.data).toHaveProperty('exportId');
-      expect(flow.lastResponse.body.data.status).toBe('pending');
+      // 'completed', not 'pending': the work happened during this request.
+      expect(flow.lastResponse.body.data.status).toBe('completed');
 
       const exportRecord = await Export.findById(flow.lastResponse.body.data.exportId);
       expect(exportRecord).toBeTruthy();
@@ -48,40 +68,32 @@ describe('Course/Assignment student-work export endpoints', () => {
       expect(exportRecord.courseId.toString()).toBe(courseId);
     });
 
-    it('refuses to create an export when nothing can process it', async () => {
-      // The Cloud Run failure: the job was queued into a handlerless queue and
-      // silently discarded, so the record sat 'pending' and the UI polled it
-      // forever. A server that cannot run the work must say so immediately.
+    it('works on a server with no export worker at all', async () => {
+      // The exact Cloud Run shape that used to spin forever: no handler
+      // registered anywhere. These endpoints must not care — they no longer
+      // enqueue. (The account bulk export still does, and still refuses; that
+      // path is covered by exportGuard's own tests.)
       const q = queues.exports();
       const saved = q.handlers;
-      q.handlers = [];                      // simulate a deploy with no worker
+      q.handlers = [];
       try {
         await flow.post('/api/courses/' + courseId + '/exports/submissions');
-
-        expect(flow.lastResponse.body.success).not.toBe(true);
-        expect(JSON.stringify(flow.lastResponse.body)).toMatch(/no export worker/i);
-
-        // The refusal must carry the exportId — the dashboard polls it to
-        // surface the record's errorMessage. If the response shape changes,
-        // this should fail loudly rather than silently skip the DB checks.
-        const id = flow.lastResponse.body.exportId || (flow.lastResponse.body.data || {}).exportId;
-        expect(id, 'refusal must include the failed exportId').toBeTruthy();
-        const rec = await Export.findById(id);
-        expect(rec.status).toBe('failed');
-        expect(rec.errorMessage).toMatch(/no export worker/i);
+        expect(flow.wasOk).toBe(true);
+        expect(flow.lastResponse.body.data.status).toBe('completed');
       } finally {
         q.handlers = saved;
       }
     });
 
-    it('should enqueue an assignment-submissions export and return the exportId', async () => {
+    it('builds an assignment-submissions export in-request and returns it completed', async () => {
       await flow.post('/api/courses/' + courseId + '/materials/' + materialId + '/exports/submissions');
 
       expect(flow.wasOk).toBe(true);
       expect(flow.lastResponse.statusCode).toBe(200);
       expect(flow.lastResponse.body.success).toBe(true);
       expect(flow.lastResponse.body.data).toHaveProperty('exportId');
-      expect(flow.lastResponse.body.data.status).toBe('pending');
+      // 'completed', not 'pending': the work happened during this request.
+      expect(flow.lastResponse.body.data.status).toBe('completed');
 
       const exportRecord = await Export.findById(flow.lastResponse.body.data.exportId);
       expect(exportRecord).toBeTruthy();

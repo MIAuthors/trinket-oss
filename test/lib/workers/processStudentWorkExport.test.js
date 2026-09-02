@@ -23,6 +23,13 @@ const aws = require('../../../config/aws');
 let exportsQueue;
 
 beforeAll(() => {
+  // This file tests the WORKER-process behaviour (the queue dispatch branch),
+  // so it has to declare itself a worker: registration is now conditional on
+  // RUN_EXPORT_WORKER, because lib/controllers/course.js require()s this module
+  // to run student-work exports in-request and must NOT thereby register a
+  // handler (that would make exportGuard let the account bulk export enqueue
+  // into work that runs after the response, when Cloud Run throttles CPU).
+  process.env.RUN_EXPORT_WORKER = 'true';
   // Side-effecting require: registers exportsQueue.process(...) (including
   // the 'student-work-export' dispatch branch under test) and the
   // 'failed'/'completed' queue listeners — see lib/workers/exports.js's own
