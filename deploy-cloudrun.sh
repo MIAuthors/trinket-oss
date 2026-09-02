@@ -676,7 +676,11 @@ if [[ -n "${HOSTING_SITE:-}" ]]; then
     # REPLACES the site config, so a wrong value silently strips the run
     # rewrite and leaves the site serving static files only.
     : "${HOSTING_REWRITES:?set HOSTING_REWRITES alongside HOSTING_SITE (a hosting deploy REPLACES site config; it is never inferred)}"
+    # TRINKET_DEPLOY usually arrives by SOURCING .env, which does not export it,
+    # so the child script cannot see it unless it is passed explicitly. Without
+    # it the publish silently omits this deploy's overlay assets.
     if ! FIREBASE_PROJECT="${FIREBASE_PROJECT:-${GOOGLE_CLOUD_PROJECT}}" \
+         TRINKET_DEPLOY="${TRINKET_DEPLOY:-}" \
          HOSTING_SITE="${HOSTING_SITE}" \
          HOSTING_REWRITES="${HOSTING_REWRITES}" \
          SERVICE_URL="${SERVICE_URL}" \

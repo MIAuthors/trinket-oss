@@ -118,6 +118,35 @@ for d in ${ASSET_DIRS}; do
   [[ -d "${SRC}/${d}" ]] && cp -R "${SRC}/${d}" "${PREFIX}/" && cp -R "${SRC}/${d}" "${SITE}/"
 done
 
+# The active deploy's overlay, staged ON TOP of the stock assets.
+#
+# config/deploy-dir.js: "deploys/<name>/public/ static assets ahead of public/
+# — same-name shadowing". The app serves the overlay first, so the CDN has to
+# hold the same files, in the same precedence. It did not: assets are extracted
+# from the built IMAGE and an overlay lives in the deploy folder, never in the
+# image. Every overlay-only file was therefore missing from Hosting and rode the
+# rewrite to the origin on every view — mandi's brand-overrides.css, 14 KB, on
+# every new visitor, while the same check scored a clean 25/25 on uindy purely
+# because uindy references no overlay asset.
+OVERLAY_ROOT="${OVERLAY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+if [[ -z "${OVERLAY_SRC:-}" && -n "${TRINKET_DEPLOY:-}" ]]; then
+  _cand="${OVERLAY_ROOT}/deploys/${TRINKET_DEPLOY}/public"
+  [[ -d "${_cand}" ]] && OVERLAY_SRC="${_cand}"
+fi
+if [[ -n "${OVERLAY_SRC:-}" ]]; then
+  _ov=0
+  for d in ${ASSET_DIRS}; do
+    [[ -d "${OVERLAY_SRC}/${d}" ]] || continue
+    mkdir -p "${PREFIX}/${d}" "${SITE}/${d}"
+    cp -R "${OVERLAY_SRC}/${d}/." "${PREFIX}/${d}/"
+    cp -R "${OVERLAY_SRC}/${d}/." "${SITE}/${d}/"
+    _ov=$(( _ov + $(find "${OVERLAY_SRC}/${d}" -type f | wc -l) ))
+  done
+  say "overlay assets published from ${OVERLAY_SRC}: ${_ov}"
+elif [[ -n "${TRINKET_DEPLOY:-}" ]]; then
+  say "no overlay assets for ${TRINKET_DEPLOY} (deploys/${TRINKET_DEPLOY}/public not found)"
+fi
+
 if [[ -n "${SERVICE_URL}" ]]; then
   refs="${WORK}/refs"; : > "${refs}"
   for p in ${CRAWL_PATHS}; do
@@ -191,6 +220,19 @@ cat > "${WORK}/firebase.json" <<JSON
   }
 }
 JSON
+
+# A staging escape hatch: build the tree and the config, then stop. Lets you
+# inspect exactly what a publish WOULD upload, and lets the test suite exercise
+# this script without a Firebase project.
+if [[ -n "${STAGE_ONLY:-}" ]]; then
+  _dest="${STAGE_OUT:-${PWD}/hosting-stage}"
+  mkdir -p "${_dest}"
+  rm -rf "${_dest}/site"
+  cp -R "${SITE}" "${_dest}/site"
+  cp "${WORK}/firebase.json" "${_dest}/firebase.json"
+  say "STAGE_ONLY: staged tree written to ${_dest} — nothing deployed"
+  exit 0
+fi
 
 say "deploying to ${HOSTING_SITE} (${FIREBASE_PROJECT})"
 ( cd "${WORK}" && firebase deploy --only hosting --project "${FIREBASE_PROJECT}" )
