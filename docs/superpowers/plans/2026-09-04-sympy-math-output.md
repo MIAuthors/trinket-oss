@@ -43,8 +43,8 @@ from `b3c156f`.
 Tasks 1–7 touch nothing `#215` changes and may start before it merges. **Task 8 (worker
 parity) must wait for #215** and must re-anchor its line references when it starts.
 
-Base branch: `picup/main` (upstream `origin`). Work on a feature branch in Larry's fork
-(`fork`), e.g. `feature/sympy-math-output`, and open the PR against `PICUP-Physics/trinket-oss`.
+Base branch: `picup/main` (upstream `origin`). Work on a feature branch in your own fork,
+e.g. `feature/sympy-math-output`, and open the PR against `PICUP-Physics/trinket-oss`.
 
 ## Still open from the spec (do not block on these; note the assumption in the PR)
 
@@ -94,9 +94,10 @@ Base branch: `picup/main` (upstream `origin`). Work on a feature branch in Larry
 
 ## Environment
 
-- Node unit tests: `npm test` (vitest; `test/unit/*.test.js`). Larry's machine has a
-  `config/local.yaml` with `variableExplorer: true`; add `mathOutput: true` there for local
-  browser runs and never commit it.
+- Node unit tests: `npm test` (vitest; `test/unit/*.test.js`). For local browser runs, add
+  `mathOutput: true` to `config/local.yaml` alongside whatever else you have enabled there
+  (`variableExplorer`, say). That file is gitignored (`.gitignore:36`), so it stays local —
+  the deploy-facing default lives in `config/default.yaml`.
 - Python tests: `python3 test/lib/embed/test_trinket_display.py` (created in Task 3), same
   shape as `test/lib/wvpython/test_async_transform.py`, and registered in
   `.github/workflows/test.yml` next to it (line 33) under a 3.13 / 3.14 matrix.
