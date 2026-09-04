@@ -192,12 +192,21 @@ function outScheduleFlush() {
   outTimer = setTimeout(function() { outTimer = null; flushConsoleNow(); }, 100);
 }
 
-// One Write for everything queued — this is the whole point: N lines cost one
-// reflow, not N.
+// One Write per run of text — this is the whole point: N lines cost one
+// reflow, not N. Typeset math cards (features.mathOutput) sit in the same
+// queue, so they are rendered here too, in the order the program produced
+// them; runs of text on either side still coalesce into a single Write.
 function flushConsoleNow() {
   outCancelFlush();
-  var text = outBuf.drain();
-  if (text && jqconsole) jqconsole.Write(text);
+  var segments = outBuf.drain();
+  if (!segments.length || !jqconsole) return;
+  for (var i = 0; i < segments.length; i++) {
+    if (typeof segments[i].text === 'string') {
+      jqconsole.Write(segments[i].text);
+    } else if (segments[i].rich) {
+      renderMathCard(segments[i].rich);
+    }
+  }
 }
 
 // Drop anything queued: the console it was destined for is being rebuilt.
@@ -220,6 +229,16 @@ function writeStream(text) {
   initConsoleOutput();
   if (!jqconsole) return;
   outBuf.pushStream(text);
+  outScheduleFlush();
+}
+
+// One typeset result — queued AND capped, exactly like program output, which
+// is what keeps a card in program order relative to print() and stops a
+// derivation loop building an unlayoutable DOM.
+function queueMathCard(payload) {
+  initConsoleOutput();
+  if (!jqconsole) return;
+  outBuf.pushRich(payload);
   outScheduleFlush();
 }
 
@@ -1087,10 +1106,22 @@ window.__trinket_rich = function(json) {
   } catch (e) {
     return;
   }
-  // Rendering arrives in the next task; log until then so this step is
-  // verifiable on its own.
-  try { console.log('[mathOutput]', payload); } catch (e2) {}
+  queueMathCard(payload);
 };
+
+// Render one displayed result into the console.
+//
+// This is the DEGRADED path: the single-line text form (str(expr) — the form
+// that pastes back into Python) written as an ordinary console line. It is what
+// a student sees when KaTeX cannot load at all; the typeset card is layered on
+// in the next task, so a failed renderer never costs the run its output.
+function renderMathCard(item) {
+  if (!jqconsole || !item) return;
+  var text = item.text || '';
+  if (!text) return;
+  var prefix = item.lineno ? (String(item.lineno) + '  ') : '';
+  jqconsole.Write(prefix + text + '\n', 'jqconsole-output', true);
+}
 
 // Run the student's program with the display hook in place.
 //

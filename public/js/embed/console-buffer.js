@@ -21,6 +21,13 @@
   //      and a notice is queued once. The PROGRAM keeps running; only the
   //      rendering stops.
   //
+  // The queue also carries RICH segments (typeset math cards, features.mathOutput)
+  // interleaved with text. They go through here rather than being written
+  // directly for the two reasons this module exists: a card must land in
+  // program order relative to print() output, and it must count against the
+  // cap — a derivation loop displaying thousands of expressions builds exactly
+  // the DOM the cap is there to prevent. One card counts as one line.
+  //
   // Kept pure — no DOM, no timers — so the rules are testable in node. The
   // caller owns flushing and the actual write.
 
@@ -86,10 +93,58 @@
         return true;
       },
 
-      // Hand back everything queued as one string, ready for a single write.
+      // One typeset math card. Capped like pushStream, counting as a single
+      // line; past the cap it is dropped and the existing notice — which
+      // already explains that output stopped — stands in for it. Returns
+      // whether anything was queued, like pushStream.
+      pushRich: function(item) {
+        if (capped) return false;
+        if (lines + 1 > maxLines) {
+          lines  = maxLines;
+          capped = true;
+          queue.push(notice());
+          return true;
+        }
+        lines += 1;
+        queue.push({ rich: item });
+        return true;
+      },
+
+      // Everything queued, as an ordered array of segments:
+      //
+      //   { text: string }   run of console text, ready for one Write
+      //   { rich: item }     one card the caller renders itself
+      //
+      // Adjacent text is merged, so a flush still costs one Write per run of
+      // text no matter how many pushes produced it — the coalescing this module
+      // exists for survives having cards in the middle.
       drain: function() {
+        if (!queue.length) return [];
+        var out   = [];
+        var chunk = [];
+        for (var i = 0; i < queue.length; i++) {
+          var entry = queue[i];
+          if (typeof entry === 'string') {
+            chunk.push(entry);
+            continue;
+          }
+          if (chunk.length) { out.push({ text: chunk.join('') }); chunk = []; }
+          out.push(entry);
+        }
+        if (chunk.length) out.push({ text: chunk.join('') });
+        queue = [];
+        return out;
+      },
+
+      // The pre-rich contract: everything queued as one string. Rich segments
+      // have no text form and contribute nothing, so this is for callers that
+      // only ever deal in text.
+      drainText: function() {
         if (!queue.length) return '';
-        var text = queue.join('');
+        var text = '';
+        for (var i = 0; i < queue.length; i++) {
+          if (typeof queue[i] === 'string') text += queue[i];
+        }
         queue = [];
         return text;
       },
