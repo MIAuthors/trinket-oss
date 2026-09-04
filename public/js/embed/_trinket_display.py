@@ -244,6 +244,11 @@ def _source_at(lineno):
 
 def _payload(obj, latex, lineno=None, source=None):
     return {
+        # What kind of rich output this is. The JS side dispatches on it, so a
+        # second kind (an _repr_html_ table, say) is additive rather than a
+        # renegotiation of the envelope. Matches the idiom already used by the
+        # worker `figure` protocol and the Variables snapshot.
+        'kind': 'math',
         'latex': latex,
         'text': _text_of(obj),
         'lineno': lineno,

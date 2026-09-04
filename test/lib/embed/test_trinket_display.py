@@ -602,7 +602,8 @@ def test_payload_shape_and_text_fallback():
     td.display(Latexy('$x$', 'Symbol("x")'))
     assert len(recorded) == 1
     payload = recorded[0]
-    assert set(payload) == {'latex', 'text', 'lineno', 'source'}, sorted(payload)
+    assert set(payload) == {'kind', 'latex', 'text', 'lineno', 'source'}, sorted(payload)
+    assert payload['kind'] == 'math'
     assert payload['latex'] == 'x'
     assert payload['text'] == 'Symbol("x")'
 

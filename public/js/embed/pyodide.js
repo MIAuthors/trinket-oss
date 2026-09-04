@@ -206,7 +206,17 @@ function flushConsoleNow() {
     if (typeof segments[i].text === 'string') {
       if (segments[i].text) jqconsole.Write(segments[i].text);
     } else if (segments[i].rich) {
-      renderMathCard(segments[i].rich);
+      var item = segments[i].rich;
+      // Dispatch on kind so a second rich kind is additive. Anything
+      // unrecognised — including a payload predating the discriminator — takes
+      // the math card, which already degrades to the text form when there is no
+      // latex. The default is load-bearing, not laziness: _trinket_display.py is
+      // fetched at run time while this file is a cached, cache-prefixed asset,
+      // so a deploy can briefly pair new Python with old JS. Dropping unknown
+      // kinds would break renderMathCard's invariant that output is never lost.
+      switch (item.kind) {
+        default: renderMathCard(item);
+      }
     }
   }
 }
