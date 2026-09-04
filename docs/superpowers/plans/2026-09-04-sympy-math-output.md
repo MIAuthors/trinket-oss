@@ -334,7 +334,9 @@ everything except the Pyodide runner imports and runs under plain CPython.
   sol = sp.dsolve(eq, x(t)); sol
   print("Period:", 2*sp.pi/w)
   ```
-  calls the sink twice with `lineno` 6 and 8 and the right `source` strings (log them to the
+  calls the sink twice with `lineno` 6 and 7 and the right `source` strings (an earlier
+  revision of this plan said 6 and 8, which is a miscount of the eight-line program above:
+  the bare `eq` is line 6 and `sol = ...; sol` is line 7) (log them to the
   console for now). A program with no SymPy calls it zero times. Clear memory then re-run
   still works.
 - [ ] Commit: `Install the display hook at bootstrap and route main-thread runs through it`.
@@ -410,7 +412,7 @@ everything except the Pyodide runner imports and runs under plain CPython.
   `Tuple`, `Eq`, `oo`, Greek symbols, `Function('x')(t)`. Anything KaTeX renders in the error
   colour goes into a list in the PR description and the spec, not into a workaround.
 - [ ] Verify by hand: the Task 4 program renders two cards between the two prints, in order,
-  numbered 6 and **7** (this plan said 8; the observed line numbers are 6 and 7); the second
+  numbered 6 and 7; the second
   card shows the two-statement line `sol = dsolve(eq, x(t)); sol`
   in full. A program printing 6,000 lines then displaying an expression shows the cap notice
   and no card. Resize the pane; cards wrap, the page never scrolls sideways. Dark and light
@@ -426,7 +428,7 @@ everything except the Pyodide runner imports and runs under plain CPython.
   `mathOutput` the same way. **[Sonnet-delegable]** for the config plumbing.
 - [ ] Spec (`?runtime=main`), modelled on `clear-memory.spec.js`:
   1. the Task 4 program → `#console-output` contains two `.math-card` elements, in DOM order
-     after the first `print` text and before the second; `.math-ln` texts are `6` and `8`;
+     after the first `print` text and before the second; `.math-ln` texts are `6` and `7`;
      `.math-body .katex` exists (KaTeX rendered, not fallback);
   2. a program with a bare `42` and a bare string → zero `.math-card`, console text unchanged
      from today;
