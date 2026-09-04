@@ -453,7 +453,15 @@ calculator layout is separate scope on Steve's backlog. But a real `Content-Secu
 on `/embed/python3` by all three deploys, so anything CDN-loaded would need a policy change regardless.
 Vendoring sidesteps that.
 
-### Q3 — vendor KaTeX (Andrew's call; numbers to decide with)
+### Q3 — vendor KaTeX (Andrew's call; **implemented as vendored** in slice 1, pending his answer)
+
+Slice 1 vendors KaTeX **0.18.5** (the current release; this document's plan text guessed 0.16.x),
+woff2 fonts only, pinned by version + sha256 in the Dockerfile and referenced under the cache prefix.
+The standing argument for vendoring rather than CDN-loading lives in `COMPONENTS.md`, beside the
+vendoring itself, so it stays with the code rather than in a merged PR description. If the answer
+turns out to be no, the rework is confined to Task 2 — the Dockerfile block, `scripts/sync-katex.sh`
+and the hosting publish list — plus a CSP change; the Python module, the output buffer, the rendering
+and the tests are unaffected. The numbers this was decided on:
 
 A cold session already pulls 6.89 MB, 96% of it from `/components/`. The ~400 KB lazy KaTeX load is ~6% on
 top, and only for trinkets that typeset. Vendored also means same-origin, which the snapshot rasterizer needs
