@@ -110,6 +110,7 @@ test.describe('instructor journey', () => {
       if (start.status >= 500) {
         test.info().annotations.push({ type: 'note',
           description: 'export unavailable: HTTP ' + start.status + ', no JSON explanation' });
+      console.log(`  [#232] EXPORT REFUSED — download never exercised (HTTP ${start.status})`);
         return;
       }
       // Two legitimate refusals, both meaning "this deploy cannot export":
@@ -118,10 +119,12 @@ test.describe('instructor journey', () => {
       //     permanent and blocks every later attempt (#179)
       expect(why, 'a refusal should explain itself').toMatch(/export worker|not available|already in progress/i);
       test.info().annotations.push({ type: 'note', description: 'export refused: ' + why.slice(0, 120) });
+      console.log(`  [#232] EXPORT REFUSED — download never exercised: ${why.slice(0,90)}`);
       return;
     }
 
     const exportId = start.body.data.exportId;
+    console.log(`  [#232] export accepted, id=${exportId}`);
     let status = 'pending';
     for (let i = 0; i < 12 && status !== 'completed' && status !== 'failed'; i++) {
       await new Promise((r) => setTimeout(r, 5000));
@@ -134,6 +137,45 @@ test.describe('instructor journey', () => {
     const final = await api('GET', `/api/exports/${exportId}`);
     expect(final.body.data.downloadUrl, 'a completed export should offer a download').toBeTruthy();
     expect(final.body.data.created, 'created must serialize (#178)').toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // --- and the download must actually WORK (#232) -------------------------
+    // Asserting downloadUrl is truthy is not enough: the bug this covers
+    // produced a perfectly truthy URL. downloadExport signed an AWS presigned
+    // URL unconditionally, so on a GCS deploy it addressed a bucket that exists
+    // only in Google Cloud Storage; with no AWS credentials that degrades to a
+    // bare https://s3.amazonaws.com/, which 307s to the AWS marketing page.
+    // A UIndy instructor's first real export landed on an advert.
+    //
+    // So follow the redirect and read the bytes. This is also the only check
+    // that exercises REAL signing: a GCS V4 signature is minted through the IAM
+    // SignBlob API, which fails unless the runtime service account holds
+    // roles/iam.serviceAccountTokenCreator on ITSELF. Stubbed unit tests cannot
+    // see that.
+    const dl = await page.request.get(
+      new URL(`/api/exports/${exportId}/download`, baseURL).toString(),
+      { maxRedirects: 0 });
+
+    expect(dl.status(), 'the download should redirect to a signed URL').toBe(302);
+    const signed = dl.headers()['location'];
+    expect(signed, 'the redirect must carry a Location').toBeTruthy();
+
+    // The exact production symptom: a bare S3 endpoint redirects to an advert.
+    expect(signed, 'a bare AWS endpoint means the URL was signed for the wrong backend')
+      .not.toMatch(/^https:\/\/s3\.amazonaws\.com\/?$/);
+
+    // Follow it WITHOUT session cookies — a signed URL must stand on its own.
+    const object = await request.get(signed);
+    expect(object.status(), `signed URL did not serve the archive: ${signed.slice(0, 120)}`)
+      .toBe(200);
+
+    const body = await object.body();
+    console.log(`  [#232] signed host: ${new URL(signed).host}  bytes: ${body.length}  magic: ${body.slice(0,2).toString('latin1')}`);
+    expect(body.length, 'the archive should not be empty').toBeGreaterThan(0);
+    // PK\x03\x04 — a real zip, not an HTML error page.
+    expect(body.slice(0, 2).toString('latin1'), 'the download should be a zip archive')
+      .toBe('PK');
+    test.info().annotations.push({ type: 'note',
+      description: `export downloaded: ${body.length} bytes from ${new URL(signed).host}` });
   });
 
   test.afterEach(async ({ page, baseURL }) => {
