@@ -3,7 +3,7 @@ const flow     = require('../../helpers/flow.cjs');
 const defaults = require('../../helpers/defaults');
 const Store    = require('../../../lib/util/store');
 const mailer   = require('../../../lib/util/mailer');
-const nunjucks = require('nunjucks');
+const nunjucks = require('../../../lib/util/nunjucks');
 
 // The 2a harness drops the DB after each test, while the flow cookie jar is a
 // module-level singleton. Reset it before each test so every test starts fresh.
@@ -47,13 +47,13 @@ describe.skipIf(FB_MODE)('Forgot Password', () => {
       mailerConfiguredSpy = vi.spyOn(mailer, 'isConfigured').mockReturnValue(true);
       mailerSendSpy       = vi.spyOn(mailer, 'send').mockResolvedValue(undefined);
 
-      // The controller calls nunjucks.render('emails/passwordReset', …) after
-      // request.success() — i.e. after the HTTP response is already sent.
-      // The global nunjucks env has no loader configured in test mode, so
-      // the render throws "template not found", preventing mailer.send from
-      // being reached and producing unhandled-rejection noise. Stub it to a
-      // no-op so the full code path (including mailer.send) executes cleanly.
-      nunjucksRenderSpy = vi.spyOn(nunjucks, 'render').mockReturnValue('<html>reset</html>');
+      // The controller awaits nunjucks.render('emails/passwordReset', …) (the
+      // util/nunjucks helper, which returns a Promise) after request.success()
+      // — i.e. after the HTTP response is already sent. In test mode the render
+      // would otherwise throw, preventing mailer.send from being reached and
+      // producing unhandled-rejection noise. Stub it to resolve a no-op so the
+      // full code path (including mailer.send) executes cleanly.
+      nunjucksRenderSpy = vi.spyOn(nunjucks, 'render').mockResolvedValue('<html>reset</html>');
     });
 
     afterEach(() => {
