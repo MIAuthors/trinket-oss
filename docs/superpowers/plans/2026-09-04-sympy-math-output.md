@@ -170,7 +170,9 @@ Estimated size: about 650 new lines across these files, roughly 150 Python, 250 
 Pattern to copy: the `VPYTHON_WHEEL_*` ARG block in the Dockerfile (~lines 68–90) and
 `scripts/sync-vpython-worker.sh`, which parses those ARGs so the two fetch paths cannot drift.
 
-- [ ] Pick the current KaTeX release (0.16.x). The GitHub release asset `katex.tar.gz`
+- [ ] Pick the current KaTeX release. **Implemented as 0.18.5** — "0.16.x" was this plan's
+  guess when it was written and is out of date; take whatever is current and pin it, rather
+  than this number. The GitHub release asset `katex.tar.gz`
   contains `katex/katex.min.js`, `katex/katex.min.css`, `katex/fonts/*.woff2` (and `.woff`,
   `.ttf`). Compute its sha256 (`curl -fsSL <url> | sha256sum`).
 - [ ] Dockerfile: add `ARG KATEX_VERSION=…` and `ARG KATEX_SHA256=…`, fetch the tarball with
@@ -345,6 +347,11 @@ everything except the Pyodide runner imports and runs under plain CPython.
 - [ ] Extend `createOutputBuffer()`:
   - `pushRich(item)`: subject to the cap like `pushStream`, counting **1 line**; when capped,
     drop it (the existing notice already explains the cap); returns boolean like `pushStream`.
+    **Superseded during implementation — see the spec's revised Q8.** Measurement showed one
+    typeset card costs ~14 ms against microseconds for a text line, so sharing the 5,000-line
+    budget allowed ~70 s of unresponsive page, during which Stop cannot fire. As built, rich
+    output has its **own** budget (`maxRich`, 30) and past it results **degrade to plain text
+    rather than being dropped**, so nothing is lost.
   - Internally the queue becomes a list of segments `{ text: string } | { rich: item }`;
     adjacent text segments are merged on `drain()`.
   - `drain()` now returns an **array of segments**. Keep `drainText()` returning the old joined
@@ -403,7 +410,8 @@ everything except the Pyodide runner imports and runs under plain CPython.
   `Tuple`, `Eq`, `oo`, Greek symbols, `Function('x')(t)`. Anything KaTeX renders in the error
   colour goes into a list in the PR description and the spec, not into a workaround.
 - [ ] Verify by hand: the Task 4 program renders two cards between the two prints, in order,
-  numbered 6 and 8; the second card shows the two-statement line `sol = dsolve(eq, x(t)); sol`
+  numbered 6 and **7** (this plan said 8; the observed line numbers are 6 and 7); the second
+  card shows the two-statement line `sol = dsolve(eq, x(t)); sol`
   in full. A program printing 6,000 lines then displaying an expression shows the cap notice
   and no card. Resize the pane; cards wrap, the page never scrolls sideways. Dark and light
   palettes both legible.

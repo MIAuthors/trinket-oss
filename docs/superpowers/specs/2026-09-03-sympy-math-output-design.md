@@ -21,8 +21,10 @@ read-only review of the codebase; nothing has been implemented yet.
 ## Reference commit and line anchors
 
 Every `file:line` below refers to **PICUP-Physics/trinket-oss, branch `main`, commit `b3c156f`**
-(fetched 2026-09-03). Re-checked the same day against `main` at `0f9a07e` (after PRs #222 and #214):
-none of the cited files changed, so every line below is exact there too. The Clear memory feature this document leans on (formerly
+(fetched 2026-09-03). Re-checked the same day against `main` at `0f9a07e` (after PRs #222 and #214),
+and again on 2026-09-04 against `66d7edc` — the commit the implementation plan pins to, and the base
+slice 1 was built on. None of the cited files changed at any of the three, so every line below is
+exact there too. The Clear memory feature this document leans on (formerly
 `feature/clear-python-memory`) is already merged there. Line numbers drift as `main` moves; the
 anchors below are stable strings to grep for when they do.
 
