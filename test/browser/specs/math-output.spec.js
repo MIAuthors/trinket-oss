@@ -27,9 +27,9 @@ const { test, expect } = require('@playwright/test');
 //   7  sol = sp.dsolve(eq, x(t)); sol        <- second card, same line as the assignment
 //   8  print("Period:", 2*sp.pi/w)
 //
-// (The plan's prose says the cards land on lines 6 and 8; that is an
-// off-by-one in the prose — the bare `sol` shares line 7 with its assignment.
-// The program is the authority, so the assertions follow it.)
+// The second card is 7, not 8: the bare `sol` shares line 7 with the
+// assignment that precedes it on the same line. The assertions below follow the
+// program above, which is the authority.
 const OSCILLATOR = [
   'import sympy as sp',
   "t, w = sp.symbols('t omega', positive=True)",
