@@ -621,7 +621,12 @@ function ensurePyodide() {
 
   pyodideLoading = loadPyodide({ indexURL: PYODIDE_INDEX_URL }).then(function(py) {
     pyodide = py;
-    pyodideReady = true;
+    // pyodideReady is set at the END of this chain, not here. It gates Clear
+    // memory (clearMainThreadMemory) and the Variables helpers, all of which
+    // need __trinket_reset_baseline__ to exist — and with features.mathOutput
+    // on there is now a real network fetch between here and that snapshot.
+    // Clicking Clear memory inside that window would report "Could not clear
+    // Python memory; reload the page".
     // Route Python stdout/stderr into the trinket console. batched gives us the
     // text without its trailing newline, so we re-add it per write.
     py.setStdout({ batched: function(s) { writeStream(s + '\n'); } });
@@ -702,7 +707,9 @@ function ensurePyodide() {
               // temporaries do not belong in the student's namespace. The sink
               // survives because the module holds the reference.
               'del _d, _json, _js, _trinket_sink'
-            ].join('\n'));
+            ].join('\n')).then(function() {
+              displayHookReady = true;
+            });
           })
           .catch(function(e) {
             // A failed install must not stop the runtime booting: the student
@@ -728,6 +735,7 @@ function ensurePyodide() {
           '__trinket_baseline__.add("__trinket_reset_baseline__")'
         ].join('\n'));
       } catch (e) {}
+      pyodideReady = true;
       return py;
     });
   });
@@ -921,7 +929,13 @@ function isCancelError(err) {
 // `File "", line 1, in` the filter is supposed to repair. Tolerate both forms.
 var TRACEBACK_FRAME = /^\s*File "([^"]*)", line (\d+)(?:,\s*in\s*(.*?))?\s*$/;
 // Pyodide's own frames: the stdlib zip, the _pyodide package, its asm module.
-var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap/;
+// _trinket_display and <trinket-runner> are the typeset-output runner's own
+// frames (features.mathOutput). Without them a student's ValueError arrives
+// with two frames of runner plumbing on top, one of which — the wrapper, which
+// compiles under a filename of its own precisely so it can be matched here —
+// would otherwise be renamed to main.py and report a line the student never
+// wrote. That is exactly the "I broke the system" noise #107 removed.
+var TRACEBACK_INTERNAL = /python\d*\.zip|[\\/]_pyodide[\\/]|pyodide\.asm|importlib\._bootstrap|_trinket_display|<trinket-runner>/;
 // Names Python uses when code has no real file — all mean "the user's program".
 var TRACEBACK_SYNTHETIC = /^$|^<(exec|console|string|stdin|unknown)>$/;
 
@@ -1098,6 +1112,18 @@ var ASYNC_TRANSFORM_URL = '/js/embed/wvpython/vpython/_async_transform.py';
 // feature — which is the point: this ships default-off.
 var TRINKET_DISPLAY_URL = '/js/embed/_trinket_display.py';
 
+// Filename the run wrapper compiles under. Deliberately NOT <exec>, which
+// formatPythonTraceback renames to the student's main file: this name is
+// matched by TRACEBACK_INTERNAL instead, so the wrapper frame is dropped.
+var TRINKET_RUNNER_FILENAME = '<trinket-runner>';
+
+// Set only once the module is actually importable. The flag being on is not
+// enough: if the fetch or the install failed, the module is not there, and
+// running the wrapper anyway would make EVERY subsequent Run die with
+// ModuleNotFoundError attributed to the student's line 1 — turning "no typeset
+// output" into "your trinket is broken".
+var displayHookReady = false;
+
 function mathOutputEnabled() {
   return !!(window.trinket && window.trinket.config && window.trinket.config.mathOutput);
 }
@@ -1238,17 +1264,20 @@ function renderMathCard(item) {
 // The hook returns its argument, so the value this resolves to is still the
 // last-expression value and renderRichResult() below is unaffected.
 function runProgram(src, echoSource) {
-  if (!mathOutputEnabled()) return pyodide.runPythonAsync(src || '');
+  if (!mathOutputEnabled() || !displayHookReady) return pyodide.runPythonAsync(src || '');
   pyodide.globals.set('__user_source__', src || '');
   pyodide.globals.set('__trinket_echo_source__',
     (echoSource === undefined || echoSource === null ? src : echoSource) || '');
   return pyodide.runPythonAsync([
-    // Re-imported every run on purpose: Clear memory restores the bootstrap
-    // globals, so depending on a name bound at first load is not safe.
-    'import _trinket_display as _d',
-    '_d.set_source(__trinket_echo_source__)',
-    'await _d.run_program(__user_source__, globals())'
-  ].join('\n'));
+    // __import__ rather than `import … as _d`: an import statement BINDS its
+    // name in the program's globals, and _d would then be visible to dir(),
+    // globals() and the REPL on every flag-on run — a difference from flag-off
+    // behaviour for no reason. Looked up per run rather than cached, because
+    // Clear memory restores the bootstrap globals and a name bound at first
+    // load would not survive it. sys.modules does, so this is a dict hit.
+    "__import__('_trinket_display').set_source(__trinket_echo_source__)",
+    "await __import__('_trinket_display').run_program(__user_source__, globals())"
+  ].join('\n'), { filename: TRINKET_RUNNER_FILENAME });
 }
 var consoleTransformLoading = null;
 // Fetch the pure-ast transform source and expose transform_source in a private

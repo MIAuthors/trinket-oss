@@ -97,7 +97,12 @@ def _strip_delimiters(latex):
     text = latex.strip()
     for delim in ('$$', '$'):
         if len(text) > 2 * len(delim) and text.startswith(delim) and text.endswith(delim):
-            return text[len(delim):-len(delim)].strip()
+            inner = text[len(delim):-len(delim)]
+            # '$x$ and $y$' is not one delimited block; stripping its ends would
+            # produce 'x$ and $y', which is worse than leaving it alone.
+            if '$' in inner:
+                return text
+            return inner.strip()
     return text
 
 
@@ -105,15 +110,27 @@ def _own_latex(obj):
     """LaTeX from ``obj._repr_latex_()``, or None.
 
     ``_repr_latex_`` may legitimately return a string, None (meaning "I decline
-    to render this one"), or an IPython-style ``(data, metadata)`` tuple. It is
-    also student-definable, so a raising implementation must not take the run
-    down with it.
+    to render this one"), or an IPython-style ``(data, metadata)`` tuple.
+
+    The lookup is on the TYPE, not the instance, and the whole thing is
+    guarded. Both matter, because the object is student-written:
+
+    * A class with a ``__getattr__`` that raises something other than
+      AttributeError — ``def __getattr__(self, n): return self.cache[n]``
+      raising KeyError is an everyday student bug — would otherwise propagate
+      out of the hook and kill a program that ran fine with the flag off.
+      A type lookup never triggers instance ``__getattr__`` at all. This is
+      what IPython's formatters do, for the same reason.
+    * A ``__getattr__`` that returns a callable for ANY name (the fluent-proxy
+      pattern) would otherwise "typeset" whatever that callable returned —
+      echoing garbage for an object that has no LaTeX form.
+    * A property or descriptor that raises, and any raising implementation, is
+      caught: the feature declines to render, it does not break the run.
     """
-    method = getattr(obj, '_repr_latex_', None)
-    if not callable(method):
-        return None
     try:
-        result = method()
+        if getattr(type(obj), '_repr_latex_', None) is None:
+            return None
+        result = obj._repr_latex_()
     except Exception:
         return None
     if isinstance(result, tuple) and result:
@@ -124,16 +141,28 @@ def _own_latex(obj):
 
 
 def _can_typeset(obj, depth=0):
-    """True if obj — or, for a container, every leaf of it — has _repr_latex_."""
+    """True if obj — or, for a container, every leaf of it — has _repr_latex_.
+
+    Containers are matched by EXACT type, not isinstance. A subclass of list or
+    dict can override ``__iter__``, ``__len__``, ``__bool__`` or ``items()``
+    with anything at all, including something that raises, and walking it would
+    put student code on the hook's call path. Exact types lose nothing real:
+    SymPy's own ``Tuple`` and ``Dict`` are Printable, so they typeset through
+    ``_own_latex`` rather than this walk.
+    """
     if depth > _MAX_CONTAINER_DEPTH:
         return False
-    if isinstance(obj, (list, tuple)):
-        return bool(obj) and all(_can_typeset(o, depth + 1) for o in obj)
-    if isinstance(obj, dict):
-        return bool(obj) and all(
-            _can_typeset(k, depth + 1) and _can_typeset(v, depth + 1)
-            for k, v in obj.items())
-    if isinstance(obj, (str, bytes)):
+    kind = type(obj)
+    try:
+        if kind is list or kind is tuple:
+            return bool(obj) and all(_can_typeset(o, depth + 1) for o in obj)
+        if kind is dict:
+            return bool(obj) and all(
+                _can_typeset(k, depth + 1) and _can_typeset(v, depth + 1)
+                for k, v in obj.items())
+    except Exception:
+        return False
+    if kind is str or kind is bytes:
         return False
     return _own_latex(obj) is not None
 
@@ -166,9 +195,10 @@ def _latex_of(obj):
     docstrings and everything else that is not self-typesetting — which is what
     keeps this feature a no-op for existing trinkets.
     """
-    if isinstance(obj, (list, tuple, dict)):
+    kind = type(obj)
+    if kind is list or kind is tuple or kind is dict:
         return _container_latex(obj) if _can_typeset(obj) else None
-    if isinstance(obj, (str, bytes)):
+    if kind is str or kind is bytes:
         return None
     return _own_latex(obj)
 

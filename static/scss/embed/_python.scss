@@ -383,11 +383,6 @@
     color: inherit;
   }
 
-  /* Long expressions scroll inside the card; the page never scrolls sideways. */
-  .math-card .katex-display {
-    margin: 0;
-    text-align: left;
-  }
 
   .jqconsole-popout-link {
     text-align: center;

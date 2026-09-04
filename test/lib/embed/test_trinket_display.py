@@ -66,8 +66,11 @@ class Exploding(object):
 class FakeSympy(object):
     """Minimal stand-in for the sympy module, for the container path."""
 
-    @staticmethod
-    def latex(obj):
+    calls = []
+
+    @classmethod
+    def latex(cls, obj):
+        cls.calls.append(obj)
         return r'\left[ x\right]'
 
 
@@ -459,6 +462,136 @@ def test_self_referential_container_is_silent_not_fatal():
         assert td._latex_of(loop) is None
     finally:
         del sys.modules['sympy']
+
+
+# ------------------------------------------- student objects must not break a run
+#
+# Every case here ran silently with the flag OFF, so it must run silently with
+# the flag ON. An exception escaping the hook would turn a working trinket into
+# a traceback the student cannot explain.
+
+def test_getattr_raising_a_non_attributeerror_is_silent():
+    """The everyday student bug: __getattr__ backed by a dict that raises KeyError."""
+
+    class Vec(object):
+        def __init__(self):
+            self.cache = {}
+
+        def __getattr__(self, name):
+            return self.cache[name]      # KeyError, not AttributeError
+
+    v = Vec()
+    assert td._latex_of(v) is None
+    recorded = []
+    td.install(recorded.append, 'v\n')
+    td._hook(v, 1)                        # must not raise
+    assert recorded == []
+
+
+def test_self_recursive_getattr_is_silent():
+    class Loop(object):
+        def __getattr__(self, name):
+            return getattr(self, name)    # RecursionError
+
+    assert td._latex_of(Loop()) is None
+
+
+def test_getattr_returning_a_callable_for_any_name_is_silent():
+    """A fluent proxy answers every attribute; it has no LaTeX form.
+
+    Looking `_repr_latex_` up on the instance would call whatever this returns
+    and typeset the result — echoing garbage for an object that cannot typeset.
+    """
+
+    class Fluent(object):
+        def __getattr__(self, name):
+            return lambda *a, **k: '<%s>' % name
+
+    assert td._latex_of(Fluent()) is None
+
+
+def test_a_raising_property_is_silent():
+    class Prop(object):
+        @property
+        def _repr_latex_(self):
+            raise RuntimeError('boom')
+
+    assert td._latex_of(Prop()) is None
+
+
+def test_a_property_returning_a_string_is_not_treated_as_a_method():
+    class Prop(object):
+        @property
+        def _repr_latex_(self):
+            return '$x$'                  # not callable: declined, not crashed
+
+    assert td._latex_of(Prop()) is None
+
+
+def test_container_subclasses_are_never_walked():
+    """Exact types only: a subclass can make iteration do anything at all."""
+
+    class Sneaky(list):
+        def __iter__(self):
+            raise RuntimeError('no iteration for you')
+
+    class Falsy(list):
+        def __bool__(self):
+            raise RuntimeError('no truth for you')
+
+    class Counted(list):
+        def __len__(self):
+            raise RuntimeError('no length for you')
+
+    sys.modules['sympy'] = FakeSympy
+    try:
+        for kind in (Sneaky, Falsy, Counted):
+            obj = kind([Latexy()])
+            assert td._latex_of(obj) is None, kind.__name__
+        # Even a well-behaved subclass of typesettable leaves is declined: the
+        # rule is the type, not the behaviour, because behaviour is unknowable.
+        class Plain(list):
+            pass
+        assert td._latex_of(Plain([Latexy()])) is None
+
+        class PlainDict(dict):
+            pass
+        assert td._latex_of(PlainDict({Latexy(): Latexy()})) is None
+    finally:
+        del sys.modules['sympy']
+
+
+def test_the_container_itself_is_what_reaches_sympy_latex():
+    items = [Latexy(), Latexy()]
+    sys.modules['sympy'] = FakeSympy
+    FakeSympy.calls = []
+    try:
+        assert td._latex_of(items) == r'\left[ x\right]'
+        assert len(FakeSympy.calls) == 1, FakeSympy.calls
+        assert FakeSympy.calls[0] is items, 'the container, not a leaf'
+    finally:
+        FakeSympy.calls = []
+        del sys.modules['sympy']
+
+
+def test_a_raising_sympy_latex_is_silent():
+    class Angry(object):
+        @staticmethod
+        def latex(obj):
+            raise RuntimeError('printer failed')
+
+    sys.modules['sympy'] = Angry
+    try:
+        assert td._latex_of([Latexy()]) is None
+    finally:
+        del sys.modules['sympy']
+
+
+def test_interior_delimiters_are_not_stripped():
+    """'$x$ and $y$' is not one delimited block; stripping ends would corrupt it."""
+    assert td._latex_of(Latexy('$x$ and $y$')) == '$x$ and $y$'
+    # The ordinary single block still strips.
+    assert td._latex_of(Latexy('$x + y$')) == 'x + y'
 
 
 # --------------------------------------------------------------- payload shape
