@@ -12,3 +12,13 @@ db:
     database: test
   redis:
     enabled: false
+
+# The suite stubs the archive builder, so it never needed a real bucket — which
+# is exactly why a deploy with no exports bucket got all the way to production
+# and took the server down. Tests now run as a CONFIGURED deploy, so the guard's
+# refusal path is only reached by the test that deliberately unsets this.
+aws:
+  buckets:
+    exports:
+      name: 'test-exports'
+      host: 'https://example.invalid/test-exports'

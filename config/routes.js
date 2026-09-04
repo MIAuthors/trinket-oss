@@ -495,7 +495,12 @@ routes = [
   {
     route : 'GET /lti/deep-link lti.deepLinkPicker',
     html  : 'lti/deep-link-picker.html',
-    config: { auth: 'session' }
+    // 'try', not required. A deep-linking launch arrives in the LMS's iframe; when the
+    // browser blocks third-party cookies nothing of the session reaches us, and a hard
+    // 401 sends the instructor to a login page that CANNOT work there — signing in
+    // sets a cookie the browser will refuse too. Letting the handler run means it can
+    // explain that instead of looping. See #217.
+    config: { auth: { strategy: 'session', mode: 'try' } }
   },
   {
     route : 'POST /lti/deep-link/select lti.deepLinkSelect',

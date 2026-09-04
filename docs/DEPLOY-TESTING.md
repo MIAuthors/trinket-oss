@@ -10,6 +10,9 @@ because most of them were reached by getting something wrong first.
 | `test/browser/specs/` | yes (Firebase Auth **emulator**) | yes | a local `make gcp` stack only |
 | `test/browser/specs-deploy/` | no | no | any deployment, including production |
 | `specs-deploy/instructor-journey.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/course-journey.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/trinket-authoring.spec.js` | yes | yes | **trials only**, opt-in via env |
+| `specs-deploy/student-loop.spec.js` | yes, **two accounts** | yes | **trials only**, opt-in via env |
 
 ## Why authenticated deploy tests exist at all
 
@@ -23,6 +26,31 @@ authenticated paths and were invisible to the whole suite:
 `instructor-journey.spec.js` covers that gap: sign in, revisit `/login` while
 signed in, build a course and assignment, export student work, poll to
 completion, assert the download is offered.
+
+## A 200 does not mean it worked
+
+The single most important assertion in these specs is **not** `status === 200`.
+
+This framework answers a schema rejection with **HTTP 200 and the errors in
+`flash.validation`**. That is exactly how #204 shipped: Add Students returned
+200, added nobody, and every status-only check agreed it was fine. Writing the
+student-loop spec caught a second instance immediately — a feedback POST with an
+empty `trinketId` was rejected the same silent way, and the spec's own
+`expect(status).toBe(200)` sailed past it.
+
+Use `assertOk(expect, res, what)` from `test/browser/deploy-auth.js`, which fails
+on a validation or error flash as well as on a bad status. And where you can,
+assert the OUTCOME rather than the response — the roster test re-reads the
+invitation list and requires it to have grown, because that is the thing an
+instructor actually cares about.
+
+## Two identities, not one
+
+`student-loop.spec.js` needs `SMOKE_STUDENT_EMAIL` / `SMOKE_STUDENT_PASSWORD`
+alongside the instructor pair. Submitting as the course owner would exercise
+none of the permission boundaries — the owner can do everything, so it proves
+nothing about what a student can do. The student account also exercises #10:
+an invitation does not enrol an existing user, their next sign-in does.
 
 ## Fixture policy: standing identity, ephemeral data
 
@@ -45,7 +73,35 @@ get killed. Each run creates its own namespaced scope and asserts only within it
 matching the shared prefix and only past an age threshold, dry-run by default.
 The convention lives in one file so the spec and the sweeper cannot drift apart.
 
-## Signing in without a human
+## Signing in on a Firebase deploy, without a human and without weakening it
+
+`save-session.js` (below) still works, but it is no longer the only way, and it
+is no longer the preferred one: captured sessions expire, and capturing TWO of
+them (needed for the student loop) means two manual browser sessions.
+
+Instead, sign in through the **Email/Password provider** over the Identity
+Toolkit REST API and exchange the ID token at `POST /api/auth/session`. This is
+the same seam the local suite drives via the emulator. `deploy-auth.js`'s
+`signIn()` picks it automatically: a password field on `/login` means form auth,
+its absence means Firebase.
+
+Nothing is dialled down to make this work, which matters — the temptation is to
+relax the deploy instead:
+
+* the server **never inspects which provider minted the token**
+  (`lib/controllers/auth.js` → `verifyIdToken`, then email/uid), so an
+  Email/Password token is exactly as good as a Google one;
+* the provider was **already enabled** on `trinket-merge-test`;
+* the `apiKey` is **public by design** — it ships in the login page;
+* the `email_verified` gate that protects account linking
+  (GHSA-w66h-rw9x-7h24) **still applies**. The test identities were marked
+  verified once, administratively, via the Identity Toolkit admin API using a
+  short-lived `gcloud` token — **not** a long-lived service-account key.
+
+Do NOT extend this to uindy: it is Google-only by a decision documented to UIndy
+IT, and mandi/production keep the no-test-identities rule regardless.
+
+## Signing in without a human (captured sessions)
 
 Firebase-driven deploys (gcr trial, mandi, uindy) have no login form to fill.
 `test/browser/save-session.js` opens a headed Chrome, waits while you sign in —
