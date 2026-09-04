@@ -476,13 +476,26 @@ fallback stands.
 
 `console-buffer.js:31`, `maxLines` 5000, system text exempt. One math block = one line fits the accounting.
 
-### Q9 — ordering of #215 against slice 1 (new; Andrew's call, open)
+### Q9 — ordering of #215 against slice 1: **decided, #215 first** (Andrew, 2026-09-03 21:19)
 
 #215 (module-worker conversion) and slice 1 both touch `pyodide-worker.js`. If #215 lands first, the worker
 integration is written once against the module-worker shape; if after, someone rewrites it. Decide before
 slice 1 starts. Recommendation from this document: **#215 first**, since it is backward compatible and small,
 and slice 1's worker side is the `rich` sink plus the swap at the run call, both of which would otherwise be
 written twice.
+
+**Decision.** Andrew: clear the open PR queue, implement #215 (module worker, stays pinned at 0.28.1, no
+behaviour change), then slice 1 starts. Steve's reasoning, for the record: #215 is not urgent as a bug but the
+coupling with slice 1 is real and cheap to avoid by sequencing; it is verified backward compatible across
+0.28.1 / 0.29.4 / 314.0.6; and `trinket-merge-test.web.app` (`workerRuntime: true`) is the test bed for the
+worker path before it reaches uindy. The Python 3.14 bump remains a separate later decision.
+
+**Effect on this plan.** Slice 1's worker side is written once, against the module-worker shape #215
+produces; the swap point for the run call and the `rich` sink must be re-anchored in `pyodide-worker.js` after
+#215 lands (the line pins above for that file will be stale). Base branch becomes plain `picup/main` once the
+queue clears, so the integration-branch guidance below retires. The parts of slice 1 that do not touch the
+worker (vendored KaTeX, the Python module, the buffer extension, main-thread wiring, tests) do not depend on
+#215 and could start earlier if wanted; the sequencing decision is about the worker file.
 
 ### Nothing half-started
 
