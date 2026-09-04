@@ -356,10 +356,19 @@
     color: #6b6b6b;
   }
 
+  /* Width of the line-number column and its gap, shared with .math-body's
+   * indent below so the maths lines up under the echoed source instead of the
+   * two drifting apart as separate magic numbers. */
+  $math-ln-width: 2ch;
+  $math-ln-gap: 0.75em;
+
   .math-card .math-ln {
     display: inline-block;
-    width: 2ch;
-    margin-right: 0.75em;
+    /* min-width, not width: two digits covers most trinkets and keeps the
+     * numbers in a column, but a 100+ line program must widen the column
+     * rather than overflow it into the source text beside it. */
+    min-width: $math-ln-width;
+    margin-right: $math-ln-gap;
     text-align: right;
     /* Digits share a width, so a run of cards has its line numbers in a column
      * instead of drifting. */
@@ -371,7 +380,9 @@
   .math-card .math-body {
     display: block;
     margin-top: 4px;
-    padding-left: 26px;
+    /* Derived from the line-number column above, so the maths sits under the
+     * source text rather than under the line number. */
+    padding-left: calc(#{$math-ln-width} + #{$math-ln-gap});
     /* Until KaTeX resolves this holds str(expr) as plain text; once it does,
      * .math-typeset replaces the content with rendered math. */
     font-family: monospace;

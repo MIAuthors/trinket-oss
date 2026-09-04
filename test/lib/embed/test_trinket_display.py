@@ -710,8 +710,15 @@ def test_set_source_resets_between_runs():
 
 
 def test_no_sink_installed_is_not_an_error():
-    td._sink = None
-    td._emit(Latexy(), 1)     # must not raise
+    # Save and restore rather than relying on the runner below calling reset()
+    # between tests: this file is also meant to run under pytest, which does
+    # not, and leaving _sink as None would silence every test that follows.
+    previous = td._sink
+    try:
+        td._sink = None
+        td._emit(Latexy(), 1)     # must not raise
+    finally:
+        td._sink = previous
 
 
 if __name__ == "__main__":

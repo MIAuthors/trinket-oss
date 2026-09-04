@@ -9,9 +9,15 @@ const { test, expect } = require('@playwright/test');
 // worker-runtime.spec.js, share-runtime-option.spec.js) reads the flag off
 // window.trinket.config and skips rather than asserts when it is off. This
 // spec follows that precedent so a deploy without mathOutput reports a clean
-// skip, not a failure, while a deploy WITH it on (trinket-merge-test.web.app,
-// the 2026-09-03 trial) turns the manual "does it actually render" look into a
-// recorded check.
+// skip, not a failure, while a deploy WITH it on turns the manual "does it
+// actually render" look into a recorded check.
+//
+// Point this at a MAIN-THREAD deploy (rba-merge-trial.spvi.net or
+// trial-merge.spvi.net). Slice 1 does not cover the Web Worker runtime — that
+// is Task 8, waiting on #215 — so on a worker deploy such as
+// trinket-merge-test.web.app the flag reads as on and nothing renders, which
+// looks like a failure and is not one. trinket-merge-test becomes the right
+// target once Task 8 lands.
 //
 // Anonymous and read-only, like the rest of deploy-smoke.spec.js, so it is safe
 // to run against a live server.
