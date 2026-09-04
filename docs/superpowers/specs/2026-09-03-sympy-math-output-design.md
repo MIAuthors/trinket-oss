@@ -10,12 +10,14 @@ Slice 1 as built. Line 4 assigns and stays silent; the bare `eq` on line 5 types
 between the cards in program order; the bare `42` and the bare string on lines 8 and 9 produce
 nothing, which is what makes this a no-op for existing trinkets; a list of SymPy objects typesets;
 and each card carries the student's own source line, numbered as in the code window.
-Shared read-only copy of this document: https://claude.ai/code/artifact/fc141473-5b72-4157-8043-c6da2442bd8a
 
 
 Prepared for Andrew (maintainer of the PICUP trinket server) and for the Claude Code
-assistant working in the `picup-trinket-oss` repository. Written 2026-09-03 after a
-read-only review of the codebase; nothing has been implemented yet.
+assistant working in this repository (`PICUP-Physics/trinket-oss`). Written 2026-09-03
+after a read-only review of the codebase, when nothing had been implemented; slice 1 has
+been built since, as the status above says. The Part A questions below stand as originally
+posed — the answers, including the ones that changed once there was code to measure, are
+in the running log at the end.
 
 
 ## Reference commit and line anchors
