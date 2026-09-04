@@ -170,7 +170,10 @@ function resetOutput(consoleOnly) {
 // The queue/cap accounting is in embed/console-buffer.js, kept pure so the
 // rules are testable in node (same split as runtime-router.js). Timers and the
 // actual write stay here, where the DOM is.
-var outBuf   = consoleBuffer.createOutputBuffer({ maxLines: 5000 });
+// maxRich is far smaller than maxLines because one extra typeset card costs
+// ~14 ms against microseconds for a printed line; past it results degrade to
+// plain text rather than being dropped. Measurements are in console-buffer.js.
+var outBuf   = consoleBuffer.createOutputBuffer({ maxLines: 5000, maxRich: 30 });
 var outRaf   = null;
 var outTimer = null;
 
