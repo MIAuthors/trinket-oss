@@ -32,8 +32,10 @@ from `b3c156f`.
 
 ## Prerequisites and sequencing (decided by Andrew, 2026-09-03)
 
-1. Andrew clears the open PR queue (done: `main` is at `66d7edc` with nine merges from
-   2026-09-03) and deploys to production (planned 2026-09-04).
+1. Andrew clears the open PR queue (**done**: zero PRs open, `main` is at `66d7edc`; #233 asset
+   caching and #214 deploy test suite are both in) and deploys to production (planned 2026-09-04).
+   Steve's later PR adding authenticated test routes for trial servers is test-only and touches
+   nothing this plan changes.
 2. **#215** (module worker: `pyodide.mjs` instead of `importScripts`) lands **before** the
    worker half of this plan. It is backward compatible and stays pinned at Pyodide 0.28.1.
 3. Then slice 1 starts.
@@ -426,6 +428,10 @@ everything except the Pyodide runner imports and runs under plain CPython.
 - [ ] Run the existing `repl.spec.js`, `clear-memory.spec.js`, `stop.spec.js`,
   `traceback.spec.js` and `input.spec.js` with the flag **on**; all must still pass (the
   hook must not perturb tracebacks, input, or stop).
+- [ ] **Deploy suite (#214).** `test/browser/playwright.deploy.config.js` runs specs against a real
+  deploy. Add one math-output case there, gated on the target deploy having `mathOutput` on, so
+  the trial on `trinket-merge-test.web.app` is a recorded check rather than a manual look.
+  **[Sonnet-delegable]** once the local spec passes.
 - [ ] Commit: `Browser spec for typeset math output`.
 
 ## Task 8: Worker parity — **only after #215 has merged** **[Consult Fable before starting]**
