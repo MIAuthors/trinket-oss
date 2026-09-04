@@ -42,14 +42,51 @@ const TRIAL_HOSTS = new Set([
   '127.0.0.1',
 ]);
 
+// Other people run their own trials — Andrew's staging server, a self-hoster's
+// scratch box — and they should not have to edit this file (or fork it) to use
+// the harness. TRIAL_HOSTS_EXTRA opts additional hosts in, comma-separated:
+//
+//   TRIAL_HOSTS_EXTRA=trinket-staging.example.com npx playwright test -c ...
+//
+// This keeps the fail-closed property: a host nobody has named is still
+// refused. It only removes the need for a code change to name one.
+function extraHosts() {
+  return (process.env.TRIAL_HOSTS_EXTRA || '')
+    .split(',')
+    .map(function(h) { return h.trim().toLowerCase(); })
+    .filter(Boolean);
+}
+
+// Hosts that can NEVER be minted on, whatever the environment says. An env var
+// is easy to set by accident — in a shell profile, a CI variable, a copied
+// command — and the cost of getting it wrong here is test accounts in a real
+// student body. These are the deploys real people use, so they are refused
+// even when explicitly named.
+const NEVER_MINTABLE = new Set([
+  'rba-uindy.spvi.net',                 // UIndy production
+  'trinket.matterandinteractions.org',  // M&I production
+  'trinket.gopicup.org',                // PICUP production (VPS)
+]);
+
 function assertMintable(baseURL) {
   const host = new URL(baseURL).hostname.toLowerCase();
-  if (!TRIAL_HOSTS.has(host)) {
+
+  if (NEVER_MINTABLE.has(host)) {
+    throw new Error(
+      'REFUSING to create a test identity on "' + host + '": this is a PRODUCTION deploy.\n' +
+      'This refusal cannot be overridden by TRIAL_HOSTS_EXTRA. If you genuinely need\n' +
+      'to test there, use the anonymous specs, which create nothing.'
+    );
+  }
+
+  const allowed = new Set([...TRIAL_HOSTS, ...extraHosts()]);
+  if (!allowed.has(host)) {
     throw new Error(
       'REFUSING to create a test identity on "' + host + '": not a known trial host.\n' +
       'Creating accounts on a production deploy is forbidden (docs/DEPLOY-TESTING.md).\n' +
-      'If this really is a trial, add it to TRIAL_HOSTS in test/browser/ephemeral-identity.js\n' +
-      'deliberately. Known trials: ' + [...TRIAL_HOSTS].join(', ')
+      'If this really is a trial, either add it to TRIAL_HOSTS in\n' +
+      'test/browser/ephemeral-identity.js, or set TRIAL_HOSTS_EXTRA=' + host + '\n' +
+      'for this run. Known trials: ' + [...allowed].join(', ')
     );
   }
   return host;
@@ -158,4 +195,4 @@ async function destroy(request, baseURL, identity) {
   return problems;
 }
 
-module.exports = { mint, destroy, assertMintable, TRIAL_HOSTS };
+module.exports = { mint, destroy, assertMintable, TRIAL_HOSTS, NEVER_MINTABLE };
