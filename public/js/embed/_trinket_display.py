@@ -16,7 +16,8 @@ Pyodide's last-expression return keeps working (which is what
 
 Only module-level statements are wrapped. A bare expression inside a ``for`` or
 a ``def`` displays nothing, exactly as in Jupyter; ``display()`` is the escape
-hatch there, and is installed on ``builtins``.
+hatch there, and is installed on ``builtins``. A trailing semicolon suppresses
+one result, also as in Jupyter.
 
 Why an AST wrap and not ``sys.displayhook``
 -------------------------------------------
@@ -311,6 +312,35 @@ def display(*objs):
 
 # ------------------------------------------------------------------- AST wrap
 
+def _suppressed_by_semicolon(node):
+    """True if this statement's source ends with ``;`` — Jupyter's suppression.
+
+    Students transplant notebook code, where a trailing semicolon means "compute
+    this but do not show it". Pyodide's own ``quiet_trailing_semicolon`` only
+    suppresses the RETURN value of the whole program, so without this a bare
+    ``expr;`` would still display and the idiom would appear broken.
+
+    Deliberately strict: the ``;`` must be the last thing on the line apart from
+    whitespace or a comment. ``a = 1; x`` and ``x; y`` therefore still display
+    ``x`` — there the semicolon is separating statements, not suppressing one,
+    and guessing wrong in that direction would silently swallow output.
+    """
+    end = getattr(node, 'end_lineno', None)
+    col = getattr(node, 'end_col_offset', None)
+    if not end or col is None or end < 1 or end > len(_source_lines):
+        return False
+    try:
+        # ast column offsets are UTF-8 byte offsets, so slice the encoded line.
+        rest = _source_lines[end - 1].encode('utf-8')[col:].decode('utf-8')
+    except Exception:
+        return False
+    rest = rest.lstrip()
+    if not rest.startswith(';'):
+        return False
+    tail = rest[1:].strip()
+    return tail == '' or tail.startswith('#')
+
+
 def wrap_module(tree):
     """Wrap each module-level ``Expr`` in a call to the display hook.
 
@@ -329,6 +359,8 @@ def wrap_module(tree):
         if not isinstance(node, ast.Expr):
             continue
         if index == 0 and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        if _suppressed_by_semicolon(node):
             continue
         call = ast.Call(
             func=ast.Name(id=_HOOK_NAME, ctx=ast.Load()),

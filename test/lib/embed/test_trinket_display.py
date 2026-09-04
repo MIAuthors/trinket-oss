@@ -172,6 +172,71 @@ def test_a_non_first_bare_string_is_wrapped_but_stays_silent():
     assert recorded == [], recorded
 
 
+# ------------------------------------------- Jupyter's trailing-semicolon rule
+
+def wrapped_with_source(src):
+    """Wrap with _source_lines populated, which the suppression rule needs."""
+    td.install(lambda p: None, src)
+    return wrapped_calls(td.wrap_module(ast.parse(src)))
+
+
+def test_a_trailing_semicolon_suppresses_one_result():
+    assert wrapped_with_source('expr;\n') == []
+    assert wrapped_with_source('expr ;\n') == []
+    assert wrapped_with_source('expr;   \n') == []
+
+
+def test_a_trailing_semicolon_before_a_comment_still_suppresses():
+    assert wrapped_with_source('expr;  # keep this quiet\n') == []
+
+
+def test_a_semicolon_separating_statements_does_not_suppress():
+    """`a = 1; x` is separation, not suppression — x must still display."""
+    assert wrapped_with_source('a = 1; x\n') == [1]
+    # Both display: guessing that the first `;` suppresses would swallow output.
+    assert wrapped_with_source('x; y\n') == [1, 1]
+    # The plan's own example keeps working.
+    assert wrapped_with_source('sol = f(); sol\n') == [1]
+    # ...and suppressing the trailing one is still honoured.
+    assert wrapped_with_source('sol = f(); sol;\n') == []
+
+
+def test_a_semicolon_inside_a_string_does_not_suppress():
+    assert wrapped_with_source('f(";")\n') == [1]
+    assert wrapped_with_source("f('a;')\n") == [1]
+
+
+def test_a_semicolon_ending_a_multiline_expression_suppresses():
+    assert wrapped_with_source('f(\n  1,\n  2);\n') == []
+    assert wrapped_with_source('f(\n  1,\n  2)\n') == [1]
+
+
+def test_suppression_is_inert_without_source():
+    """No source recorded (a caller that never set it) must not silence output."""
+    td.install(lambda p: None, '')
+    assert wrapped_calls(td.wrap_module(ast.parse('expr;\n'))) == [1]
+
+
+def test_suppressed_expressions_still_evaluate():
+    """`;` hides the result; it does not skip the work."""
+    src = 'A();\n'
+    calls = []
+
+    class Rec(object):
+        def __init__(self):
+            calls.append(1)
+
+        def _repr_latex_(self):
+            return '$x$'
+
+    recorded = []
+    td.install(recorded.append, src)
+    tree = td.wrap_module(ast.parse(src))
+    exec(compile(tree, td._MAIN_FILENAME, 'exec'), {'A': Rec})
+    assert calls == [1], 'the expression must still be evaluated'
+    assert recorded == [], 'but nothing displayed'
+
+
 def test_lineno_matches_the_original_statement():
     src = 'x = 1\n\n\nexpr\n'
     tree = td.wrap_module(ast.parse(src))
