@@ -472,9 +472,47 @@ Subtlety: the pyodide embed is same-origin with its host page (unlike glowscript
 `srcdoc` frame), so the async clipboard works on a trinket page and will not inside an LMS. The download
 fallback stands.
 
-### Q8 — cap confirmed
+### Q8 — cap: **answer revised after measurement** (2026-09-04)
 
-`console-buffer.js:31`, `maxLines` 5000, system text exempt. One math block = one line fits the accounting.
+The original answer was: `console-buffer.js:31`, `maxLines` 5000, system text exempt, and one math
+block = one line fits the accounting. That was decided before anyone had rendered a card, and
+measurement during slice 1 showed it does not hold.
+
+Measured end-to-end on a `make gcp` stack (Apple Silicon, Pyodide 0.28.1, SymPy 1.13.3, KaTeX
+0.18.5), 400 iterations of `display(e)` on a **warm** interpreter, A/B against the same build with
+the budget lifted:
+
+| budget | typeset cards | worst freeze | total blocking |
+|---|---|---|---|
+| unbounded (shared 5,000-line budget) | 400 | 2,093 ms | 6,697 ms |
+| `maxRich: 30` | 30 | 1,253 ms | **1,528 ms** |
+
+One extra typeset card costs **~14 ms** — KaTeX, 174 DOM nodes, ~6 KB of markup, one jqconsole
+write — against microseconds for a line of text. The Python side is negligible: `_repr_latex_`
+0.33 ms, `str()` 0.23 ms, `json.dumps` 0.008 ms, the JS crossing 0.015 ms; ~0.6 ms per result all
+told. At the cap that is roughly **70 s** of unresponsive page, ~870,000 DOM nodes and ~29 MB of
+markup — and while the main thread is blocked **Stop cannot fire**, which is precisely the failure
+#142 and this cap exist to prevent. A `display()` inside a loop is the idiom the feature tells
+students to use, so this is reachable by following the documentation.
+
+**Implemented in slice 1:** a separate `maxRich`, default **30**, alongside the unchanged
+`maxLines: 5000`. 30 is a readability limit rather than a performance one — nobody reads more than
+a few dozen typeset equations, and the only realistic way to exceed it is a loop, where the student
+never intended to read every result.
+
+Past the budget results **degrade rather than being dropped**: each is written as an ordinary
+console line carrying `str(expr)`, line number first. That costs microseconds, keeps every result
+on screen and copyable, and reuses the plain-text path the KaTeX-unavailable case already
+exercises. Because nothing is ever lost, the threshold is safe to set this low; the notice explains
+what happened and what to do, once. Larry chose 30 over 50 on 2026-09-04.
+
+**For Andrew:** the number is a one-line change (`maxRich` in `pyodide.js`'s `createOutputBuffer`
+call, rationale and figures in `console-buffer.js`). Two caveats on the measurements. They are from
+Apple Silicon; a classroom Chromebook is plausibly 3–5x slower, so the case for a low threshold is
+stronger there, not weaker. And an earlier attempt at this measurement was wrong — a cold
+`sympy.integrate()` dominated it and made the display path look ~10x more expensive than it is —
+so the figures above are warm and A/B'd, and should be re-run if the renderer or Pyodide version
+moves.
 
 ### Q9 — ordering of #215 against slice 1: **decided, #215 first** (Andrew, 2026-09-03 21:19)
 
