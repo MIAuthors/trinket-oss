@@ -390,3 +390,32 @@ Rejected alternatives from the first proposal, for the record: matplotlib mathte
 (LaTeX subset; chokes on matrices and cases), `init_printing(use_unicode=True)` ASCII art
 (not what was asked), a minimal `_repr_latex_` branch in `renderRichResult` only (last
 expression only, wrong pane, ordering lost).
+
+---
+
+## Answers from Andrew (running log)
+
+### Q1 — `features.workerRuntime` in production: **off** (answered 2026-09-03)
+
+Production config lives in the `gopicup-deploy-config` repo; its production branch sets only
+`features: { variableExplorer: true }`. The overlay deep-merges over `config/default.yaml`, so
+`workerRuntime`, `workerVPython` and `stepDebugger` all inherit their stock `false`. Every python3
+program in production runs on the **main thread**. The per-trinket `?runtime=worker` override still
+works (`runtime-router.js:69-74` checks the query parameter above the config gate), so the worker
+can be trialled on individual trinkets without the site-wide flag. Enabling a flag in production
+means adding it to the overlay's `local.yaml`, promoting main→production in the config repo, and
+**rebuilding the image** (under `docker-compose.prod.yml` the overlay is baked in; a pull and
+restart is not enough). Andrew's advice: trial `?runtime=worker` on a couple of trinkets before any
+site-wide change.
+
+**Consequences for this plan**
+
+- Slice 1 can be **main-thread only** and still be visible to every production user. Worker parity
+  (the `rich` message, the worker-side sink, the swap at `pyodide-worker.js:573`) moves to slice 2.
+- Keep the Python module runtime-agnostic anyway (the sink abstraction stays), so slice 2 is wiring,
+  not redesign.
+- Guard rail: do **not** enable `workerRuntime` in production before slice 2 lands, or typeset
+  output silently disappears for every program. Note this in the config repo when the flag is added.
+- `features.mathOutput` will itself need the same overlay edit plus a rebuild to reach production.
+- `stepDebugger` is also off in production, so the step-debugger recording pipeline is a lower
+  priority for parity than the REPL echo; both remain slice 2.
