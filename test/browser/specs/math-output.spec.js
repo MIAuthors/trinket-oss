@@ -195,8 +195,14 @@ test('typeset output survives Clear memory', async ({ page }) => {
 
   await page.locator('.run-it').first().click();
   await expect(async () => {
-    // Clear output is not what Clear memory does, so the earlier cards are
-    // still on screen: four in total after the second run.
-    expect(await page.locator('#console-output .math-card').count()).toBe(4);
+    // Two, not four. Clear memory preserves the transcript — but Run itself
+    // calls resetOutput(), so the second run starts from an empty console and
+    // the cards do not accumulate. What this pins is that the second run
+    // produces cards AT ALL: the display module and its builtins are installed
+    // before the bootstrap namespace snapshot, so the restore Clear memory
+    // performs has to leave them in place.
+    expect(await page.locator('#console-output .math-card').count()).toBe(2);
   }).toPass({ timeout: 90_000 });
+  // And typeset, not the degraded text fallback.
+  await expect(page.locator('#console-output .math-card .math-body .katex')).toHaveCount(2);
 });
