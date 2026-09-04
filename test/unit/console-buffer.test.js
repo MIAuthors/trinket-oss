@@ -130,10 +130,11 @@ describe('createOutputBuffer — resets', () => {
 });
 
 describe('createOutputBuffer — the rich budget', () => {
-  // Rich output has its own, much smaller budget than text: a typeset card
-  // costs ~19 ms against microseconds for a printed line, so sharing the
-  // 5,000-line budget would allow ~95 s of unresponsive page — and Stop cannot
-  // fire while the main thread is blocked. Past the budget results DEGRADE to
+  // Rich output has its own, much smaller budget than text. The reasoning and
+  // the measurements live in console-buffer.js beside the number itself; the
+  // short version is that a typeset card costs far more than a printed line, so
+  // sharing the 5,000-line budget would leave the page unresponsive long enough
+  // that Stop cannot fire. Past the budget results DEGRADE to
   // plain text rather than being dropped, which is what makes a threshold this
   // low safe: nothing is ever lost.
   const card = (n) => ({ kind: 'math', latex: 'x^{' + n + '}', text: 'x**' + n, lineno: n });
