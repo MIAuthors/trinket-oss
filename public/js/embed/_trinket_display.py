@@ -59,7 +59,8 @@ _MAIN_FILENAME = '<exec>'
 _MAX_CONTAINER_DEPTH = 6
 
 _sink = None            # callable(dict) installed by the host
-_source_lines = []      # main-program source, for echoing the student's line
+_source_lines = []      # source to ECHO — what the student actually wrote
+_exec_lines = []        # source that was PARSED — column offsets refer to this
 _expr_spans = {}        # lineno -> end_lineno, recorded by wrap_module()
 
 
@@ -79,10 +80,22 @@ def install(sink, source=''):
     setattr(builtins, _HOOK_NAME, _hook)
 
 
-def set_source(source):
-    """Record the source of the program about to run, for the line echo."""
-    global _source_lines, _expr_spans
+def set_source(source, exec_source=None):
+    """Record the program about to run.
+
+    Two sources, because they can differ. ``source`` is what the student wrote
+    and is what the echo shows. ``exec_source`` is the text actually parsed —
+    after ``_async_transform``'s textual ``await ``/``async `` insertions, where
+    those apply — and is what any COLUMN offset from the AST refers to.
+
+    Line numbers are identical in both (the transform never adds or removes
+    lines), so only column-based lookups need the distinction. Getting it wrong
+    is silent: an ``end_col_offset`` from the transformed tree, indexed into the
+    original line, lands past the end and simply finds nothing there.
+    """
+    global _source_lines, _exec_lines, _expr_spans
     _source_lines = (source or '').splitlines()
+    _exec_lines = (exec_source or source or '').splitlines()
     _expr_spans = {}
 
 
@@ -327,11 +340,13 @@ def _suppressed_by_semicolon(node):
     """
     end = getattr(node, 'end_lineno', None)
     col = getattr(node, 'end_col_offset', None)
-    if not end or col is None or end < 1 or end > len(_source_lines):
+    if not end or col is None or end < 1 or end > len(_exec_lines):
         return False
     try:
+        # _exec_lines, NOT _source_lines: the offset comes from the tree that was
+        # parsed, and the async transform shifts columns on the lines it touches.
         # ast column offsets are UTF-8 byte offsets, so slice the encoded line.
-        rest = _source_lines[end - 1].encode('utf-8')[col:].decode('utf-8')
+        rest = _exec_lines[end - 1].encode('utf-8')[col:].decode('utf-8')
     except Exception:
         return False
     rest = rest.lstrip()

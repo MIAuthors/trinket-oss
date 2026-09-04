@@ -206,12 +206,15 @@
       // only ever deal in text.
       drainText: function() {
         if (!queue.length) return '';
-        var text = '';
+        // Collect and join rather than += in a loop: a flush can hold thousands
+        // of stdout writes, and repeated concatenation reallocates. This keeps
+        // the linear behaviour the pre-rich queue.join('') had.
+        var parts = [];
         for (var i = 0; i < queue.length; i++) {
-          if (typeof queue[i] === 'string') text += queue[i];
+          if (typeof queue[i] === 'string') parts.push(queue[i]);
         }
         queue = [];
-        return text;
+        return parts.join('');
       },
 
       hasPending: function() { return queue.length > 0; },

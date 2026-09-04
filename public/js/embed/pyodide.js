@@ -1288,7 +1288,10 @@ function runProgram(src, echoSource) {
     // behaviour for no reason. Looked up per run rather than cached, because
     // Clear memory restores the bootstrap globals and a name bound at first
     // load would not survive it. sys.modules does, so this is a dict hit.
-    "__import__('_trinket_display').set_source(__trinket_echo_source__)",
+    // Both sources: the echo shows what the student wrote, while any column
+    // offset from the AST refers to the text actually parsed. On the console
+    // path those differ, because the async transform inserts `await ` mid-line.
+    "__import__('_trinket_display').set_source(__trinket_echo_source__, __user_source__)",
     "await __import__('_trinket_display').run_program(__user_source__, globals())"
   ].join('\n'), { filename: TRINKET_RUNNER_FILENAME });
 }

@@ -201,6 +201,35 @@ def test_a_semicolon_separating_statements_does_not_suppress():
     assert wrapped_with_source('sol = f(); sol;\n') == []
 
 
+def test_semicolon_suppression_survives_the_async_transform():
+    """Column offsets come from the PARSED text, not the echoed text.
+
+    The async transform inserts `await ` mid-line, so an end_col_offset taken
+    from the transformed tree points past the end of the corresponding original
+    line. Indexing the original with it finds nothing and suppression silently
+    stops working — which would break the documented `expr;` rule for every
+    console-using program.
+    """
+    original = 'import console\nx = 1\nconsole.input();\n'
+    transformed = transform_source(original)
+    assert transformed.splitlines()[2].startswith('await '), 'transform did not fire'
+
+    # Installed the way runProgram does it: echo the original, parse the transform.
+    td.install(lambda p: None, original)
+    td.set_source(original, transformed)
+    tree = ast.parse(transformed)
+    expr = [n for n in tree.body if isinstance(n, ast.Expr)][0]
+    assert td._suppressed_by_semicolon(expr) is True
+
+    # And the echo still shows what the student wrote, not the inserted await.
+    assert td._source_at(3) == 'console.input();'
+
+
+def test_exec_source_defaults_to_the_echo_source():
+    td.install(lambda p: None, 'expr;\n')
+    assert wrapped_calls(td.wrap_module(ast.parse('expr;\n'))) == []
+
+
 def test_a_semicolon_inside_a_string_does_not_suppress():
     assert wrapped_with_source('f(";")\n') == [1]
     assert wrapped_with_source("f('a;')\n") == [1]
