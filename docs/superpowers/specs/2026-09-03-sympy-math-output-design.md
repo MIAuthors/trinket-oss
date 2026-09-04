@@ -331,7 +331,8 @@ message in the protocol spec; a loading notice in the console, in the style of t
 (~3.3 s on 0.28.1) plus the lazy KaTeX load (~400 KB); vendored KaTeX referenced under the
 `/cache-prefix-<commit>/` path so it is served `immutable` (the pattern PR #233 applies to the glowscript
 runner), not at a bare `/components/` path; node tests for the buffer and pure-Python tests for the AST
-wrap (testable outside Pyodide, like `_async_transform.py`).
+wrap (testable outside Pyodide, like `_async_transform.py`), run under **Python 3.13 and 3.14** since Pyodide is
+about to move to 3.14 (#215). Never hard-code the SymPy version; detect `_repr_latex_` at run time.
 Acceptance: a program mixing several bare SymPy expressions and `print` calls shows
 line-numbered echoes with typeset results interleaved in order, on whichever runtime the
 deploy uses; an existing trinket with the flag on behaves identically to before.
@@ -452,6 +453,15 @@ practical ceiling** until the worker is converted to a module worker. SymPy on 0
 auto-loads on import in about **3.3 s**; the first typeset expression waits on that plus KaTeX, hence the
 loading notice in slice 1.
 
+**Addendum (later on 2026-09-03).** Pyodide 0.28.1 gives students **Python 3.13.2** (checked on the running
+embed); `ast.get_source_segment`, which the source echo uses, is present. Pyodide has renumbered to track
+CPython: `0.29.4` → `314.0.0` → `314.0.6` (Python 3.14). The 0.29.x cap comes from `importScripts`; **#215**
+has a verified fix, a module worker loading `pyodide.mjs` that boots on 0.28.1, 0.29.4 and 314.0.6, so the
+conversion is backward compatible and can land before any version bump. Consequences: SymPy will move past
+1.13.3, so do not hard-code the SymPy version and re-check the LaTeX printer output on upgrade; and the AST
+wrap is the version-sensitive part of slice 1, so run its pure-Python tests under **3.13 and 3.14** from the
+start (cheap now, annoying to retrofit). Do not lean on 3.13-only `ast` behaviour.
+
 ### Q6 — deploy config vs per-trinket: Andrew's call, open
 
 `runtimeOption` (`default.yaml:472`) already models the per-trinket pattern if that route is chosen.
@@ -465,6 +475,14 @@ fallback stands.
 ### Q8 — cap confirmed
 
 `console-buffer.js:31`, `maxLines` 5000, system text exempt. One math block = one line fits the accounting.
+
+### Q9 — ordering of #215 against slice 1 (new; Andrew's call, open)
+
+#215 (module-worker conversion) and slice 1 both touch `pyodide-worker.js`. If #215 lands first, the worker
+integration is written once against the module-worker shape; if after, someone rewrites it. Decide before
+slice 1 starts. Recommendation from this document: **#215 first**, since it is backward compatible and small,
+and slice 1's worker side is the `rich` sink plus the swap at the run call, both of which would otherwise be
+written twice.
 
 ### Nothing half-started
 
