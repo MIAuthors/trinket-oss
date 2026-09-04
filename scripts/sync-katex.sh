@@ -32,8 +32,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "Fetching KaTeX v$KATEX_VERSION into $DEST"
-curl -fL --silent -o "$TMP/katex.tar.gz" "$URL"
-echo "$KATEX_SHA256  $TMP/katex.tar.gz" | shasum -a 256 -c -
+curl -fL --silent --show-error -o "$TMP/katex.tar.gz" "$URL"
+
+# sha256sum is the coreutils tool on Linux; shasum is what macOS ships. This
+# script is chained into `npm run setup-vendor`, so it has to verify on both.
+if command -v sha256sum >/dev/null 2>&1; then
+  echo "$KATEX_SHA256  $TMP/katex.tar.gz" | sha256sum -c -
+else
+  echo "$KATEX_SHA256  $TMP/katex.tar.gz" | shasum -a 256 -c -
+fi
 
 mkdir -p "$DEST/fonts"
 tar xzf "$TMP/katex.tar.gz" -C "$TMP" \
