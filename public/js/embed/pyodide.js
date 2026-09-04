@@ -1292,6 +1292,13 @@ function runProgram(src, echoSource) {
     // offset from the AST refers to the text actually parsed. On the console
     // path those differ, because the async transform inserts `await ` mid-line.
     "__import__('_trinket_display').set_source(__trinket_echo_source__, __user_source__)",
+    // Deleted the moment set_source has consumed it, so the student's globals()
+    // and dir() look the same with the flag on as off. __user_source__ stays:
+    // run_program needs it, and it is pre-existing on the paths that set it
+    // (runVpython, the console branch) rather than anything this feature added.
+    // The _SKIP entry in VARS_HELPER/RECORD_HELPER is kept as the fallback for
+    // the case where set_source raises and this del never runs.
+    "del __trinket_echo_source__",
     "await __import__('_trinket_display').run_program(__user_source__, globals())"
   ].join('\n'), { filename: TRINKET_RUNNER_FILENAME });
 }
