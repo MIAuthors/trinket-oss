@@ -362,9 +362,18 @@ Probed 2026-09-03 by a collaborator running Python inside the deployed 0.28.1 em
 
 1. **Verified.** `pyodide.code.CodeRunner` exists, its `.ast` is a `Module` and assignable, compiling after
    mutation works, and `run_async` is present. The AST-wrap architecture is viable as written.
-2. **Open.** Where jqconsole's `Append` lands relative to an armed prompt. Cheaper to answer once code exists.
-3. **Open.** KaTeX coverage of SymPy's full LaTeX output (`\begin{array}` for Piecewise, `\operatorname`,
-   `\substack`, `\limits`). Collaborator offered to take it.
+2. **Answered (2026-09-04, from jqconsole's source).** `Write(text, cls, escape)` builds a span and
+   delegates to `Append(node)`, which does `insertBefore(this.$prompt)` and then re-attaches the cursor
+   after the prompt. So output always lands **above** an armed prompt and the prompt stays live below it —
+   confirmed in the running REPL as well as in `lib/jqconsole.js`. `Write` is the right call; no patching
+   and no `Append` special case was needed.
+3. **Answered (2026-09-04).** No coverage gaps found. 37 SymPy constructs were rendered through the real
+   pipeline with **zero** KaTeX errors, including all three the concern named: `\begin{cases}` (`Piecewise`),
+   `\limits` (definite integrals, `Sum`, `Limit`) and `\operatorname` (`asin`, `atan`). Also `Matrix`,
+   `Dict`, `Tuple`, `Rational`, nested radicals, fractional exponents, Greek symbols, `oo`, `Derivative`,
+   applied functions, series with `O()`, and a long polynomial expansion (which wraps rather than
+   overflowing, so the page never scrolls sideways). Re-run this on a KaTeX or SymPy bump: the printer and
+   the renderer move independently.
 4. **Answered.** See Q1 below: off on two deploys, on at uindy.
 
 Also verified: `sympy.init_printing()` really replaces `sys.displayhook` outside IPython (the reason for
@@ -567,5 +576,17 @@ Deployed trials covering both runtimes:
 
 ### Still to check
 
-jqconsole `Append` position relative to an armed prompt, and KaTeX coverage of SymPy's printer output. Both
-are cheaper once there is code; the collaborator offered to take either.
+Both items that stood here — jqconsole's insertion position relative to an armed prompt, and KaTeX coverage
+of SymPy's printer output — were **answered on 2026-09-04** while implementing slice 1. See items 2 and 3
+under "Unverified claims" above.
+
+What remains open is not a question about the design:
+
+- **Q3, Q4 and Q6** are Andrew's calls. Slice 1 was implemented on assumed defaults (vendor KaTeX: yes,
+  pinned at 0.18.5; Instructions not typeset; deploy-level config rather than per-trinket), so a different
+  answer means a change, not a rewrite.
+- **#215** (module worker) has not been started — it is an open issue, not a PR. Task 8, worker parity, is
+  blocked on it, so on a deploy with `workerRuntime: true` (uindy) the feature currently does nothing.
+- **The rich cap number.** 30 is implemented and measured (see Q8), but it is a product judgement about how
+  many typeset results a student would ever read, not a fact. Easy to move: one argument in
+  `pyodide.js`'s `createOutputBuffer` call.
