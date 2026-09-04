@@ -698,7 +698,16 @@ function ensurePyodide() {
     // fetched.
     return (mathOutputEnabled()
       ? fetch(TRINKET_DISPLAY_URL)
-          .then(function(r) { return r.text(); })
+          .then(function(r) {
+            // fetch does NOT reject on 4xx/5xx. Without this check a 404's HTML
+            // body gets written to the Pyodide FS as _trinket_display.py and
+            // only fails later, as a Python SyntaxError on the import — which
+            // hides the actual HTTP status from anyone debugging a deploy.
+            if (!r.ok) {
+              throw new Error('HTTP ' + r.status + ' fetching ' + TRINKET_DISPLAY_URL);
+            }
+            return r.text();
+          })
           .then(function(src) {
             py.FS.writeFile('_trinket_display.py', src);
             return py.runPythonAsync([
