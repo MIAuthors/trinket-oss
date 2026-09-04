@@ -1,8 +1,9 @@
 # Typeset SymPy output in Pyodide trinkets — design handoff
 
-Status: slice 1 implemented on the main thread (PR #240, behind `features.mathOutput`, default off);
-worker parity waits on #215. Q3, Q4 and Q6 are still Andrew's calls; Q8 was revised after measurement
-(see the log at the bottom).
+Status: slice 1 — main thread only, behind `features.mathOutput`, default off — is implemented in
+**#240**. This document lands ahead of that PR by design, so check whether #240 has merged before
+assuming the code is present on `main`. Worker parity waits on #215. Q3, Q4 and Q6 are still
+Andrew's calls; Q8 was revised after measurement (see the log at the bottom).
 
 ![Typeset SymPy output in a Pyodide trinket](../images/2026-09-04-sympy-math-output.png)
 

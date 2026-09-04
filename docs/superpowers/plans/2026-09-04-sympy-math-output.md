@@ -1,11 +1,16 @@
 # SymPy Typeset Output — Slice 1 Implementation Plan
 
-> **For agentic workers:** Execute this plan task-by-task with checkbox (`- [ ]`) tracking. The
-> executing model is **Claude Opus**. Tasks marked **[Sonnet-delegable]** are mechanical enough
-> to hand to a Sonnet subagent with the task text as its whole brief; Opus reviews the diff.
-> Points marked **[Consult Fable]** are places where a wrong call is expensive to unwind:
-> stop, summarise the situation and the options in a few lines, and get a second opinion from
-> Claude Fable before proceeding. Everything else Opus decides alone.
+> **For whoever executes this** — a person or an agent. Work task-by-task with checkbox
+> (`- [ ]`) tracking. Two markers appear throughout, and both describe the work rather than
+> any particular tool:
+>
+> - **[Sonnet-delegable]** — mechanical enough to hand off wholesale, with the task text as
+>   the entire brief. Whoever owns the plan reviews the result.
+> - **[Consult Fable]** — a call that is expensive to unwind. Stop, summarise the situation
+>   and the options in a few lines, and get a second opinion before proceeding.
+>
+> The names come from how slice 1 was actually run (Claude Opus executing, Sonnet for the
+> delegable tasks, Fable for second opinions). Read them as roles, not requirements.
 
 **Goal:** When a student's Python trinket produces a SymPy expression as a bare top-level
 expression (or via `display()`), the console shows the student's source line, numbered as in
