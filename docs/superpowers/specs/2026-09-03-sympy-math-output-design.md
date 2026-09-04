@@ -1,6 +1,15 @@
 # Typeset SymPy output in Pyodide trinkets — design handoff
 
-Status: design consult complete, awaiting Andrew's answers to the Part A questions; no implementation yet.
+Status: slice 1 implemented on the main thread (PR #240, behind `features.mathOutput`, default off);
+worker parity waits on #215. Q3, Q4 and Q6 are still Andrew's calls; Q8 was revised after measurement
+(see the log at the bottom).
+
+![Typeset SymPy output in a Pyodide trinket](../images/2026-09-04-sympy-math-output.png)
+
+Slice 1 as built. Line 4 assigns and stays silent; the bare `eq` on line 5 typesets; `print` lands
+between the cards in program order; the bare `42` and the bare string on lines 8 and 9 produce
+nothing, which is what makes this a no-op for existing trinkets; a list of SymPy objects typesets;
+and each card carries the student's own source line, numbered as in the code window.
 Shared read-only copy of this document: https://claude.ai/code/artifact/fc141473-5b72-4157-8043-c6da2442bd8a
 
 
