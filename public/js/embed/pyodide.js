@@ -642,24 +642,68 @@ function ensurePyodide() {
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
-    // Record the pristine namespace twice:
+    // Typeset math output: install the display module BEFORE the baseline
+    // snapshot below. display() and the expression hook live on `builtins`, not
+    // in globals(), but the `import _trinket_display` binding does not — and
+    // installing ahead of the snapshot is what makes Clear memory
+    // (clearMainThreadMemory, which restores __trinket_reset_baseline__) leave
+    // the feature working instead of half-removed.
     //
-    // - __trinket_baseline__ is the set the Variables panel hides.
-    // - __trinket_reset_baseline__ is a shallow copy used by Clear memory to
-    //   restore the runner's own globals without re-downloading Pyodide.
-    //
-    // The self-reference is intentional. A plain dict(globals()) is evaluated
-    // before its assignment, so it would otherwise omit the reset snapshot and
-    // work only once.
-    try {
-      py.runPython([
-        '__trinket_baseline__ = set(globals().keys())',
-        '__trinket_reset_baseline__ = dict(globals())',
-        '__trinket_reset_baseline__["__trinket_reset_baseline__"] = __trinket_reset_baseline__',
-        '__trinket_baseline__.add("__trinket_reset_baseline__")'
-      ].join('\n'));
-    } catch (e) {}
-    return py;
+    // Returned as a promise so the fetch completes before the snapshot is
+    // taken. With the flag off this whole step is skipped and nothing is
+    // fetched.
+    return (mathOutputEnabled()
+      ? fetch(TRINKET_DISPLAY_URL)
+          .then(function(r) { return r.text(); })
+          .then(function(src) {
+            py.FS.writeFile('_trinket_display.py', src);
+            return py.runPythonAsync([
+              'import _trinket_display as _d',
+              'import json as _json',
+              'import js as _js',
+              // json.dumps in Python so no PyProxy crosses into JS and nothing
+              // needs destroying — the same shape the Variables snapshot uses.
+              //
+              // dumps and the JS callback are bound as DEFAULT ARGUMENTS, not
+              // read from globals: the del below removes the module names, and
+              // a lambda body would have resolved them at call time and raised
+              // NameError on the first displayed expression. Defaults are
+              // evaluated here, once, and travel with the function.
+              'def _trinket_sink(p, _dumps=_json.dumps, _rich=_js.window.__trinket_rich):',
+              '    _rich(_dumps(p))',
+              '_d.install(_trinket_sink)',
+              // Same tidiness as the input() override above: the runner's own
+              // temporaries do not belong in the student's namespace. The sink
+              // survives because the module holds the reference.
+              'del _d, _json, _js, _trinket_sink'
+            ].join('\n'));
+          })
+          .catch(function(e) {
+            // A failed install must not stop the runtime booting: the student
+            // loses typeset output, not their trinket.
+            try { console.warn('[mathOutput] display hook unavailable:', e); } catch (e2) {}
+          })
+      : Promise.resolve()
+    ).then(function() {
+      // Record the pristine namespace twice:
+      //
+      // - __trinket_baseline__ is the set the Variables panel hides.
+      // - __trinket_reset_baseline__ is a shallow copy used by Clear memory to
+      //   restore the runner's own globals without re-downloading Pyodide.
+      //
+      // The self-reference is intentional. A plain dict(globals()) is evaluated
+      // before its assignment, so it would otherwise omit the reset snapshot and
+      // work only once.
+      try {
+        py.runPython([
+          '__trinket_baseline__ = set(globals().keys())',
+          '__trinket_reset_baseline__ = dict(globals())',
+          '__trinket_reset_baseline__["__trinket_reset_baseline__"] = __trinket_reset_baseline__',
+          '__trinket_baseline__.add("__trinket_reset_baseline__")'
+        ].join('\n'));
+      } catch (e) {}
+      return py;
+    });
   });
 
   return pyodideLoading;
@@ -1021,6 +1065,57 @@ function ensureVpython() {
 }
 
 var ASYNC_TRANSFORM_URL = '/js/embed/wvpython/vpython/_async_transform.py';
+
+// Typeset math output (features.mathOutput, surfaced as
+// trinket.config.mathOutput). When off, nothing here is fetched, no Python is
+// installed and every run path is byte-for-byte what it was before the
+// feature — which is the point: this ships default-off.
+var TRINKET_DISPLAY_URL = '/js/embed/_trinket_display.py';
+
+function mathOutputEnabled() {
+  return !!(window.trinket && window.trinket.config && window.trinket.config.mathOutput);
+}
+
+// The main-thread sink. Python hands us one JSON string per displayed object
+// (see _trinket_display.install); the worker posts a `rich` message to the same
+// effect. Queued through the output buffer rather than written directly, so
+// ordering against print() and the line cap both hold.
+window.__trinket_rich = function(json) {
+  var payload;
+  try {
+    payload = JSON.parse(json);
+  } catch (e) {
+    return;
+  }
+  // Rendering arrives in the next task; log until then so this step is
+  // verifiable on its own.
+  try { console.log('[mathOutput]', payload); } catch (e2) {}
+};
+
+// Run the student's program with the display hook in place.
+//
+// `src` is what executes (already async-transformed where that applies).
+// `echoSource` is what the source echo shows, which is the ORIGINAL program:
+// the async transform inserts `await `/`async ` textually, and echoing that
+// back would show the student a line they did not write. The transform never
+// adds or removes lines, so the two agree on line numbers and the echo lands
+// correctly.
+//
+// The hook returns its argument, so the value this resolves to is still the
+// last-expression value and renderRichResult() below is unaffected.
+function runProgram(src, echoSource) {
+  if (!mathOutputEnabled()) return pyodide.runPythonAsync(src || '');
+  pyodide.globals.set('__user_source__', src || '');
+  pyodide.globals.set('__trinket_echo_source__',
+    (echoSource === undefined || echoSource === null ? src : echoSource) || '');
+  return pyodide.runPythonAsync([
+    // Re-imported every run on purpose: Clear memory restores the bootstrap
+    // globals, so depending on a name bound at first load is not safe.
+    'import _trinket_display as _d',
+    '_d.set_source(__trinket_echo_source__)',
+    'await _d.run_program(__user_source__, globals())'
+  ].join('\n'));
+}
 var consoleTransformLoading = null;
 // Fetch the pure-ast transform source and expose transform_source in a private
 // module, WITHOUT importing the vpython package (heavy: glow/scene/etc.).
@@ -1047,6 +1142,10 @@ function ensureConsoleTransform() {
 // Run a VPython program: load glow + scene + bridge, comment out the version
 // header line (keeping line numbers stable), rewrite blocking rate()/sleep()
 // loops to async via the bridge's AST transformer, then execute.
+//
+// Deliberately NOT routed through runProgram(): typeset math output covers the
+// plain run and worker paths in slice 1 only. See slice 2 in
+// docs/superpowers/plans/2026-09-04-sympy-math-output.md.
 function runVpython(prog) {
   // No trailing newline: completed with "ready" once the library and bridge are
   // loaded, so the ellipsis never lingers as if it were still working (#27).
@@ -1187,7 +1286,7 @@ var VARS_HELPER = [
   // KEEP IN SYNC with RECORD_HELPER's _SKIP + _snap_ns filters (the step
   // debugger's per-step snapshots): a runner-injected name added here but not
   // there makes the debugger show internals the explorer hides, or vice versa.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
+  "_SKIP = {'__user_source__', '__trinket_echo_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   "_baseline = user_ns.get('__trinket_baseline__') or set()",
   '_out = []',
   'for _name, _val in list(user_ns.items()):',
@@ -1433,7 +1532,7 @@ var RECORD_HELPER = [
   // must hide the same runner-injected names. They live in separate helper
   // strings/namespaces, so a shared definition would add more machinery than
   // it removes — this cross-reference is the guard.
-  "_SKIP = {'__user_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
+  "_SKIP = {'__user_source__', '__trinket_echo_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
   'class _TrinketStopRecording(Exception): pass',
   '_steps = []',
   '_snaps = []',
@@ -1884,6 +1983,9 @@ function runStepThrough() {
 
   ensurePyodide().then(function() {
     if (debugCancelled || running) return null; // cancelled, or a normal run got in first
+    // Deliberately NOT routed through runProgram(): typeset math output covers
+    // the plain run and worker paths in slice 1 only. See slice 2 in
+    // docs/superpowers/plans/2026-09-04-sympy-math-output.md.
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
     if (usesVPython(prog)) {
       $('#debug-note').text('Step through is not available for VPython programs');
@@ -2963,7 +3065,7 @@ function startRun() {
         window.document.pyodideMplTarget = document.getElementById('graphic');
         showGraphic();
         return pyodide.runPythonAsync(MATPLOTLIB_SETUP_CODE).then(function() {
-          return pyodide.runPythonAsync(prog || '');
+          return runProgram(prog);
         }).then(function(result) {
           // Notebook-style auto-display: if the program created figures but
           // never called plt.show(), show them. If a canvas already rendered
@@ -2988,10 +3090,10 @@ function startRun() {
             // transform_source name created when the helper was first loaded.
             'from _trinket_async_transform import transform_source\n' +
             'transform_source(__user_source__)');
-          return pyodide.runPythonAsync(asyncProg);
+          return runProgram(asyncProg, prog);
         });
       }
-      return pyodide.runPythonAsync(prog || '');
+      return runProgram(prog);
     });
   }).then(function(result) {
     renderRichResult(result);
