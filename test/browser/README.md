@@ -113,6 +113,28 @@ pre-fix revision, then GREEN again — worth repeating if they are ever changed,
 since an earlier draft of the leak check matched only `https://` URLs and passed
 against a genuinely broken build.
 
+### Authenticated journeys (`course-journey`, `student-loop`, `trinket-authoring`)
+
+Opt-in, trials only, and they clean up after themselves:
+
+```bash
+cd test/browser
+SMOKE_EMAIL=... SMOKE_PASSWORD=... \
+SMOKE_STUDENT_EMAIL=... SMOKE_STUDENT_PASSWORD=... \
+TRINKET_BASE_URL=https://trial-merge.spvi.net \
+  npx playwright test -c playwright.deploy.config.js
+```
+
+Between them they cover the flows an instructor and a student actually perform:
+create a course, rename it (and confirm the pre-rename link still redirects),
+add a topic / page / assignment, paste a roster, sign in as a *second* account,
+submit, receive feedback, read that feedback, and create / edit / remix a
+trinket.
+
+⚠️ Assert with `assertOk()` from `deploy-auth.js`, not `expect(status).toBe(200)`
+— a rejected payload is answered 200-with-a-flash here. See
+[docs/DEPLOY-TESTING.md](../../docs/DEPLOY-TESTING.md).
+
 ## Deploy testing policy
 
 Fixture policy, why production stays read-only, and why the auth emulator is not

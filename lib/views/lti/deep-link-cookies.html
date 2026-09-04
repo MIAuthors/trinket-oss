@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{# Shown when a deep-linking launch reaches us inside the LMS's frame with no session,
+   which in practice means the browser refused the cookie the launch just set. A login
+   link would loop — signing in sets a cookie that gets refused the same way — so this
+   page explains the actual cause instead. See issue #217.
+
+   The two routes below are NOT interchangeable and the difference catches people out:
+   the address-bar control grants third-party cookies while browsing the LMS site,
+   whereas the settings list is keyed on OUR domain. Both are given deliberately. #}
+{% block content %}
+<div class="row"><div class="small-12 medium-9 columns small-centered" style="padding:2rem 0;">
+
+  <h4 style="margin-bottom:0.5rem;">Your browser is blocking cookies for {{ siteName }}</h4>
+  <p class="lead" style="font-size:1rem;">
+    {{ siteName }} is running inside a window owned by your LMS. Your browser treats it as a
+    third party here and is withholding the sign-in it just issued, so this page cannot tell
+    who you are — even though you may be signed in to {{ siteName }} in another tab.
+  </p>
+  <p>To choose content for this assignment, allow cookies for this site only:</p>
+
+  <h5 style="margin-top:1.5rem;">Chrome</h5>
+  <ol>
+    <li>Look in the address bar of <strong>this LMS page</strong> for the eye or cookie icon
+        (it appears when cookies are being blocked), and choose to allow third-party cookies
+        for the site.</li>
+    <li>Or, more permanently: <strong>Settings → Privacy and security → Third-party cookies →
+        Sites allowed to use third-party cookies → Add</strong>, and enter
+        {% if siteHost %}<code>[*.]{{ siteHost }}</code>{% else %}this site's address{% endif %}.
+        <br><span class="small" style="color:#666;">Note the difference: the address-bar control
+        applies to the LMS page you are on, while this list is keyed on {{ siteName }}'s own
+        address.</span></li>
+    <li>Reload, then launch the assignment setup again from your LMS.</li>
+  </ol>
+  <p class="small" style="color:#666;">
+    In an Incognito window Chrome blocks third-party cookies by default — an ordinary window
+    may be all that is needed.
+  </p>
+
+  <h5 style="margin-top:1.25rem;">Safari</h5>
+  <p>
+    <strong>Settings → Privacy</strong>, and turn off <em>Prevent cross-site tracking</em>
+    while you set up the assignment.
+  </p>
+
+  <h5 style="margin-top:1.25rem;">Firefox</h5>
+  <p>
+    Click the shield in the address bar of this LMS page and turn off Enhanced Tracking
+    Protection for this site.
+  </p>
+
+  <hr>
+  <p class="small" style="color:#666;">
+    <strong>If your institution manages this setting</strong> and you cannot change it, you
+    are not doing anything wrong — this needs your IT administrator, or a
+    {{ siteName }} administrator who can set the assignment up outside the LMS window.
+    Please report it: we would rather fix this than have you change a privacy setting.
+  </p>
+
+</div></div>
+{% endblock %}

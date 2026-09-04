@@ -264,6 +264,28 @@ const init = async () => {
         }
 
         if (statusCode === 401) {
+          // A framed request that arrived with NO cookies at all cannot be
+          // repaired by signing in: the browser will refuse the session cookie
+          // /login sets for the same reason it refused the first one, so the
+          // user just bounces between the two. Explain it instead (#217).
+          //
+          // Deliberately narrow — only where we were ALREADY sending them to
+          // /login (so anonymous-by-design pages like embeds are untouched),
+          // and only when no cookie arrived at all, which is the observed
+          // signature of third-party blocking. A framed request that DID send
+          // cookies is an ordinary signed-out user and still gets /login.
+          const dest = request.headers['sec-fetch-dest'];
+          if ((dest === 'iframe' || dest === 'frame') && !request.headers.cookie) {
+            return h.view('lti/framed-cookies.html', {
+              siteName : (config.app && config.app.siteName) || 'Trinket',
+              siteHost : publicHostname.resolve(
+                request.headers,
+                request.info.hostname,
+                [config.app.url.hostname].concat(config.app.url.knownHosts || [])
+              )
+            }).code(200).takeover();
+          }
+
           // Redirect to login for unauthorized page requests
           return h.redirect('/login').takeover();
         } else if (statusCode === 404) {

@@ -32,9 +32,9 @@ This is a getting-started walkthrough; `DEPLOYING.md` → "Per-deploy customizat
 Turn it on by naming the folder in `TRINKET_DEPLOY`:
 
 ```bash
-TRINKET_DEPLOY=<name> docker compose up --build      # docker compose
+TRINKET_DEPLOY=<name> docker compose up --build      # docker compose (stamp first, below)
 TRINKET_DEPLOY=<name> node app.js                    # bare node
-TRINKET_DEPLOY=<name> bash deploy-cloudrun.sh         # Cloud Run
+TRINKET_DEPLOY=<name> bash deploy-cloudrun.sh         # Cloud Run (stamps itself)
 ```
 
 Without `TRINKET_DEPLOY` the app runs completely stock — the overlay is inert.
@@ -695,6 +695,7 @@ after editing overlay files, restart the app to re-read them:
 
 ```bash
 git -C deploys/<name> pull                          # pull your config changes
+bash scripts/build-info.sh                          # stamp /version BEFORE building
 TRINKET_DEPLOY=<name> docker compose up -d --build   # rebuild + restart with the overlay
 ```
 
@@ -708,6 +709,7 @@ Update trinket-oss itself the same way (your config untouched):
 
 ```bash
 git pull
+bash scripts/build-info.sh
 TRINKET_DEPLOY=<name> docker compose up -d --build
 ```
 

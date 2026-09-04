@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <form id="dl" method="post" action="{{ returnUrl }}">
-  <input type="hidden" name="JWT" value="{{ jwt }}"/>
-</form>
+{% if fields %}{% for k, val in fields %}  <input type="hidden" name="{{ k }}" value="{{ val }}"/>
+{% endfor %}{% else %}  <input type="hidden" name="JWT" value="{{ jwt }}"/>
+{% endif %}</form>
 <script>document.getElementById('dl').submit();</script>
 {% endblock %}

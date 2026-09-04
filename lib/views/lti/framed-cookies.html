@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="framed-cookie-notice" style="max-width:34em;margin:3em auto;padding:0 1.5em;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.5">
+  <h1 style="font-size:1.4em;margin-bottom:.6em">This activity needs to open in a new tab</h1>
+
+  <p>Your browser blocks cookies for sites shown inside another site, so
+  {{ siteName }} cannot keep you signed in here. Signing in would not help —
+  the browser would refuse that too, and you would end up back on this page.</p>
+
+  <p><strong>Ask your instructor to enable “open in a new tab” for this
+  assignment.</strong> It is a single setting on their end and fixes it for
+  everyone in the class. Nothing needs to change on your computer.</p>
+
+  <details style="margin-top:1.5em">
+    <summary style="cursor:pointer">If you need to get in right now</summary>
+    <p style="margin-top:.8em">Open
+    {% if siteHost %}<a href="https://{{ siteHost }}/" target="_blank" rel="noopener">{{ siteHost }}</a>{% else %}{{ siteName }}{% endif %}
+    directly in its own tab and sign in there. Your work is saved to your
+    account either way — you will not lose anything.</p>
+  </details>
+</div>
+{% endblock %}

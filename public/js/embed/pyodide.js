@@ -642,9 +642,23 @@ function ensurePyodide() {
     try {
       py.FS.writeFile('console.py', CONSOLE_MODULE_CODE);
     } catch (e) {}
-    // Record the pristine namespace so the variable explorer can show only the
-    // names the user's program introduces, not Python built-ins / library imports.
-    try { py.runPython('__trinket_baseline__ = set(globals().keys())'); } catch (e) {}
+    // Record the pristine namespace twice:
+    //
+    // - __trinket_baseline__ is the set the Variables panel hides.
+    // - __trinket_reset_baseline__ is a shallow copy used by Clear memory to
+    //   restore the runner's own globals without re-downloading Pyodide.
+    //
+    // The self-reference is intentional. A plain dict(globals()) is evaluated
+    // before its assignment, so it would otherwise omit the reset snapshot and
+    // work only once.
+    try {
+      py.runPython([
+        '__trinket_baseline__ = set(globals().keys())',
+        '__trinket_reset_baseline__ = dict(globals())',
+        '__trinket_reset_baseline__["__trinket_reset_baseline__"] = __trinket_reset_baseline__',
+        '__trinket_baseline__.add("__trinket_reset_baseline__")'
+      ].join('\n'));
+    } catch (e) {}
     return py;
   });
 
@@ -678,11 +692,38 @@ function importsMatch(code, names) {
   var re = new RegExp('(^|\\n)\\s*(import|from)\\s+[^\\n#]*\\b(' + names + ')\\b');
   return re.test(code);
 }
-function importsPackages(code) {
-  return importsMatch(code, 'numpy|matplotlib|pandas|scipy|sympy|PIL|sklearn|micropip');
-}
 function usesMatplotlib(code) {
   return importsMatch(code, 'matplotlib');
+}
+
+// ---------------------------------------------------------------------------
+// Loading status lines (#27)
+//
+// "Loading Python (Pyodide)…" is written WITHOUT a newline and completed with
+// "ready" once the runtime is up, so the ellipsis cannot sit above the
+// program's output still reading as "loading in progress" — which is how a
+// student is led to wait for something that already finished.
+//
+// A flag rather than a bare writeOut pair, because three call sites open this
+// line (main thread, worker, VPython) and the worker's completion arrives on a
+// callback that also fires for boots nobody announced. Only a line we actually
+// opened gets closed, so a stray "ready" can never appear on its own.
+//
+// This regressed once already: a5f92de fixed it, 3890f89 (#108's worker
+// runtime) reintroduced the newline form five weeks later. Keeping the pairing
+// behind these two functions makes the next reintroduction visible as a
+// dangling openRuntimeLine() rather than a plausible-looking writeOut.
+var runtimeLineOpen = false;
+
+function openRuntimeLine(text) {
+  runtimeLineOpen = true;
+  writeOut(text);
+}
+
+function closeRuntimeLine() {
+  if (!runtimeLineOpen) return;
+  runtimeLineOpen = false;
+  writeOut('ready\n');
 }
 
 // Fraction of the output pane given to the graphic (vs. console). Default
@@ -1007,13 +1048,18 @@ function ensureConsoleTransform() {
 // header line (keeping line numbers stable), rewrite blocking rate()/sleep()
 // loops to async via the bridge's AST transformer, then execute.
 function runVpython(prog) {
-  writeOut('Loading VPython (GlowScript)…\n');
+  // No trailing newline: completed with "ready" once the library and bridge are
+  // loaded, so the ellipsis never lingers as if it were still working (#27).
+  openRuntimeLine('Loading VPython (GlowScript)… ');
   return ensureGlow().then(function() {
     installRateCancellation();  // wrap rate() before the bridge imports it
     setupGlowScene();
     showGraphic();
     return ensureVpython();
   }).then(function() {
+    // Library + bridge are up. Close the line BEFORE Pyodide narrates any
+    // package installs below, so the two don't interleave (#27).
+    closeRuntimeLine();
     // The bridge binds `scene` and `rate` to window.* at import time (once).
     // Re-point them ON THE MODULE before the user code imports anything:
     //  - scene: the canvas was rebuilt above, so target the fresh one.
@@ -2110,6 +2156,10 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     varsHelper   : VARS_HELPER,
+    // Completes the "Loading Python (Pyodide)… " line once the worker's Pyodide
+    // has booted (#27). closeRuntimeLine() is a no-op unless a line is actually
+    // open, so a boot nobody announced cannot print a stray "ready".
+    onReady    : function() { closeRuntimeLine(); },
     onStdout   : function(text) { writeStream(text); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
     onSceneOps : function(msg) { handleWorkerSceneOps(msg); },
@@ -2533,6 +2583,45 @@ function resetVPythonScene() {
   if (holder) { holder.innerHTML = ''; }
 }
 
+// Restore the interpreter's user-visible namespace to the snapshot captured
+// immediately after Pyodide's runner bootstrap. This deliberately keeps the
+// loaded interpreter and its cached packages: Clear memory should be quick and
+// reliable, not trigger another multi-megabyte Python download.
+//
+// The function uses default arguments so it retains both dictionaries after
+// clearing globals(). A temporary global would disappear halfway through the
+// reset along with the student's variables.
+function clearMainThreadMemory() {
+  if (!pyodide || !pyodideReady) return;
+  try {
+    pyodide.runPython([
+      'def _trinket_restore_namespace(_namespace=globals(), _baseline=__trinket_reset_baseline__):',
+      '    _namespace.clear()',
+      '    _namespace.update(_baseline)',
+      '_trinket_restore_namespace()'
+    ].join('\n'));
+  } catch (e) {
+    // A broken reset must not leave the UI claiming success. The next normal
+    // Run still has the existing behavior, and the console gives a useful hint.
+    writeOut('[Could not clear Python memory; reload the page to start fresh.]\n');
+    return false;
+  }
+
+  // A PyodideConsole is a proxy around the same globals dict. Recreate it next
+  // time Console is opened so a cleared session cannot retain its old execution
+  // state. The jqconsole prompt itself is reset and re-armed by clearMemory():
+  // that also covers a worker-backed REPL, where no page-thread Pyodide exists.
+  if (pyodideConsole && typeof pyodideConsole.destroy === 'function') {
+    try { pyodideConsole.destroy(); } catch (e) {}
+  }
+  pyodideConsole = null;
+
+  // These globals are established by VPython setup and must be captured again
+  // on the next VPython run, now that the ordinary namespace is pristine.
+  vpythonBaselineCaptured = false;
+  return true;
+}
+
 function handleWorkerFigure(msg) {
   var wrap = document.getElementById('graphic');
   if (!wrap) return;
@@ -2635,7 +2724,10 @@ function runInWorker(program, files, serialized, decision) {
     }
   }
 
-  writeOut('Loading Python (Pyodide)…\n');
+  // Completed by the client's onReady callback when the worker finishes booting
+  // Pyodide (#27). This path never had the completion — it was added after the
+  // original fix, so it inherited the dangling ellipsis rather than the fix.
+  openRuntimeLine('Loading Python (Pyodide)… ');
 
   // The worker cannot see the page, so it cannot know how wide the graphic pane
   // is. Pyodide's patched FigureManagerWebAgg ignores mpl.js's `resize` message
@@ -2837,12 +2929,13 @@ function startRun() {
   }
 
   if (!pyodideReady) {
-    writeOut('Loading Python (Pyodide)…\n');
+    openRuntimeLine('Loading Python (Pyodide)… ');
   }
 
   running = true;
 
   ensurePyodide().then(function() {
+    closeRuntimeLine();   // "…" -> "… ready" (#27)
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
 
     // Make time.sleep() a cancellation point so Stop can unwind a sleeping loop
@@ -2857,9 +2950,9 @@ function startRun() {
       return runVpython(prog);
     }
 
-    if (importsPackages(prog)) {
-      writeOut('Loading packages…\n');
-    }
+    // No "Loading packages…" line of our own: Pyodide narrates installs itself
+    // with "Loading numpy…" then "Loaded numpy", which already reads as
+    // complete. Ours added a second ellipsis that nothing ever closed (#27).
 
     // Auto-install any Pyodide-bundled packages the code imports (numpy,
     // matplotlib, pandas, …) from the CDN before running.
@@ -2890,6 +2983,10 @@ function startRun() {
         return ensureConsoleTransform().then(function() {
           pyodide.globals.set('__user_source__', prog || '');
           var asyncProg = pyodide.runPython(
+            // Clear memory restores the bootstrap namespace, so this import is
+            // intentionally repeated instead of depending on the one global
+            // transform_source name created when the helper was first loaded.
+            'from _trinket_async_transform import transform_source\n' +
             'transform_source(__user_source__)');
           return pyodide.runPythonAsync(asyncProg);
         });
@@ -3174,6 +3271,7 @@ window.TrinketAPI = {
     $(document).on('trinket.code.edit',    $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',     $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop',    $.proxy(this.stopExecution, this));
+    $(document).on('trinket.code.clear-memory', $.proxy(this.clearMemory, this));
     $(document).on('trinket.code.console', $.proxy(this.consoleResult, this));
 
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
@@ -3307,6 +3405,59 @@ window.TrinketAPI = {
     var $msg = $(html);
     $('body').addClass('has-status-bar').append($msg);
     $msg.parent().foundation().trigger('open.fndtn.alert');
+  },
+  clearMemory : function() {
+    // Do not clear the namespace underneath an async program: a completion or
+    // exception handler could immediately put stale state back. Stop completes
+    // synchronously for a worker, but the main-thread runner needs to unwind at
+    // its next cancellation point, so require the student to stop it first.
+    if (running || debugRecording || (workerClient && workerClient.isRunning())) {
+      writeOut('[Stop the program before clearing Python memory.]\n');
+      return;
+    }
+
+    // A live REPL owns a jqconsole Prompt that is bound to the old namespace.
+    // Preserve ordinary program output, but replace a console session with a
+    // fresh prompt after clearing — the same user-facing recovery that Stop
+    // provides when it resets a console interpreter.
+    var wasReplActive = replActive;
+    var clearedMain = clearMainThreadMemory();
+    var clearedWorker = workerClient ? workerClient.discardWorker() : false;
+
+    // A scene belongs to the interpreter that created it. Without this, a
+    // stopped VPython canvas or matplotlib figure could remain on screen after
+    // the variables it depicts have been discarded.
+    resetVPythonScene();
+    $('#graphic').empty();
+    $('#graphic-wrap').addClass('hide');
+    $('#output-dragbar').addClass('hide');
+    $('#console-wrap').css('height', '100%');
+    mplFigures = {};
+
+    if (variableExplorerEnabled()) {
+      try { renderVariables([]); } catch (e) {}
+    }
+
+    // Keep program output intact: output and memory are intentionally separate
+    // controls. The one exception is an active REPL session: reset its prompt,
+    // explain the reset, and immediately give the student a fresh >>> prompt.
+    // The REPL branch must still report honestly. clearMainThreadMemory()
+    // announces its own failure, but resetOutput() below discards the queued
+    // console buffer (#142) — so that warning never reaches the student, and an
+    // unconditional success line would be the only thing they see, over a
+    // namespace that was NOT cleared.
+    if (wasReplActive) {
+      replActive = false;
+      resetOutput(true);
+      writeOut((clearedMain || clearedWorker)
+        ? '[Python memory cleared — console session reset]\n'
+        : '[Could not clear Python memory; reload the page to start fresh.]\n');
+      startReplPrompt();
+    } else if (clearedMain || clearedWorker) {
+      writeOut('[Python memory cleared.]\n');
+    } else {
+      writeOut('[Python memory is already clear.]\n');
+    }
   },
   showCode : function() {
     $('#codeOutput').addClass('hide');
