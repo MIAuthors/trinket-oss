@@ -12,7 +12,8 @@ read-only review of the codebase; nothing has been implemented yet.
 ## Reference commit and line anchors
 
 Every `file:line` below refers to **PICUP-Physics/trinket-oss, branch `main`, commit `b3c156f`**
-(fetched 2026-09-03). The Clear memory feature this document leans on (formerly
+(fetched 2026-09-03). Re-checked the same day against `main` at `0f9a07e` (after PRs #222 and #214):
+none of the cited files changed, so every line below is exact there too. The Clear memory feature this document leans on (formerly
 `feature/clear-python-memory`) is already merged there. Line numbers drift as `main` moves; the
 anchors below are stable strings to grep for when they do.
 
@@ -324,9 +325,13 @@ menu with four targets.
 **Slice 1 — the useful one.** Flag; vendored KaTeX with lazy load; the Python module
 (display builtin, classifier, AST hook, sinks) installed at bootstrap in both runtimes;
 console-inline rendering through the extended buffer with the light card, line-numbered
-source echo and `str()` fallback; wired into `startRun` and the worker run; `rich` message
-in the protocol spec; node tests for the buffer and pure-Python tests for the AST wrap
-(testable outside Pyodide, like `_async_transform.py`).
+source echo and `str()` fallback; wired into `startRun` **and** the worker run (one production deploy runs the worker; see Q1 below); `rich`
+message in the protocol spec; a loading notice in the console, in the style of the existing
+`Loading packages…` line, because a student's first typeset expression waits on the SymPy import
+(~3.3 s on 0.28.1) plus the lazy KaTeX load (~400 KB); vendored KaTeX referenced under the
+`/cache-prefix-<commit>/` path so it is served `immutable` (the pattern PR #233 applies to the glowscript
+runner), not at a bare `/components/` path; node tests for the buffer and pure-Python tests for the AST
+wrap (testable outside Pyodide, like `_async_transform.py`).
 Acceptance: a program mixing several bare SymPy expressions and `print` calls shows
 line-numbered echoes with typeset results interleaved in order, on whichever runtime the
 deploy uses; an existing trinket with the flag on behaves identically to before.
@@ -341,15 +346,20 @@ retiring the `#graphic` HTML path. Optionally typeset Instructions with KaTeX au
 
 **Slice 4.** Copy menu including PNG; cap tuning; per-trinket settings if wanted.
 
-### Unverified claims to check first
+### Unverified claims — status
 
-1. `pyodide.code.CodeRunner` exposes a mutable `.ast` between construction and
-   `.compile()`, and `run_async` supports top-level `await` in the deployed version.
-2. Where jqconsole's `Append` lands relative to an armed prompt.
-3. KaTeX coverage of everything SymPy's LaTeX printer emits (`\begin{array}` for
-   Piecewise, `\begin{matrix}`, `\operatorname`, `\substack`, `\limits`). Expect near-full
-   coverage; anything unknown renders in the error color rather than throwing.
-4. Whether the production overlay enables `workerRuntime` (question 1).
+Probed 2026-09-03 by a collaborator running Python inside the deployed 0.28.1 embed.
+
+1. **Verified.** `pyodide.code.CodeRunner` exists, its `.ast` is a `Module` and assignable, compiling after
+   mutation works, and `run_async` is present. The AST-wrap architecture is viable as written.
+2. **Open.** Where jqconsole's `Append` lands relative to an armed prompt. Cheaper to answer once code exists.
+3. **Open.** KaTeX coverage of SymPy's full LaTeX output (`\begin{array}` for Piecewise, `\operatorname`,
+   `\substack`, `\limits`). Collaborator offered to take it.
+4. **Answered.** See Q1 below: off on two deploys, on at uindy.
+
+Also verified: `sympy.init_printing()` really replaces `sys.displayhook` outside IPython (the reason for
+rejecting a displayhook design); `_repr_latex_` returns the `$\displaystyle …$` form; containers have no
+`_repr_latex_`, confirming the `sympy.latex()` path.
 
 ---
 
@@ -393,29 +403,91 @@ expression only, wrong pane, ordering lost).
 
 ---
 
-## Answers from Andrew (running log)
+## Answers from the PICUP team (running log)
 
-### Q1 — `features.workerRuntime` in production: **off** (answered 2026-09-03)
+Q1, Q2, Q5, Q7 and Q8 are answered from the three production deploys and the runtime. Q3, Q4 and Q6 are
+Andrew's calls and still open. Andrew is merging PRs on 2026-09-03, so the base-branch notes at the end are
+dated.
 
-Production config lives in the `gopicup-deploy-config` repo; its production branch sets only
-`features: { variableExplorer: true }`. The overlay deep-merges over `config/default.yaml`, so
-`workerRuntime`, `workerVPython` and `stepDebugger` all inherit their stock `false`. Every python3
-program in production runs on the **main thread**. The per-trinket `?runtime=worker` override still
-works (`runtime-router.js:69-74` checks the query parameter above the config gate), so the worker
-can be trialled on individual trinkets without the site-wide flag. Enabling a flag in production
-means adding it to the overlay's `local.yaml`, promoting main→production in the config repo, and
-**rebuilding the image** (under `docker-compose.prod.yml` the overlay is baked in; a pull and
-restart is not enough). Andrew's advice: trial `?runtime=worker` on a couple of trinkets before any
-site-wide change.
+### Q1 — `features.workerRuntime`: depends on the deploy
 
-**Consequences for this plan**
+| Deploy | workerRuntime |
+|---|---|
+| picup VPS (trinket.gopicup.org) | false |
+| mandi | false |
+| uindy | **true** |
 
-- Slice 1 can be **main-thread only** and still be visible to every production user. Worker parity
-  (the `rich` message, the worker-side sink, the swap at `pyodide-worker.js:573`) moves to slice 2.
-- Keep the Python module runtime-agnostic anyway (the sink abstraction stays), so slice 2 is wiring,
-  not redesign.
-- Guard rail: do **not** enable `workerRuntime` in production before slice 2 lands, or typeset
-  output silently disappears for every program. Note this in the config repo when the flag is added.
-- `features.mathOutput` will itself need the same overlay edit plus a rebuild to reach production.
-- `stepDebugger` is also off in production, so the step-debugger recording pipeline is a lower
-  priority for parity than the REPL echo; both remain slice 2.
+`default.yaml:16` ships `false`; uindy overrides it. Production config lives in the `gopicup-deploy-config`
+repo, which deep-merges over `config/default.yaml`; a flag change there needs an image rebuild (under
+`docker-compose.prod.yml` the overlay is baked in). The per-trinket `?runtime=worker` override works on any
+deploy (`runtime-router.js:69-74` checks the query above the config gate).
+
+**Consequence: worker parity stays in slice 1.** A main-thread-only slice would work on Andrew's VPS and
+silently do nothing at uindy. (An earlier revision of this log, based on the VPS alone, moved the worker to
+slice 2; that is withdrawn.) `features.mathOutput` will need the same overlay edit and rebuild on each deploy
+where it should be on.
+
+### Q2 — calculator mode is glowscript-only; CSP is on everywhere
+
+`calculatorOption: [glowscript]` (`default.yaml:479`), so Python exam embeds do not exist yet; a Python
+calculator layout is separate scope on Steve's backlog. But a real `Content-Security-Policy` header is served
+on `/embed/python3` by all three deploys, so anything CDN-loaded would need a policy change regardless.
+Vendoring sidesteps that.
+
+### Q3 — vendor KaTeX (Andrew's call; numbers to decide with)
+
+A cold session already pulls 6.89 MB, 96% of it from `/components/`. The ~400 KB lazy KaTeX load is ~6% on
+top, and only for trinkets that typeset. Vendored also means same-origin, which the snapshot rasterizer needs
+for font embedding. Two caveats: on the picup VPS `app.cache.enabled` is `false`, so every asset is re-fetched
+on every load (tracked as #234); and assets must be referenced under `/cache-prefix-<commit>/` to get
+`immutable, max-age=31536000` rather than `no-store` / `max-age=300` at bare paths (the bug PR #233 fixes for
+the glowscript runner). Slice 1 adopts the cache-prefix reference.
+
+### Q4 — typeset Instructions: Andrew's call, open.
+
+### Q5 — Pyodide 0.28.1 on all three deploys; ceiling is 0.29.4
+
+Pyodide 0.31.x dropped classic Web Workers and `pyodide-worker.js` uses `importScripts`, so **0.29.4 is the
+practical ceiling** until the worker is converted to a module worker. SymPy on 0.28.1 is **1.13.3** and
+auto-loads on import in about **3.3 s**; the first typeset expression waits on that plus KaTeX, hence the
+loading notice in slice 1.
+
+### Q6 — deploy config vs per-trinket: Andrew's call, open
+
+`runtimeOption` (`default.yaml:472`) already models the per-trinket pattern if that route is chosen.
+
+### Q7 — embed snippet emits no `allow=` attribute (confirmed)
+
+Subtlety: the pyodide embed is same-origin with its host page (unlike glowscript, which is a sandboxed
+`srcdoc` frame), so the async clipboard works on a trinket page and will not inside an LMS. The download
+fallback stands.
+
+### Q8 — cap confirmed
+
+`console-buffer.js:31`, `maxLines` 5000, system text exempt. One math block = one line fits the accounting.
+
+### Nothing half-started
+
+`features.mathOutput` does not exist anywhere yet.
+
+### Base branch and where to develop (dated 2026-09-03; Andrew merging tonight)
+
+`picup/main` was `0f9a07e` with nine PRs open. Pick the base by what has landed when work starts: most merged →
+`picup/main`; some → the integration branch re-synced onto main; none → `trial/integration-2026-09-02`
+(retires once the PRs land). The nine open PRs touch **none** of the eight files slice 1 needs (`pyodide.js`,
+`console-buffer.js`, `pyodide-worker.js`, `worker-client.js`, `_async_transform.py`, `default.yaml`,
+`Dockerfile`, `pyodide.html`), so rebasing is mechanical whichever base is chosen. Read #233 either way for the
+cache-prefix pattern.
+
+Deployed trials covering both runtimes:
+
+| Trial | Runtime | Shape |
+|---|---|---|
+| rba-merge-trial.spvi.net | main thread | Cloud Run, Firestore/GCS |
+| trinket-merge-test.web.app | worker | Cloud Run behind a CDN |
+| trial-merge.spvi.net | main thread | compose/Mongo, mirrors the VPS |
+
+### Still to check
+
+jqconsole `Append` position relative to an armed prompt, and KaTeX coverage of SymPy's printer output. Both
+are cheaper once there is code; the collaborator offered to take either.
