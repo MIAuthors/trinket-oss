@@ -201,8 +201,10 @@ function flushConsoleNow() {
   var segments = outBuf.drain();
   if (!segments.length || !jqconsole) return;
   for (var i = 0; i < segments.length; i++) {
+    // The empty-string check keeps exact parity with the pre-rich flush, which
+    // tested the joined string for truthiness and so never wrote an empty span.
     if (typeof segments[i].text === 'string') {
-      jqconsole.Write(segments[i].text);
+      if (segments[i].text) jqconsole.Write(segments[i].text);
     } else if (segments[i].rich) {
       renderMathCard(segments[i].rich);
     }
@@ -236,8 +238,13 @@ function writeStream(text) {
 // is what keeps a card in program order relative to print() and stops a
 // derivation loop building an unlayoutable DOM.
 function queueMathCard(payload) {
+  if (!payload) return;
   initConsoleOutput();
   if (!jqconsole) return;
+  // Started here, not in renderMathCard, for two reasons: the load overlaps the
+  // rest of the run instead of starting a frame later, and the 'Loading math…'
+  // notice is queued BEFORE this card rather than appearing under it.
+  if (payload && payload.latex) { ensureKatex().catch(function() {}); }
   outBuf.pushRich(payload);
   outScheduleFlush();
 }
@@ -1109,18 +1116,114 @@ window.__trinket_rich = function(json) {
   queueMathCard(payload);
 };
 
-// Render one displayed result into the console.
+var katexLoading = null;
+var katexAnnounced = false;
+
+// Load the vendored KaTeX bundle on first use. Memoized like ensureGlow().
 //
-// This is the DEGRADED path: the single-line text form (str(expr) — the form
-// that pastes back into Python) written as an ordinary console line. It is what
-// a student sees when KaTeX cannot load at all; the typeset card is layered on
-// in the next task, so a failed renderer never costs the run its output.
+// Lazy because most trinkets never typeset anything, and the bundle is ~300 KB
+// with its fonts. The URLs come from window.__TRINKET_KATEX__, which
+// pyodide.html emits through the cachePrefix filter only when the flag is on —
+// so a bare /components/ path (served no-store) is never used, and with the
+// flag off there is nothing to load.
+function ensureKatex() {
+  if (katexLoading) return katexLoading;
+  var cfg = window.__TRINKET_KATEX__;
+  if (!cfg || !cfg.js) {
+    katexLoading = Promise.reject(new Error('KaTeX assets are not configured.'));
+    // Swallow the rejection here so this memo never surfaces as an unhandled
+    // rejection; every consumer already has its own .catch.
+    katexLoading.catch(function() {});
+    return katexLoading;
+  }
+  if (!katexAnnounced) {
+    katexAnnounced = true;
+    // A complete line, not the openRuntimeLine()/closeRuntimeLine() pair: that
+    // flag has exactly one slot and a documented history of being broken by a
+    // second caller. The student's first typeset expression is already waiting
+    // on SymPy's ~3.3 s import, so saying so is worth a line.
+    writeOut('Loading math…\n');
+  }
+  katexLoading = new Promise(function(resolve, reject) {
+    if (window.katex) { resolve(window.katex); return; }
+    if (cfg.css && !document.getElementById('trinket-katex-css')) {
+      var link = document.createElement('link');
+      link.id   = 'trinket-katex-css';
+      link.rel  = 'stylesheet';
+      link.href = cfg.css;
+      document.head.appendChild(link);
+    }
+    var s = document.createElement('script');
+    s.src = cfg.js;
+    s.onload = function() {
+      if (window.katex) resolve(window.katex);
+      else reject(new Error('KaTeX loaded but did not define window.katex.'));
+    };
+    s.onerror = function() { reject(new Error('Failed to load KaTeX.')); };
+    document.head.appendChild(s);
+  }).catch(function(e) {
+    // Don't cache a rejected load: one transient failure would otherwise mute
+    // typesetting for the life of the page. Same reasoning as
+    // ensureConsoleTransform().
+    katexLoading = null;
+    throw e;
+  });
+  return katexLoading;
+}
+
+var mathCardSeq = 0;
+
+// Render one displayed result as a console card.
+//
+// Written immediately with the text fallback in place, then upgraded to typeset
+// math when KaTeX resolves. That ordering is deliberate: the card's POSITION in
+// the console is fixed the moment the program produced it, so a slow or failed
+// renderer can never reorder output or lose it. If KaTeX never arrives, the
+// text form — str(expr), the form that pastes back into Python — is what the
+// student keeps.
+//
+// Nothing student-controlled is ever concatenated into this HTML: the echoed
+// source and the text fallback go through escapeConsoleHtml(), and the LaTeX
+// string only ever reaches katex.renderToString().
 function renderMathCard(item) {
   if (!jqconsole || !item) return;
-  var text = item.text || '';
-  if (!text) return;
-  var prefix = item.lineno ? (String(item.lineno) + '  ') : '';
-  jqconsole.Write(prefix + text + '\n', 'jqconsole-output', true);
+  var id = 'math-card-' + (++mathCardSeq);
+  var echo = '';
+  if (item.lineno || item.source) {
+    echo = '<span class="math-echo">'
+         + '<span class="math-ln">' + escapeConsoleHtml(item.lineno || '') + '</span>'
+         + '<span class="math-src">' + escapeConsoleHtml(item.source || '') + '</span>'
+         + '</span>';
+  }
+  var html = '<span class="math-card" id="' + id + '">'
+           + echo
+           + '<span class="math-body">' + escapeConsoleHtml(item.text || '') + '</span>'
+           + '</span>';
+  jqconsole.Write(html, 'math-card-wrap', false);
+
+  if (!item.latex) return;
+  ensureKatex().then(function(katex) {
+    var card = document.getElementById(id);
+    if (!card) return;                      // console was rebuilt under us
+    var body = card.querySelector('.math-body');
+    if (!body) return;
+    var rendered;
+    try {
+      rendered = katex.renderToString(item.latex, {
+        throwOnError: false,   // a printer quirk shows in the error colour, not as a dead run
+        trust: false,          // no \href / \includegraphics from student-defined _repr_latex_
+        maxExpand: 1000,       // a student macro cannot loop the expander
+        displayMode: false,    // SymPy already emits \displaystyle; the card is the block
+        output: 'htmlAndMathml' // the MathML is what a screen reader speaks
+      });
+    } catch (e) {
+      return;                               // keep the text fallback
+    }
+    body.innerHTML = rendered;
+    body.className = 'math-body math-typeset';
+  }).catch(function() {
+    // Degraded mode: the text fallback already on screen is the output.
+  });
 }
 
 // Run the student's program with the display hook in place.
