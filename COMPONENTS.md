@@ -101,6 +101,16 @@ sha256 in the Dockerfile's `ARG KATEX_VERSION` block.
 * **Local dev**: `scripts/sync-katex.sh` performs the identical fetch, parsing
   the Dockerfile's ARGs so the two paths cannot drift. Wired into
   `npm run setup-vendor`.
+* **Local dev on a compose stack**: both stacks mask `public/components` with a
+  volume, and `docker compose up` **preserves** anonymous volumes when it
+  recreates a container. So a rebuild that vendors a *new* component leaves the
+  old volume in place and the asset 404s — the feature then silently falls back
+  to its plain-text form, with nothing in the app log to say why. Observed
+  exactly this on the first run of this feature. Fix: recreate with
+  `docker compose -f docker-compose.gcr.yml up -d -V` (`--renew-anon-volumes`),
+  or `down -v` first. This is the same trap `scripts/setup-glowscript.sh` was
+  written for; note that `sync-katex.sh` writes to the HOST tree, which the
+  volume shadows, so on a compose stack `-V` is the mechanism, not the script.
 * **Hosting**: lazily loaded assets are invisible to `deploy-hosting.sh`'s page
   crawl, so `components/katex` is listed explicitly in that script's
   `RUNNER_PATHS` (the directory branch copies it whole, fonts included).
