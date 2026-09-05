@@ -24,11 +24,23 @@ const consoleText = (page) =>
 test.describe('typeset SymPy output', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/embed/python3');
-    const cfg = await page.evaluate(() => ({
-      math:   !!(window.trinket && window.trinket.config && window.trinket.config.features
-                 && window.trinket.config.features.mathOutput),
-      worker: /workerRuntime["']?\s*:\s*true/.test(document.documentElement.innerHTML)
-    }));
+    // Read the SERVED page, not a guessed JS object path: the embed config is a
+    // flat object, and probing window.trinket.config.features.mathOutput made
+    // this spec skip silently on a deploy where the feature was in fact ON.
+    // A test that skips when it should run is worse than no test.
+    const html = await page.content();
+    const cfg = {
+      math:   /mathOutput\s*:\s*true/.test(html),
+      worker: /workerRuntime\s*:\s*true/.test(html)
+    };
+    // Say WHY out loud. A silent skip is indistinguishable from a pass in the
+    // summary line, and this spec did exactly that: it skipped on a deploy where
+    // mathOutput was demonstrably ON, because the detection probed the wrong
+    // object. "5 skipped" read as fine. Printing the reason makes a broken
+    // detector look different from a feature that is simply off.
+    if (!cfg.math)   console.log('  [math-output] SKIP: mathOutput is off on this deploy');
+    if (cfg.worker)  console.log('  [math-output] SKIP: worker deploy — slice 1 is main-thread (Task 8 follows #215)');
+    if (cfg.math && !cfg.worker) console.log('  [math-output] RUNNING: mathOutput on, main-thread deploy');
     test.skip(!cfg.math, 'features.mathOutput is off on this deploy');
     test.skip(cfg.worker, 'slice 1 is main-thread only; worker parity follows #215');
   });
