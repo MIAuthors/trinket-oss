@@ -32,10 +32,15 @@ describe('ltiReview.parseTarget', () => {
   // #14: the 1.1 review URL now rides on the installed launch path as a query
   // param, because Canvas will not launch a stored URL it cannot match to an
   // installed tool.
-  it('reads it from the query form on the installed launch path', () => {
-    expect(r.parseTarget('https://tool.example/lti11/launch?submission=sub123')).toBe('sub123');
-    expect(r.parseTarget('/lti11/launch?submission=sub123')).toBe('sub123');
-    expect(r.parseTarget('/lti11/launch?assignment=m1&submission=sub123')).toBe('sub123');
+  // The query form is deliberately NOT here. parseTarget is shared with the 1.3
+  // launch, which feeds it the target_link_uri claim (controllers/lti.js:723) —
+  // so teaching it the query shape would silently make a 1.3 claim carrying
+  // ?submission= a review launch, which it never was. 1.3 is meant to be
+  // untouched by the #14 fix, so the query branch lives in targetFromRequest,
+  // which only the 1.1 launch calls. Raised in review by @drewsday.
+  it('does NOT read the query form — that shape belongs to targetFromRequest', () => {
+    expect(r.parseTarget('/lti11/launch?submission=sub123')).toBeNull();
+    expect(r.parseTarget('https://tool.example/lti11/launch?submission=sub123')).toBeNull();
   });
 
   it('does not mistake another launch param for a review target', () => {
@@ -63,11 +68,21 @@ describe('ltiReview.advertisedUrl', () => {
       .toBe('https://t.example/lti/review/sub123');
   });
 
-  it('round-trips: whatever it builds, parseTarget reads back', () => {
-    ['1.1', '1.3'].forEach((version) => {
-      expect(r.parseTarget(r.advertisedUrl('https://t.example', 'sub123', { version: version })))
-        .toBe('sub123');
-    });
+  // Round-trips through the reader each version actually uses. They differ on
+  // purpose: 1.3 relaunches at its own endpoint and parses the target_link_uri
+  // claim, so parseTarget reads it; 1.1 arrives as a real request on the
+  // installed launch path, so targetFromRequest does.
+  it('round-trips a 1.3 URL through parseTarget', () => {
+    expect(r.parseTarget(r.advertisedUrl('https://t.example', 'sub123'))).toBe('sub123');
+  });
+
+  it('round-trips a 1.1 URL through targetFromRequest, as a launch would arrive', () => {
+    const url = new URL(r.advertisedUrl('https://t.example', 'sub123', { version: '1.1' }));
+    const request = {
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
+    };
+    expect(r.targetFromRequest(request)).toBe('sub123');
   });
 });
 
@@ -78,6 +93,19 @@ describe('ltiReview.targetFromRequest', () => {
 
   it('reads the query form, which request.path alone cannot carry', () => {
     expect(r.targetFromRequest({ path: '/lti11/launch', query: { submission: 'new-1' } })).toBe('new-1');
+  });
+
+  // Agreeing with the verifier: controllers/lti.js signs Object.assign({}, query,
+  // body) with body winning, so the handler must read that same merged object.
+  it('prefers the signed params the verifier actually used', () => {
+    const req = { path: '/lti11/launch', query: { submission: 'from-query' } };
+    const signed = { submission: 'from-body' };   // what the signature covered
+    expect(r.targetFromRequest(req, signed)).toBe('from-body');
+  });
+
+  it('falls back to merging query and payload the same way when not given them', () => {
+    expect(r.targetFromRequest({ path: '/lti11/launch', query: { submission: 'q' },
+                                 payload: { submission: 'b' } })).toBe('b');
   });
 
   it('leaves an ordinary launch alone', () => {
