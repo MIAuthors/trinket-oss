@@ -83,8 +83,12 @@ describe('LTI 1.1: the advertised review URL is launchable by the platform', () 
     // Moving the URL is only half a fix. Whatever shape it takes, the 1.1 launch
     // handler must still read s1 back out of it, or the grader gets a launch that
     // Canvas accepts and we then fail to route.
-    const url = await advertisedReviewUrl();
-    expect(ltiReview.parseTarget(url),
+    const parsed = new URL(await advertisedReviewUrl());
+    // Shaped as the launch actually arrives: hapi splits path from query, and
+    // parseTarget is deliberately path-only (it is shared with 1.3), so the
+    // query form is targetFromRequest's job.
+    const request = { path: parsed.pathname, query: Object.fromEntries(parsed.searchParams) };
+    expect(ltiReview.targetFromRequest(request),
       'the review target must survive the round trip through the URL we advertise')
       .toBe('s1');
   });
