@@ -2680,12 +2680,32 @@ function handleWorkerFigure(msg) {
       writeOut('[Could not save the figure: the worker sent a reply this page could not read.]\n');
       return;
     }
-    var dl = document.createElement('a');
+    // Blob + object URL, not a data: URL -- mirroring the download at
+    // embed.js:795. raw and tif run to ~1.2 MB, so a base64 data: URL would be
+    // ~1.6 MB of URL, which browsers treat inconsistently, and the embed CSP
+    // permits `data:` for img-src only. An object URL has no such length, and
+    // the anchor goes into the DOM before the click because a detached one is
+    // not reliable everywhere either.
+    var bytes;
+    try {
+      var raw = atob(saved.b64);
+      bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) { bytes[i] = raw.charCodeAt(i); }
+    } catch (e) {
+      writeOut('[Could not save the figure: the image data did not decode.]\n');
+      return;
+    }
+
     // octet-stream, not the format's own MIME: a Save button should download
     // every format, not preview the ones the browser happens to render.
-    dl.href = 'data:application/octet-stream;base64,' + saved.b64;
+    var url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    var dl  = document.createElement('a');
+    dl.href = url;
     dl.download = 'plot.' + (saved.format || 'png');
+    document.body.appendChild(dl);
     dl.click();
+    document.body.removeChild(dl);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 0);
     return;
   }
 
