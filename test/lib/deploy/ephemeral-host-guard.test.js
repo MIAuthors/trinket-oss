@@ -55,3 +55,63 @@ describe('which hosts may have test identities minted on them', () => {
     expect(guard.NEVER_MINTABLE.has('trinket.gopicup.org')).toBe(true);
   });
 });
+
+// Ordering: the form-auth bow-out must come BEFORE the allowlist assertion.
+//
+// globalSetup called assertMintable() first, then probed /login and returned
+// early on a password field. assertMintable THROWS, and a throw in globalSetup
+// kills the whole run — so on a form-auth deploy whose host is not on the
+// allowlist, the anonymous specs died too, and the bow-out immediately below
+// could never be reached. The bow-out was only ever observed working from
+// trial-merge.spvi.net, which is already permitted.
+//
+// Reordering does not weaken the guard: a form-auth deploy has no Firebase to
+// mint against, so the allowlist would be gating a path that cannot be taken,
+// and nothing is created before the check either way. Reported by @drewsday
+// against the PICUP VPS staging box (#237, after merge).
+const fs2   = require('fs');
+const path2 = require('path');
+
+describe('ephemeral-setup ordering', () => {
+  const src = fs2.readFileSync(
+    path2.join(__dirname, '..', '..', 'browser', 'ephemeral-setup.js'), 'utf8');
+
+  it('bows out of form-auth deploys before asserting the host is mintable', () => {
+    const probe  = src.search(/type="password"/);
+    const assert = src.search(/assertMintable\s*\(/);
+    expect(probe,  'the /login form-auth probe should exist').toBeGreaterThan(-1);
+    expect(assert, 'assertMintable should still be called').toBeGreaterThan(-1);
+    expect(probe,
+      'assertMintable throws, and a throw in globalSetup kills the whole run — '
+      + 'so it must not run before the form-auth bow-out, or a form-auth deploy '
+      + 'off the allowlist takes the anonymous specs down with it')
+      .toBeLessThan(assert);
+  });
+
+  it('still asserts before anything is minted', () => {
+    const assert = src.search(/assertMintable\s*\(/);
+    const mint   = src.search(/ephemeral\.mint\s*\(/);
+    expect(mint, 'minting should still happen').toBeGreaterThan(-1);
+    expect(assert, 'refuse before creating anything, not after').toBeLessThan(mint);
+  });
+
+  it('refuses production LOUDLY, before the form-auth probe', () => {
+    // Two of the three NEVER_MINTABLE hosts serve a password form
+    // (trinket.gopicup.org confirmed), so a form-auth probe placed first would
+    // answer "nothing to mint" for a production deploy instead of naming it.
+    // Nothing is minted either way; what is lost is the operator being told
+    // what they just pointed the suite at.
+    const prod  = src.search(/assertNotProduction\s*\(/);
+    const probe = src.search(/type="password"/);
+    expect(prod, 'globalSetup should refuse production first').toBeGreaterThan(-1);
+    expect(prod).toBeLessThan(probe);
+  });
+
+  it('still refuses a production host by name', () => {
+    const e = require('../../browser/ephemeral-identity.js');
+    expect(() => e.assertNotProduction('https://trinket.gopicup.org'))
+      .toThrow(/PRODUCTION/);
+    expect(() => e.assertNotProduction('https://rba-merge-trial.spvi.net'))
+      .not.toThrow();
+  });
+});
