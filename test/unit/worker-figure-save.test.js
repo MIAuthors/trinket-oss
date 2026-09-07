@@ -98,6 +98,14 @@ describe('worker figure save — the page half', () => {
     expect(src).toContain("msg.kind === 'save-error'");
   });
 
+  // The worker's reply is not a trusted source for this: MPL_SETUP and the
+  // student's program share pyodide.globals, so student Python can call
+  // _trinket_mpl_send and pick the string that lands in `download`.
+  it('constrains the extension it puts in the download filename', () => {
+    expect(src).toMatch(/\[a-z0-9\]\{1,5\}/);
+    expect(src).not.toContain("'plot.' + (saved.format");
+  });
+
   // Pyodide's patched mpl.js does not call ondownload, but the patch is theirs
   // and not ours. If a future Pyodide restores the call, this must not quietly
   // become a canvas grab -- toDataURL ignores savefig.dpi, .transparent and

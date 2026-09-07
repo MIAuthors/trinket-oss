@@ -2698,10 +2698,20 @@ function handleWorkerFigure(msg) {
 
     // octet-stream, not the format's own MIME: a Save button should download
     // every format, not preview the ones the browser happens to render.
+    // Constrain the extension rather than trusting the reply. MPL_SETUP and the
+    // student's own program are both run with no `globals` option, so they share
+    // pyodide.globals -- which means student Python can call _trinket_mpl_send
+    // itself and choose this string. Nothing dangerous follows from that (the
+    // file lands on their own machine), but `download` should not take an
+    // arbitrary value, and every format the toolbar offers is four characters
+    // of lowercase alphanumerics or fewer.
+    var fmt = String(saved.format || 'png').toLowerCase();
+    if (!/^[a-z0-9]{1,5}$/.test(fmt)) { fmt = 'png'; }
+
     var url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
     var dl  = document.createElement('a');
     dl.href = url;
-    dl.download = 'plot.' + (saved.format || 'png');
+    dl.download = 'plot.' + fmt;
     document.body.appendChild(dl);
     dl.click();
     document.body.removeChild(dl);
