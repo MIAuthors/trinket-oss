@@ -68,7 +68,17 @@
       // output. (The plan suggested rendering figures unconditionally; scoping
       // them is strictly safer and costs nothing.)
       if (msg.type === 'figure') {
-        if (!current || msg.id !== current.id) return;
+        // A save reply is exempt from the run scoping, for the same reason
+        // scene-ops is (below): it legitimately arrives after settle() nulls
+        // `current`. The student clicks Save on a figure the finished run left
+        // behind, so by the time the bytes come back there is no current run to
+        // match -- and scoping dropped them, which is why that button did
+        // nothing on this runtime (#252). Nothing is painted here either way:
+        // these kinds carry a file to download, not frame data, so a stale one
+        // cannot draw over a newer run's output. That was the risk the scoping
+        // exists to prevent.
+        var isSave = (msg.kind === 'save' || msg.kind === 'save-error');
+        if (!isSave && (!current || msg.id !== current.id)) return;
         if (opts.onFigure) opts.onFigure(msg);
         return;
       }
@@ -123,7 +133,11 @@
       if (worker) return worker;
       ready = false;
       readyWaiters = [];
-      worker = new WorkerCtor(opts.workerUrl);
+      // A MODULE worker. Pyodide 314.x (Python 3.14) dropped classic workers
+      // outright ("Classic web workers are not supported"), and a module worker
+      // boots fine at 0.28.1, 0.29.4 and 314.0.6 alike — so this is backward
+      // compatible and can land before any version bump (picup #215).
+      worker = new WorkerCtor(opts.workerUrl, { type: 'module' });
       worker.onmessage = onMessage;
       worker.postMessage({
         type: 'init',
