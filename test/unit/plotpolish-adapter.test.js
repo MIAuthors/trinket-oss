@@ -30,7 +30,15 @@ const PAGE = `<!doctype html><html><body>
 
 function boot(opts) {
   const options = opts || {};
-  const dom = new JSDOM(PAGE, { runScripts: 'outside-only', pretendToBeVisual: true });
+  // `url` matters, per @sspickle on #251: without an origin, jsdom treats the
+  // document as opaque, and a wrong mount trips
+  // "SecurityError: localStorage is not available for opaque origins" instead
+  // of failing on the assertion below. Same defect either way, but the message
+  // reads like a jsdom quirk rather than "the pill mounted over a VPython
+  // scene", which is the whole point of the test.
+  const dom = new JSDOM(PAGE, {
+    url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true,
+  });
   const win = dom.window;
 
   win.trinket = { config: { plotStyle: options.plotStyle !== false } };

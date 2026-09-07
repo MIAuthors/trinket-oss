@@ -1006,6 +1006,11 @@ function setupGlowScene() {
   var graphic = document.getElementById('graphic');
   var cont = document.createElement('div');
   cont.id = 'glowscript';
+  // Load-bearing: the plot-style adapter's hasFigure() excludes VPython
+  // scenes with closest('.glowscript'), matching this CLASS rather than
+  // either container's id -- there are two of them and an id check caught
+  // only one (#251). A new scene container must carry this class or the
+  // matplotlib pill will mount over it.
   cont.className = 'glowscript';
   graphic.appendChild(cont);
 
@@ -2520,6 +2525,11 @@ function ensureVPythonFrontend() {
     if (!holder) {
       holder = document.createElement('div');
       holder.id = 'vpython-scene';
+      // Load-bearing: the plot-style adapter's hasFigure() excludes VPython
+      // scenes with closest('.glowscript'), matching this CLASS rather than
+      // either container's id -- there are two of them and an id check caught
+      // only one (#251). A new scene container must carry this class or the
+      // matplotlib pill will mount over it.
       holder.className = 'glowscript';
       (document.getElementById('graphic') || document.body).appendChild(holder);
     }
