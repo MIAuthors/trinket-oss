@@ -107,12 +107,26 @@
       var Range = window.ace.require('ace/range').Range;
       var range = Range.fromPoints(doc.indexToPosition(p), doc.indexToPosition(prev.length - s));
 
+      // Ace does manage this flag itself -- onChange sets it true after taking
+      // a delta, a delayedCall resets it to false, and the editor's
+      // $historyTracker overwrites it per keystroke -- so leaving it set is not
+      // as consequential as it looks. Restore it anyway: relying on the
+      // timing of somebody else's internal reset is how the last subtle bug in
+      // this file happened, and a programmatic write that lands in the window
+      // before that reset would inherit our value.
+      var prevMerge = session.mergeUndoDeltas;
       var now = Date.now();
       session.mergeUndoDeltas = (now - lastWriteAt) < MERGE_WINDOW_MS;
       lastWriteAt = now;
 
-      session.replace(range, next.slice(p, next.length - s));
-      lastSource = next;
+      try {
+        // Synchronous: onChange consumes the flag before this returns, so the
+        // coalescing still happens and the restore below cannot undo it.
+        session.replace(range, next.slice(p, next.length - s));
+        lastSource = next;
+      } finally {
+        session.mergeUndoDeltas = prevMerge;
+      }
     },
 
     subscribe: function(fn) {
