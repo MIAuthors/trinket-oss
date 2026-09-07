@@ -16,8 +16,11 @@ module.exports = async () => {
   const baseURL = process.env.TRINKET_BASE_URL;
   if (process.env.SMOKE_EMAIL || !baseURL) return;      // standing accounts, or nothing to do
 
-  // Refuse before creating anything, not after.
-  ephemeral.assertMintable(baseURL);
+  // Production is refused LOUDLY and first, before any probe. This list names
+  // the deploys real people use, and an operator who points the suite at one
+  // should be told exactly that — not given the generic form-auth skip below,
+  // which two of the three would otherwise hit.
+  ephemeral.assertNotProduction(baseURL);
 
   const ctx = await request.newContext({ baseURL });
 
@@ -25,12 +28,24 @@ module.exports = async () => {
   // against — minting there throws, and a throw in globalSetup kills the WHOLE
   // run, anonymous specs included. Detect and bow out instead: the journeys
   // will skip for want of SMOKE_EMAIL, exactly as before this file existed.
+  //
+  // This probe runs BEFORE assertMintable, and the order matters. assertMintable
+  // is itself a throw, so with it first a form-auth deploy whose host is not on
+  // the allowlist died here and took the anonymous specs with it — the bow-out
+  // below could never be reached. It only ever appeared to work from
+  // trial-merge.spvi.net, which is already permitted. Found by @drewsday against
+  // the PICUP VPS staging box.
   const login = await (await ctx.get(new URL('/login', baseURL).toString())).text();
   if (/type="password"/.test(login)) {
     console.log('  ephemeral identities: form-auth deploy, nothing to mint (set SMOKE_EMAIL to run journeys here)');
     await ctx.dispose();
     return;
   }
+
+  // Refuse before creating anything, not after. Still ahead of every mint, which
+  // is what that promise means; a form-auth deploy has no Firebase to mint
+  // against at all, so the allowlist was gating a path that could not be taken.
+  ephemeral.assertMintable(baseURL);
 
   const instructor = await ephemeral.mint(ctx, baseURL, 'teacher');
   const student    = await ephemeral.mint(ctx, baseURL, 'learner');
