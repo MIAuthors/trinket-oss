@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    {# A downloaded course is a set of standalone files, opened from file:// or
+       served from an arbitrary host. Root-relative URLs in here — the material's
+       own embed iframes, and the site logo below — would otherwise resolve
+       against that origin instead of the deploy the course came from. Absolute
+       is the rule in this template (see the CDN stylesheets); the base tag
+       extends it to everything the renderer does not control.
+       Export-only, so it is not the getMaterial rewrite that caused M&I #7. #}
+    <base href="{{ config.url }}/">
     <link rel="stylesheet" type="text/css" media="all" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/8.0/styles/github.min.css">
     <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.3/css/foundation.css">
