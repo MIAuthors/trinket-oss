@@ -331,7 +331,17 @@
         };
       }
       if (typeof self.alert === 'undefined') {
-        self.alert = function() {};
+        // Not a no-op. matplotlib's download helper calls alert() for the
+        // "cannot determine mimetype" case, and a stub that swallows it makes
+        // an unsupported format indistinguishable from a successful save --
+        // the same silence that made #252 hard to find. The save path above
+        // never reaches this (it swallows the message before handle_json, so
+        // the patched Python handle_save never runs), but anything else in the
+        // wheel that alerts would be mute too. stderr lands in the student's
+        // console via worker-client's onStderr.
+        self.alert = function(text) {
+          post({ type: 'stderr', text: String(text) + '\n' });
+        };
       }
     }
 
