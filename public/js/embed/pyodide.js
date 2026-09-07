@@ -2937,17 +2937,89 @@ function handleWorkerFigure(msg) {
 
     var socket = makeMplSocket(msg.figureId);
     var fig = new window.mpl.figure(msg.figureId, socket, function(figure, format) {
-      // The toolbar's save button: matplotlib hands back a download URL.
-      var link = document.createElement('a');
-      link.href = figure.canvas.toDataURL('image/' + (format || 'png'));
-      link.download = 'plot.' + (format || 'png');
-      link.click();
+      // The toolbar's Save button, for the day this mpl.js calls ondownload
+      // again. Pyodide 0.28.1's patched build does not: its handle_save posts
+      // {type:'save'} over the socket, which is the route the worker now
+      // swallows and answers with savefig bytes. So this callback is dead
+      // against the build we ship today.
+      //
+      // It is kept, and made to agree, because the patch is Pyodide's and not
+      // ours: a future Pyodide that drops it would silently restore this call.
+      // Send the same message the patched build sends, so both routes end at
+      // the same savefig. The alternative -- the canvas grab this used to do --
+      // silently changes what Save means, since toDataURL ignores savefig.dpi,
+      // .transparent and .bbox_inches and returns on-screen pixels at screen
+      // dpi. A student who set dpi=300 for a lab report would get 96.
+      socket.send({ type: 'save', figure_id: msg.figureId, format: format || 'png' });
     }, host);
 
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
     applyMplToolbarIcons(fig);
     if (typeof socket.onopen === 'function') { socket.onopen(); }
 
+    return;
+  }
+
+  // The toolbar Save button, rendered in the worker and delivered here (#252).
+  // The worker cannot do the delivery itself: Pyodide's patched handle_save
+  // builds an <a download> from `document`, which in a worker is the inert stub
+  // installed by pyodide-worker.js, so the anchor goes nowhere and the button
+  // is a silent no-op. The worker now swallows the save message, renders the
+  // bytes, and sends them across for this side to download -- same <a download>
+  // shape embed.js already uses, and no form, so the embed CSP contract holds.
+  if (msg.kind === 'save') {
+    var saved = null;
+    try { saved = JSON.parse(msg.data); } catch (e) { saved = null; }
+    // Do not fail the way this button used to. A reply this side cannot read is
+    // the same experience for the student as the bug being fixed here -- click,
+    // nothing -- so it has to say something rather than return quietly.
+    if (!saved || !saved.b64) {
+      writeOut('[Could not save the figure: the worker sent a reply this page could not read.]\n');
+      return;
+    }
+    // Blob + object URL, not a data: URL -- mirroring the download at
+    // embed.js:795. raw and tif run to ~1.2 MB, so a base64 data: URL would be
+    // ~1.6 MB of URL, which browsers treat inconsistently, and the embed CSP
+    // permits `data:` for img-src only. An object URL has no such length, and
+    // the anchor goes into the DOM before the click because a detached one is
+    // not reliable everywhere either.
+    var bytes;
+    try {
+      var raw = atob(saved.b64);
+      bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) { bytes[i] = raw.charCodeAt(i); }
+    } catch (e) {
+      writeOut('[Could not save the figure: the image data did not decode.]\n');
+      return;
+    }
+
+    // octet-stream, not the format's own MIME: a Save button should download
+    // every format, not preview the ones the browser happens to render.
+    // Constrain the extension rather than trusting the reply. MPL_SETUP and the
+    // student's own program are both run with no `globals` option, so they share
+    // pyodide.globals -- which means student Python can call _trinket_mpl_send
+    // itself and choose this string. Nothing dangerous follows from that (the
+    // file lands on their own machine), but `download` should not take an
+    // arbitrary value, and every format the toolbar offers is four characters
+    // of lowercase alphanumerics or fewer.
+    var fmt = String(saved.format || 'png').toLowerCase();
+    if (!/^[a-z0-9]{1,5}$/.test(fmt)) { fmt = 'png'; }
+
+    var url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    var dl  = document.createElement('a');
+    dl.href = url;
+    dl.download = 'plot.' + fmt;
+    document.body.appendChild(dl);
+    dl.click();
+    document.body.removeChild(dl);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 0);
+    return;
+  }
+
+  // A save that raised in the worker. Say so rather than failing the way this
+  // button used to -- silently.
+  if (msg.kind === 'save-error') {
+    writeOut('[Could not save the figure: ' + msg.data + ']\n');
     return;
   }
 
