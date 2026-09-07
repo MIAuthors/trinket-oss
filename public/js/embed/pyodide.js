@@ -343,6 +343,19 @@ window.__trinket_console_input = function(prompt) {
 // ---------------------------------------------------------------------------
 var pyodideConsole = null;   // the PyodideConsole instance, created on first use
 var replActive     = false;  // a REPL prompt is armed or evaluating
+// True only while a MAIN-THREAD REPL statement is actually executing. Distinct
+// from replActive, which stays true for the whole console session: gating on
+// that would disable the plot-style panel's live preview for as long as a
+// student leaves the prompt open, which is most of the lesson.
+//
+// The window that matters is the await inside the Prompt callback below.
+// PyodideConsole evaluates asynchronously and a REPL turn deliberately never
+// sets `running` (see the note above), so without this flag every other "is
+// Python busy?" test reads false while a statement is mid-flight, and the panel
+// would re-enter this thread's Pyodide from a JS callback inside an awaited
+// Python frame. The worker-backed REPL needs no equivalent: its interpreter is
+// off-thread, and a worker run gives the panel no backend at all.
+var replEvaluating = false;
 
 // Build the PyodideConsole. Its globals are the SAME namespace the Run button
 // uses, so a REPL session can inspect what a program just defined — the main
@@ -503,9 +516,11 @@ function startReplPrompt() {
 
     var console_ = ensurePyodideConsole();
     var result;
+    replEvaluating = true;
     try {
       result = console_.push(input);
     } catch (e) {
+      replEvaluating = false;
       writeReplError(e);
       startReplPrompt();
       return;
@@ -522,7 +537,9 @@ function startReplPrompt() {
       .catch(function(err) {
         writeReplError(err);
       })
-      .then(function() { startReplPrompt(); });
+      // Runs on both outcomes -- the .catch above absorbs the rejection -- so
+      // the flag cannot be stranded true by a failed statement.
+      .then(function() { replEvaluating = false; startReplPrompt(); });
 
   }, function(input) {
     // Continuation callback. jq-console's contract (see python.js's Skulpt REPL,
@@ -1095,6 +1112,11 @@ function setupGlowScene() {
   var graphic = document.getElementById('graphic');
   var cont = document.createElement('div');
   cont.id = 'glowscript';
+  // Load-bearing: the plot-style adapter's hasFigure() excludes VPython
+  // scenes with closest('.glowscript'), matching this CLASS rather than
+  // either container's id -- there are two of them and an id check caught
+  // only one (#251). A new scene container must carry this class or the
+  // matplotlib pill will mount over it.
   cont.className = 'glowscript';
   graphic.appendChild(cont);
 
@@ -2170,10 +2192,22 @@ function runStepThrough() {
   $('#debug-launch').addClass('hide');
   $('#debug-recording').removeClass('hide');
 
-  function recordingDone() {
+  // `ran` says whether the recorder actually executed the program. The bails
+  // above it (debugCancelled, a normal run got in first, VPython, console) resolve
+  // the chain with null and still land in the .then below, so an unconditional
+  // hook fired on paths where nothing ran at all -- and on a worker-runtime
+  // trinket that flipped the panel from "no backend" onto THIS thread's
+  // Pyodide, which never ran the program and holds no figure.
+  function recordingDone(ran) {
     debugRecording = false;
     $('#debug-recording').addClass('hide');
     if (!debugRec) $('#debug-launch').removeClass('hide');
+    // Step-through does not go through finishRun(), but a real recording
+    // re-runs the program on the page's Pyodide and can leave a different
+    // figure behind. Always 'main': the recorder never uses the worker.
+    if (ran && window.trinketPlotpolish) {
+      try { trinketPlotpolish.afterRun('main'); } catch (e) {}
+    }
   }
 
   ensurePyodide().then(function() {
@@ -2234,13 +2268,13 @@ function runStepThrough() {
       });
     });
   }).then(function(rec) {
-    recordingDone();
+    recordingDone(!!rec && !debugCancelled);
     if (rec && !debugCancelled) {
       initConsoleOutput();
       enterReplay(rec);
     }
   }).catch(function(err) {
-    recordingDone();
+    recordingDone(false);
     $('#debug-note').text('recording failed');
     setTimeout(function() { $('#debug-note').text(''); }, 4000);
   });
@@ -2788,6 +2822,11 @@ function ensureVPythonFrontend() {
     if (!holder) {
       holder = document.createElement('div');
       holder.id = 'vpython-scene';
+      // Load-bearing: the plot-style adapter's hasFigure() excludes VPython
+      // scenes with closest('.glowscript'), matching this CLASS rather than
+      // either container's id -- there are two of them and an id check caught
+      // only one (#251). A new scene container must carry this class or the
+      // matplotlib pill will mount over it.
       holder.className = 'glowscript';
       (document.getElementById('graphic') || document.body).appendChild(holder);
     }
@@ -3178,6 +3217,13 @@ function finishRun(serializedCode, err) {
   // snapshot failure break run completion. Skipped when the explorer is off.
   if (variableExplorerEnabled()) {
     try { renderVariables(snapshotVariables()); } catch (e) {}
+  }
+
+  // Refresh the plot-style panel against the figure this run left behind.
+  // Skipped when a rerun is queued: startRun() below runs synchronously and
+  // sets running = true, which the panel's backend would then refuse.
+  if (!rerunQueued && window.trinketPlotpolish) {
+    try { trinketPlotpolish.afterRun(window.__trinketRuntime); } catch (e) {}
   }
 
   // A Run was clicked while the previous (VPython) run was being cancelled;
@@ -3660,7 +3706,34 @@ window.TrinketAPI = {
 
     editor.change(function() {
       api.triggerChange();
+      // Guarded like the afterRun hooks: editor.change is single-owner, so a
+      // throw from the optional plugin would take the change pipeline with it.
+      if (window.trinketPlotpolish) {
+        try { trinketPlotpolish.onEditorChange(); } catch (e) {}
+      }
     });
+
+    // The plot-style panel lives in public/js/plugins/plotpolish-adapter.js.
+    // This file is a closure, so api/editor/pyodide/running are not reachable
+    // from out there; hand over the few it needs. window.trinketPlotpolish is
+    // undefined unless features.plotStyle is on, so this is a no-op when off.
+    // Guarded: this runs inside initialize(), so an exception here would take
+    // out everything after it -- the dragbar below included.
+    if (window.trinketPlotpolish) {
+      try {
+        trinketPlotpolish.init({
+            api        : api
+          , getPyodide : function() { return pyodideReady ? pyodide : null; }
+          , isBusy     : function() {
+              // replEvaluating, not replActive: see its declaration. clearMemory()
+              // uses the same three-way test and then handles the REPL separately
+              // (wasReplActive) -- this is the sibling that guard was missing.
+              return running || debugRecording || replEvaluating
+                  || (workerClient && workerClient.isRunning());
+            }
+        });
+      } catch (e) {}
+    }
 
     if (typeof api.draggable === 'function') {
       api.draggable(function() {});
@@ -3802,6 +3875,15 @@ window.TrinketAPI = {
     $('#output-dragbar').addClass('hide');
     $('#console-wrap').css('height', '100%');
     mplFigures = {};
+
+    // The plot-style panel is anchored to #graphic-wrap, which survives the
+    // empty() above, and its backend points at the namespace clearMainThreadMemory()
+    // has just reset. Tell it to come down: mount() is one-way, so a panel left
+    // here would sit over whatever graphic appears next, still wired to a figure
+    // that no longer exists.
+    if (window.trinketPlotpolish) {
+      try { trinketPlotpolish.onFigureGone(); } catch (e) {}
+    }
 
     if (variableExplorerEnabled()) {
       try { renderVariables([]); } catch (e) {}
