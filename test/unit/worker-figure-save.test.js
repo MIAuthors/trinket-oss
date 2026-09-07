@@ -81,6 +81,26 @@ describe('worker figure save — the embedded Python', () => {
   });
 });
 
+// This is the half that running it actually caught. Everything above was in
+// place and the button still did nothing, because worker-client scopes every
+// `type: 'figure'` message to the current run and drops the rest -- and a save
+// reply, by its nature, arrives after the run has settled and `current` is
+// null. The scoping is right for frame data and wrong for a file.
+describe('worker figure save — the run-scoping exemption', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'public/js/embed/worker-client.js'), 'utf8');
+  const branch = src.slice(src.indexOf("if (msg.type === 'figure')"),
+                           src.indexOf("if (msg.type === 'scene-ops')"));
+
+  it('lets a save reply through after the run that made the figure has settled', () => {
+    expect(branch).toContain("msg.kind === 'save'");
+    expect(branch).toContain("msg.kind === 'save-error'");
+  });
+
+  it('still scopes ordinary figure frames to the current run', () => {
+    expect(branch).toMatch(/!current \|\| msg\.id !== current\.id/);
+  });
+});
+
 describe('worker figure save — the page half', () => {
   const src = fs.readFileSync(PAGE, 'utf8');
 
