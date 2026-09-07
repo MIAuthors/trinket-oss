@@ -164,13 +164,25 @@
         return Promise.reject(new Error('A program is running.'));
       }
 
-      var ns = null;
+      var ns = null, result = null;
       try {
         ns = py.toPy({});
-        return Promise.resolve(String(py.runPython(code, { globals: ns })));
+        result = py.runPython(code, { globals: ns });
+        return Promise.resolve(String(result));
       } catch (e) {
         return Promise.reject(e);
       } finally {
+        // Defensive, not a live leak: plotpolish's snippet ends in
+        // dispatch(...), which returns json.dumps(...) -- a Python str, which
+        // Pyodide converts to a JS string primitive, so there is nothing to
+        // free today. But String() discards whatever comes back without
+        // looking, so if that contract ever returns a dict or a list instead,
+        // every backend call would quietly leak one PyProxy. Freeing it costs
+        // two lines and removes the dependency on a contract we do not own.
+        // Safe here because String(result) has already run.
+        if (result && typeof result.destroy === 'function') {
+          try { result.destroy(); } catch (ignored) {}
+        }
         if (ns && typeof ns.destroy === 'function') {
           try { ns.destroy(); } catch (ignored) {}
         }
