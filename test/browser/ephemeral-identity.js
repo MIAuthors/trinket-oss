@@ -68,6 +68,24 @@ const NEVER_MINTABLE = new Set([
   'trinket.gopicup.org',                // PICUP production (VPS)
 ]);
 
+// The production refusal on its own, so globalSetup can run it BEFORE probing
+// /login. NEVER_MINTABLE exists to make "this is production" a loud, explicit
+// stop; if the form-auth bow-out ran first, a form-auth production deploy — and
+// PICUP's VPS is exactly that — would exit with a mild "nothing to mint" instead
+// of naming the reason. Nothing is created either way, but the operator who
+// pointed the suite at production should be told that is what they did.
+function assertNotProduction(baseURL) {
+  const host = new URL(baseURL).hostname.toLowerCase();
+  if (NEVER_MINTABLE.has(host)) {
+    throw new Error(
+      'REFUSING to create a test identity on "' + host + '": this is a PRODUCTION deploy.\n' +
+      'This refusal cannot be overridden by TRIAL_HOSTS_EXTRA. If you genuinely need\n' +
+      'to test there, use the anonymous specs, which create nothing.'
+    );
+  }
+  return host;
+}
+
 function assertMintable(baseURL) {
   const host = new URL(baseURL).hostname.toLowerCase();
 
@@ -195,4 +213,5 @@ async function destroy(request, baseURL, identity) {
   return problems;
 }
 
-module.exports = { mint, destroy, assertMintable, TRIAL_HOSTS, NEVER_MINTABLE };
+module.exports = {
+  assertNotProduction, mint, destroy, assertMintable, TRIAL_HOSTS, NEVER_MINTABLE };
