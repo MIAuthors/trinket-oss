@@ -87,8 +87,17 @@
       if (!fe) return;
 
       // Fallback editor (disableAceEditor): a textarea, no session to splice.
+      // Track lastSource here too, exactly as the Ace path below does. Without
+      // it this path relied on the echo: setValue fires change, onEditorChange
+      // re-reads the source and updates lastSource on the way past. That works
+      // only while the panel is subscribed -- onEditorChange returns early when
+      // `listener` is null, before touching lastSource -- so before the first
+      // subscribe the two paths disagreed about what the file last said.
       if (!fe.aceInstance || typeof fe.getSession !== 'function') {
-        if (typeof fe.setValue === 'function') fe.setValue(next);
+        if (typeof fe.setValue === 'function') {
+          fe.setValue(next);
+          lastSource = next;
+        }
         return;
       }
 
@@ -147,7 +156,13 @@
     runPython: function(code) {
       var py = ctx && ctx.getPyodide ? ctx.getPyodide() : null;
       if (!py) return Promise.reject(new Error('Python is not loaded yet.'));
-      if (ctx.isBusy()) return Promise.reject(new Error('A program is running.'));
+      // Guarded like getPyodide above it. init() always supplies isBusy, so
+      // this is defensive rather than a known path -- but it was the one
+      // member access here reaching into ctx without a check, and a host that
+      // hands over a partial context should get a refusal, not a TypeError.
+      if (typeof ctx.isBusy !== 'function' || ctx.isBusy()) {
+        return Promise.reject(new Error('A program is running.'));
+      }
 
       var ns = null;
       try {
