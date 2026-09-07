@@ -2640,11 +2640,20 @@ function handleWorkerFigure(msg) {
 
     var socket = makeMplSocket(msg.figureId);
     var fig = new window.mpl.figure(msg.figureId, socket, function(figure, format) {
-      // The toolbar's save button: matplotlib hands back a download URL.
-      var link = document.createElement('a');
-      link.href = figure.canvas.toDataURL('image/' + (format || 'png'));
-      link.download = 'plot.' + (format || 'png');
-      link.click();
+      // The toolbar's Save button, for the day this mpl.js calls ondownload
+      // again. Pyodide 0.28.1's patched build does not: its handle_save posts
+      // {type:'save'} over the socket, which is the route the worker now
+      // swallows and answers with savefig bytes. So this callback is dead
+      // against the build we ship today.
+      //
+      // It is kept, and made to agree, because the patch is Pyodide's and not
+      // ours: a future Pyodide that drops it would silently restore this call.
+      // Send the same message the patched build sends, so both routes end at
+      // the same savefig. The alternative -- the canvas grab this used to do --
+      // silently changes what Save means, since toDataURL ignores savefig.dpi,
+      // .transparent and .bbox_inches and returns on-screen pixels at screen
+      // dpi. A student who set dpi=300 for a lab report would get 96.
+      socket.send({ type: 'save', figure_id: msg.figureId, format: format || 'png' });
     }, host);
 
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
