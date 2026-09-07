@@ -2671,9 +2671,15 @@ function handleWorkerFigure(msg) {
   // bytes, and sends them across for this side to download -- same <a download>
   // shape embed.js already uses, and no form, so the embed CSP contract holds.
   if (msg.kind === 'save') {
-    var saved;
-    try { saved = JSON.parse(msg.data); } catch (e) { return; }
-    if (!saved || !saved.b64) return;
+    var saved = null;
+    try { saved = JSON.parse(msg.data); } catch (e) { saved = null; }
+    // Do not fail the way this button used to. A reply this side cannot read is
+    // the same experience for the student as the bug being fixed here -- click,
+    // nothing -- so it has to say something rather than return quietly.
+    if (!saved || !saved.b64) {
+      writeOut('[Could not save the figure: the worker sent a reply this page could not read.]\n');
+      return;
+    }
     var dl = document.createElement('a');
     // octet-stream, not the format's own MIME: a Save button should download
     // every format, not preview the ones the browser happens to render.

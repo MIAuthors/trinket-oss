@@ -20,28 +20,17 @@ const WORKER = path.join(ROOT, 'public/js/embed/pyodide-worker.js');
 const PAGE   = path.join(ROOT, 'public/js/embed/pyodide.js');
 
 /**
- * MPL_SETUP is a JS array of Python source lines. Evaluate the array literal
- * and join it, so these assertions run against the Python the worker really
- * builds rather than against the JS quoting around it.
+ * The worker source as text. Deliberately NOT evaluated: every assertion below
+ * is about the order and presence of lines, which the raw source answers just
+ * as well, and evaluating the MPL_SETUP array literal would break confusingly
+ * the day it stops being one.
  */
-function embeddedPython() {
-  const src = fs.readFileSync(WORKER, 'utf8');
-  const decl = src.indexOf('var MPL_SETUP = [');
-  if (decl < 0) throw new Error('MPL_SETUP not found in pyodide-worker.js');
-
-  let depth = 0, start = src.indexOf('[', decl), end = -1;
-  for (let i = start; i < src.length; i++) {
-    if (src[i] === '[') depth++;
-    else if (src[i] === ']' && --depth === 0) { end = i; break; }
-  }
-  if (end < 0) throw new Error('unterminated MPL_SETUP array literal');
-
-  const lines = new Function('return ' + src.slice(start, end + 1))();
-  return lines.join('\n');
+function workerSource() {
+  return fs.readFileSync(WORKER, 'utf8');
 }
 
-describe('worker figure save — the embedded Python', () => {
-  const py = embeddedPython();
+describe('worker figure save — the worker source', () => {
+  const py = workerSource();
 
   it('swallows the save message before handle_json can dispatch it', () => {
     const swallow = py.indexOf("if _evt.get('type') == 'save':");
