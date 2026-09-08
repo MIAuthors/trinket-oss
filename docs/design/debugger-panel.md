@@ -346,3 +346,84 @@ Trinket file is touched, and moves the expensive category earlier and cheaper.
 
 **What would falsify this.** If the expanded panel takes three design rounds
 like plotpolish did, the ratio goes to ~1x on slices 0-4 alone.
+
+## 9. Should this be its own repo, like plotpolish?
+
+Three questions were asked together (new Claude folder, own GitHub repo,
+minimally invasive hooks) and they do not have the same answer.
+
+### The test plotpolish had to pass
+
+The recorded spinout rationale was three-part: **reusable elsewhere** (Jupyter,
+other edtech), **testable against matplotlib versions independently of
+Trinket**, and **citable as an open tool**. Scored against the debugger:
+
+| Criterion | plotpolish | Debug panel |
+|---|---|---|
+| Reusable elsewhere | strong — rcParams are universal to matplotlib | **weak.** Record & replay exists *because* Pyodide is on the browser main thread and cannot block. Jupyter has no such constraint and already has real live stepping, so the strongest reuse target is the weakest one here. Other browser-Python hosts (JupyterLite, PyScript, Basthon) do qualify — a narrower audience than "everyone using matplotlib". |
+| Independent version matrix | strong — CI against mpl 3.8.4 and 3.10 | **medium.** There is a real matrix (CPython tracing semantics, `sys.monitoring` from 3.12, matplotlib for frame capture), but narrower. |
+| Citable open tool | good | **arguably better** — a record-and-replay debugger for browser teaching environments is more interesting to the physics-education community than a style panel. |
+| Adapter surface | tiny: `runPython` + get/setSource | **large:** line highlighting, gutter breakpoints, editor tab switching, console injection, a variables surface, a figure surface. Several are Ace-specific. |
+
+### The decisive argument against a spinout: it is not greenfield
+
+plotpolish was built from nothing. This is not — the recorder and replay are
+**already in Trinket's `main`**, ~580 lines in `pyodide.js` plus template and
+CSS, reviewed and behind `features.stepDebugger`. Spinning out means one of:
+
+- **(a) Extract the recorder into a library and re-integrate.** A refactor of
+  shipped, working, reviewed code in a repo Larry does not own, requiring
+  Steve or Andrew to accept a large restructuring PR for **zero user-visible
+  benefit**. That is the opposite of minimally invasive.
+- **(b) Ship only the panel as a library.** Then the library is a UI shell with
+  no engine, and the reuse story collapses — because the portable, valuable
+  half (the tracer and the trace format) stays in Trinket.
+
+That asymmetry is the whole answer. For plotpolish the *engine* was the
+portable part and it went into the library. Here the engine already lives in
+someone else's repo, and a spun-out panel would be the un-portable half.
+
+### And a vendoring cost that plotpolish actually paid
+
+A separate repo makes every change **two PRs** (library release + re-vendor)
+plus a multi-hundred-KB blob in the diff. Concretely: Copilot's fork PR #3
+returned "needs a closer look" with **zero findings**, the stated reason being
+the size of the vendored bundle; and the re-vendor (#261) is still waiting in
+Steve's queue. For a feature whose selling point is a small diff, that is
+backwards.
+
+### Recommendation
+
+1. **Own GitHub repo: no**, for slices 0-5. Keep it in Trinket.
+2. **Minimally invasive hooks: yes, emphatically — and this needs no separate
+   repo.** The plotpolish *hook discipline* is independent of the plotpolish
+   *packaging* decision: `plotpolish-adapter.js` is 356 lines living inside
+   Trinket's own tree, gated by a flag, reaching into `pyodide.js` through
+   three hooks. Copy that shape exactly for `public/js/plugins/debug-panel.js`
+   + `features.debugPanel` + two or three hooks. It matters *more* here, because
+   the diff lands in `pyodide.js` — 4 078 lines that the sympy and
+   file-outputs work are also editing.
+3. **New Claude folder/project: only if there is a new repo** — so, no. Memory
+   is keyed to the project directory, and the stores were **deliberately
+   consolidated on 2026-09-07** into the plotpolish store precisely because
+   "the Trinket and plotpolish work is one effort". A third store would
+   re-create the fragmentation that consolidation just fixed. Keep writing to
+   the plotpolish store and treat it as the PICUP-Trinket-effort store.
+   (The slice-0 prototype does want its own scratch folder — a standalone HTML
+   file and an artifact. A folder, not a repo.)
+
+### The cheap middle path, if the citation matters
+
+Larry's strongest reason to spin out is credit, and that does not require a
+library. Two moves get the optionality and the groundwork at near-zero cost:
+
+- **Document and version the trace format** as an artifact in Trinket's
+  `docs/design/` — the JSON a recording produces, with its caps and its
+  `armed`/`skipped`/`truncated` semantics. That is the portable thing. If a
+  second host ever wants it, extraction becomes mechanical; if none does,
+  nothing was spent.
+- **The citable artifact is a writeup**, not a package — the trace format plus
+  what stepping backwards does for students in a real classroom. That is
+  publishable on its own and does not need a repo to exist first.
+
+Revisit the spinout only when a **second host actually asks**.
