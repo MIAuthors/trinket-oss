@@ -35,6 +35,10 @@
   var $vars   = null;
   var $dock   = null;
   var armWaiting = false;  // queued a recording, waiting for the runner to idle
+  // Replay ended because the student started typing, rather than because they
+  // pressed the exit. The panel stays OPEN in that case and the variables
+  // window carries the reason -- see paintVars().
+  var editExited = false;
   var noteTimer = null;
 
   // A transient line in the panel's own note slot, for things the debugger
@@ -244,6 +248,24 @@
     '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
       'text-overflow:ellipsis;flex:0 1 auto;min-width:0;align-self:flex-end;padding-bottom:6px}',
     '.tk-dbg-recording{font-size:14px;font-weight:600;color:#0969da;white-space:nowrap;letter-spacing:.01em}',
+    // Centred in the pill rather than pinned left: in the launch state it is
+    // the only thing in the body, and after an edit-exit it is the one thing
+    // the student is meant to press.
+    '.tk-dbg [data-grp="launch"]{flex:1;justify-content:center}',
+    // !important for the Foundation button:hover/:focus{color:#fff} reason
+    // documented at the top of this block -- without it the phrase goes white
+    // on the white pill the moment it is clicked.
+    // The phrase IS the control now, so it needs a real hit area rather than
+    // the 14px band the text alone occupies -- padding here is the click
+    // target, not decoration.
+    '.tk-dbg-launch{display:inline-flex;align-items:center;justify-content:center;',
+      'border:0;cursor:pointer;padding:7px 14px;line-height:1;border-radius:999px;',
+      'color:#0969da!important}',
+    '.tk-dbg-launch:hover,.tk-dbg-launch:focus,.tk-dbg-launch:active',
+      '{color:#0550ae!important}',
+    // Beats .tk-dbg-recording's own colour (0,2,0 vs 0,1,0) so the glyph and
+    // the phrase move together on hover instead of only the glyph.
+    '.tk-dbg-launch .tk-dbg-recording{color:inherit}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     // A hairline round-rect says "these three are one subject" without adding
     // a fill: previous breakpoint, next breakpoint, and what a breakpoint is.
@@ -256,12 +278,28 @@
     '.tk-dbg-box{display:flex;align-items:center;justify-content:center;gap:0;',
       'border:1px solid #dfe4ea;border-radius:999px;padding:0 3px;min-height:25px}',
     '.tk-dbg-grp.active .tk-dbg-box{border-color:#0969da;background:#f2f8fe}',
-    // The transport is the busiest box and has the room, so give its five
-    // controls some air.
-    '.tk-dbg-grp.auto .tk-dbg-box{gap:3px;padding:0 4px}',
+    // The transport is the busiest box and has the least room: five numeric
+    // rates need every pixel, so this box runs tighter than the others rather
+    // than looser. Measured fit is 186px of content in a 186px grid.
+    '.tk-dbg-grp.auto .tk-dbg-box{gap:2px;padding:0 3px}',
     '.tk-dbg-grp.active .tk-dbg-cap{color:#0969da}',
     // A speed multiplier riding the glyph: 2 and 5 read at this size where a
-    // second chevron would not.
+    // second chevron would not. !important on the colour for the same
+    // Foundation :focus reason as every other control here; tabular-nums so
+    // the accent moving between 2 and 5 cannot shift the row's width.
+    '.tk-dbg-btn.rate{display:inline-flex;align-items:center;justify-content:center;',
+      'font-size:11px;font-weight:700;padding:2px 2px;line-height:1;',
+      'font-variant-numeric:tabular-nums;color:#4a5b69!important}',
+    '.tk-dbg-btn.rate:hover:not(:disabled){color:#0969da!important}',
+    '.tk-dbg-btn.rate:active:not(:disabled){color:#0550ae!important}',
+    '.tk-dbg-btn.frac{padding:2px 3px}',
+    '.tk-dbg-frac{display:inline-flex;flex-direction:column;align-items:center;',
+      'line-height:1;font-size:8px;font-weight:700;font-variant-numeric:tabular-nums}',
+    '.tk-dbg-frac i{font-style:normal;display:block;padding:0 1px}',
+    // The fraction's rule. currentColor so it follows the button through rest,
+    // hover, active and aria-pressed without needing a rule for each.
+    '.tk-dbg-frac i:last-child{border-top:1px solid currentColor;margin-top:1px;',
+      'padding-top:1px}',
 
     '.tk-dbg-row.top{align-items:flex-end;gap:8px}',
     '.tk-dbg-row.two{align-items:flex-end;gap:7px}',
@@ -281,6 +319,11 @@
     '.tk-dbg-vgrip i{width:3px;height:3px;border-radius:50%;background:#c3cbd3;display:block;',
       'transition:background 90ms ease}',
     '.tk-dbg-vgrip:hover i{background:#0969da}',
+    // The edit-exit message, in the slot the variable rows normally fill. Set
+    // on the element itself, never only on the wrapper: Foundation styles bare
+    // block text and an explicit rule on the element beats inheritance.
+    '.tk-dbg-vmsg{font-size:11.5px;line-height:1.45;color:#1f2328;',
+      'padding:1px 3px 4px;max-width:186px}',
     '.tk-dbg-help b{font-weight:600}',
     '.tk-dbg-help .dot{display:inline-block;width:9px;height:9px;border-radius:20px 0 0 20px;',
       'background:#cf222e;vertical-align:-1px;margin:0 2px}',
@@ -354,6 +397,30 @@
          + '<i class="fa ' + icon + '" aria-hidden="true"></i></button>';
   }
 
+  // A rate button carries a NUMERAL, not a glyph. There is no established
+  // glyph for slow motion -- players use numeric multipliers (YouTube's
+  // 0.25x/0.5x), a word ("Slower"), or a settings menu, and none of that is a
+  // shape. A numeral also makes the running speed readable at a glance, which
+  // no chevron ever did: nobody hovers a control that is already playing.
+  function rate(id, label, title) {
+    return '<button type="button" class="tk-dbg-btn rate" data-act="' + id + '"'
+         + ' title="' + title + '" aria-label="' + title + '">' + label + '</button>';
+  }
+
+  // Slow rates are true fractions, numerator over denominator across a
+  // horizontal rule. That is the right typography for 1/5, and it spends the
+  // box's VERTICAL space rather than its scarce horizontal space: measured in
+  // a replica of the pill, the inline "1/5x" form wants 124px against the 89px
+  // the AUTO column gets, while the stacked form fits. The full phrase lives
+  // on aria-label and the glyph is aria-hidden, so a screen reader says "play
+  // at one line every five seconds" rather than "one five".
+  function frac(id, num, den, title) {
+    return '<button type="button" class="tk-dbg-btn rate frac" data-act="' + id + '"'
+         + ' title="' + title + '" aria-label="' + title + '">'
+         + '<span class="tk-dbg-frac" aria-hidden="true">'
+         + '<i>' + num + '</i><i>' + den + '</i></span></button>';
+  }
+
   var MARKUP =
       '<button type="button" class="tk-dbg-grip" data-grip="1"'
     +   ' title="Drag the debugger" aria-label="Move the debugger; arrow keys also move it">'
@@ -375,8 +442,14 @@
     + '</button>'
     + '<span class="tk-dbg-body">'
     +   '<span data-grp="launch">'
-    +     btn('start', 'fa-step-forward', 'Record this program and step through it')
-    +     '<span class="tk-dbg-recording">step through</span>'
+          // Glyph AND phrase inside one button, centred. The words used to sit
+          // outside the button, so clicking the only text in the pill did
+          // nothing -- and after an edit closes the debugger this is the whole
+          // affordance, so the phrase has to be the target.
+    +     '<button type="button" class="tk-dbg-launch" data-act="start"'
+    +       ' title="Record this program and step through it">'
+    +       '<span class="tk-dbg-recording" data-el="launchlabel">step through</span>'
+    +     '</button>'
     +   '</span>'
     +   '<span data-grp="recording" hidden>'
     +     '<span class="tk-dbg-recording" data-el="busy">Recording&hellip;</span>'
@@ -394,13 +467,13 @@
     +       '</span>'
     +       '<span class="tk-dbg-grp auto"><span class="tk-dbg-cap">Auto mode</span>'
     +         '<span class="tk-dbg-box">'
-    +           btn('rw5', 'fa-angle-double-left', 'Rewind at 5 lines per second', 'chev')
-    +           btn('rw2', 'fa-angle-left', 'Rewind at 2 lines per second', 'chev')
+    +           frac('slow5', '1', '5', 'Play at one line every 5 seconds')
+    +           frac('slow2', '1', '2', 'Play at one line every 2 seconds')
     +           '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
     +             ' title="Play at 1 line per second, or pause" aria-label="Play or pause">'
     +             '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
-    +           btn('ff2', 'fa-angle-right', 'Play at 2 lines per second', 'chev')
-    +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second', 'chev')
+    +           rate('ff2', '2', 'Play at 2 lines per second')
+    +           rate('ff5', '5', 'Play at 5 lines per second')
     +         '</span>'
     +       '</span>'
     +       '<span class="tk-dbg-grp"><span class="tk-dbg-cap">Breakpoints</span>'
@@ -503,14 +576,22 @@
   // array -- so it belongs in the panel rather than in pyodide.js. Five
   // discrete detents rather than a continuous slider: these are the five
   // speeds worth having, and a continuous control makes 1/sec fiddly to hit.
-  // Rate and DIRECTION, because auto mode now runs backwards too -- something
-  // only record & replay can offer, and the best way there is to watch a loop.
+  //
+  // ONE DIRECTION, and monotonic: slow on the left, fast on the right. Auto
+  // mode used to run backwards, which asked one row to carry two axes (left
+  // meant direction, outer meant rate) and forced a second vocabulary for
+  // "backwards" -- chevrons meaning rewind-at-speed sitting next to STEP
+  // MODE's transport glyphs, where the double triangle means jump-to-first.
+  // Every video player a student has used reads the double triangle as
+  // rewind, so the two rows disagreed about the same shape. Stepping back one
+  // line is what backwards is actually for, and STEP MODE already does it;
+  // watching a loop turn SLOWLY is what the freed left-hand buttons now do.
   var TRANSPORT = {
-      rw5  : { rate: 5, dir: -1 }
-    , rw2  : { rate: 2, dir: -1 }
-    , play : { rate: 1, dir:  1 }
-    , ff2  : { rate: 2, dir:  1 }
-    , ff5  : { rate: 5, dir:  1 }
+      slow5 : { rate: 1 / 5 }   // one line every five seconds
+    , slow2 : { rate: 1 / 2 }   // one line every two seconds
+    , play  : { rate: 1 }
+    , ff2   : { rate: 2 }
+    , ff5   : { rate: 5 }
   };
   var mode = 'step';       // 'step' or 'auto' -- whichever was last driven
   var playAct = null;      // which transport button is driving, or null
@@ -534,10 +615,10 @@
     var s0 = {};
     try { s0 = ctx.getState() || {}; } catch (e) { return; }
     if (!s0.replaying) return;
-    // Parked at the end it is heading for: jump to the far end so the press
-    // does something rather than nothing.
-    if (t.dir > 0 && s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
-    if (t.dir < 0 && s0.idx <= 0) { try { ctx.actions.last(); } catch (e) {} }
+    // Parked at the end: restart from the top, so the press does something
+    // rather than nothing -- the same thing a player's play button does once
+    // the video has finished.
+    if (s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
     playAct = act;
     playTimer = setInterval(function() {
       var st = {};
@@ -545,10 +626,8 @@
       // Stops at whichever end it reaches rather than wrapping: at five lines a
       // second a 5,000-step recording still takes sixteen minutes, so auto mode
       // is for watching a loop turn, not traversing a program.
-      if (!st.replaying
-          || (t.dir > 0 && st.idx >= st.total)
-          || (t.dir < 0 && st.idx <= 0)) { stopPlay(); return; }
-      try { ctx.actions.step(t.dir); } catch (e) { stopPlay(); }
+      if (!st.replaying || st.idx >= st.total) { stopPlay(); return; }
+      try { ctx.actions.step(1); } catch (e) { stopPlay(); }
     }, (1 / t.rate) * 1000);
     paintPlay();
   }
@@ -563,8 +642,11 @@
     }
     var i = el('playicon');
     // Pause whenever ANYTHING in auto mode is running, not only when the centre
-    // button started it: a transport running at 2x with a play glyph showing is
-    // a lie about what the button will do.
+    // button started it: a rate running at 2 with a play glyph showing is a lie
+    // about what the button will do. The driving button also carries the accent
+    // via aria-pressed, which is what makes the CURRENT SPEED visible while
+    // playing -- the old chevrons conveyed rate by shape alone, and nobody
+    // hovers a running control to read a tooltip.
     if (i) i.className = 'fa fa-' + (playAct !== null ? 'pause' : 'play');
     paintMode();
   }
@@ -589,7 +671,12 @@
   function setExpanded(on, alsoRecord) {
     // Coming home on collapse means a window dragged somewhere unhelpful is
     // always one collapse away from being findable again.
-    if (!on) { hideHelp(); varsPlaced = false; if ($vars) $vars.hidden = true; }
+    if (!on) {
+      hideHelp();
+      varsPlaced = false;
+      editExited = false;   // collapsing dismisses the message
+      if ($vars) $vars.hidden = true;
+    }
     expanded = on;
     $pill.classList.toggle('open', on);
     var t = $pill.querySelector('[data-act="toggle"]');
@@ -629,9 +716,13 @@
       return;
     }
     armWaiting = false;
-    // A new recording is a fresh start: anything hidden belonged to the old one.
+    // A new recording is a fresh start: anything hidden belonged to the old
+    // one, and the highlight starts on step mode rather than inheriting
+    // whichever half happened to drive the previous recording.
     dropped = {};
     lifted = [];
+    mode = 'step';
+    editExited = false;   // the message has been answered by re-recording
     try { ctx.actions.start(); } catch (e) {}
     sync();
   }
@@ -678,7 +769,21 @@
     if (!mounted || !ctx || !ctx.getVarModel) return;
     var s = {};
     try { s = ctx.getState() || {}; } catch (e) { s = {}; }
-    if (!s.replaying || !expanded) { $vars.hidden = true; return; }
+    if (!s.replaying || !expanded) {
+      // Editing ended the replay, so say so where the values used to be. This
+      // window is the right channel for it and #debug-note is not: the note
+      // lives inside #debug-controls, which is only un-hidden DURING replay,
+      // so anything written there at exit time goes into a display:none box.
+      if (editExited && expanded) {
+        $vars.innerHTML = VGRIP + '<div class="tk-dbg-vmsg">'
+          + 'Step-through debugger exited so you can edit the code.</div>';
+        $vars.hidden = false;
+        placeVars();
+        return;
+      }
+      $vars.hidden = true;
+      return;
+    }
 
     var model = null, now = [], prev = [];
     try {
@@ -891,6 +996,13 @@
     var s;
     try { s = ctx.getState() || {}; } catch (e) { return; }
 
+    // Entering a recording by ANY route answers the edit-exit message, so this
+    // is the one place that clears it -- not armRecording, which only covers
+    // the open-and-record click. Miss this and pressing Run while replaying
+    // takes the student out of replay and then tells them they left "so you
+    // can edit the code", which is not what they did.
+    if (s.recording || s.replaying) editExited = false;
+
     var live = el('live');
     if (live) live.hidden = !(s.replaying && !expanded);
 
@@ -898,6 +1010,12 @@
     // before it can start recording, and idle. The middle one used to render
     // as "Recording..." with nothing happening, which is indistinguishable
     // from a recording that has hung.
+    // "step through" for a first recording; "Restart Debugger" once one has
+    // been closed by an edit, because by then the student is not discovering
+    // the feature -- they are getting back to where they were.
+    var ll = el('launchlabel');
+    if (ll) ll.textContent = editExited ? 'Restart Debugger' : 'step through';
+
     var waiting = !s.recording && !s.replaying && s.busy && expanded && armWaiting;
     grp('launch').hidden     = s.recording || s.replaying || waiting;
     grp('recording').hidden  = !(s.recording || waiting);
@@ -963,18 +1081,23 @@
       }
       hideHelp();
       // Any transport button: pressing the one already driving pauses; pressing
-      // another switches speed or direction without stopping first.
+      // another switches speed without stopping first.
       if (TRANSPORT[act]) {
         mode = 'auto';
         // The centre button is the master: while anything is playing it shows a
         // pause glyph and pausing is what it does. The flanking buttons switch
-        // speed and direction, and pressing the one already driving pauses.
+        // speed, and pressing the one already driving pauses.
         if (act === 'play' && playAct !== null) stopPlay();
         else if (playAct === act) stopPlay();
         else startPlay(act);
         return;
       }
-      if (act === 'first' || act === 'back' || act === 'fwd' || act === 'last') {
+      // Breakpoint jumps belong in this list too: they move the playhead
+      // discretely and they stop autoplay, which is exactly what step mode
+      // means. Leaving them out left AUTO lit while the student was plainly
+      // stepping, with the accented primary action sitting in the unlit box.
+      if (act === 'first' || act === 'back' || act === 'fwd' || act === 'last'
+          || act === 'prevbp' || act === 'nextbp') {
         mode = 'step';
       }
 
@@ -985,7 +1108,12 @@
       if (act !== 'start') stopPlay();
       try {
         switch (act) {
-          case 'start':  a.start();      break;
+          // Through armRecording rather than straight to a.start(), so the
+          // launch button gets what the open-and-record click already had: the
+          // 200ms wait while the runner is busy (a bare start() returns
+          // silently and looks like a dead button), plus the fresh-start reset
+          // of dismissed and promoted variables from the previous recording.
+          case 'start':  armRecording(0);  break;
           case 'cancel': a.cancel();     break;
           case 'first':  a.first();      break;
           case 'back':   a.step(-1);     break;
@@ -993,7 +1121,9 @@
           case 'last':   a.last();       break;
           case 'prevbp': a.jumpBp(-1);   break;
           case 'nextbp': a.jumpBp(1);    break;
-          case 'exit':   a.exit(); setExpanded(false); break;
+          // Leaving replay leaves BOTH halves, so the highlight must not stay
+          // on auto: the next recording starts in step mode.
+          case 'exit':   a.exit(); mode = 'step'; setExpanded(false); break;
         }
       } catch (err) { /* never let the panel break the debugger */ }
       sync();
@@ -1002,7 +1132,12 @@
     var slider = $pill.querySelector('[data-act="slider"]');
     slider.addEventListener('input', function() {
       if (!ctx || !ctx.actions) return;
-      mode = 'step';        // scrubbing by hand is stepping, not auto
+      // Deliberately does NOT touch `mode`. A scrub is a seek, not a mode --
+      // and the slider occupies the grid cell UNDER THE "AUTO MODE" CAPTION, so
+      // setting step here lit the box on the opposite side of the panel from the
+      // control being dragged. Leaving mode alone keeps the highlight truthful
+      // (you are still in whichever half you were in, now paused). It still
+      // stops autoplay: the timer and the drag would fight over the index.
       stopPlay();
       try { ctx.actions.stepTo(parseInt(this.value, 10) || 0); } catch (e) {}
     });
@@ -1133,7 +1268,14 @@
     afterRun: function() { stopPlay(); sync(); },
     // Editing invalidates the recording's line numbers, so a marching
     // highlight would be walking over code that no longer means anything.
-    onEditorChange: function() { stopPlay(); sync(); }
+    // wasReplaying is passed by pyodide.js, which has already called
+    // exitReplay() by the time this runs -- so the panel cannot work out for
+    // itself that there was anything to lose.
+    onEditorChange: function(wasReplaying) {
+      if (wasReplaying) editExited = true;
+      stopPlay();
+      sync();
+    }
   };
 
 })(window, document);
