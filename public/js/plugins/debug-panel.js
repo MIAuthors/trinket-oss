@@ -202,20 +202,31 @@
       'background:#cf222e;vertical-align:-1px;margin:0 2px}',
     '.tk-dbg-help p{margin:0 0 7px;font-size:11.5px;line-height:1.45;color:#1f2328}',
     '.tk-dbg-help p:last-child{margin:0;color:#59636e}',
-    '.tk-dbg-vars{position:absolute;top:calc(100% + 6px);left:0;width:100%;background:#fff;border-radius:8px;',
+    // Content-sized rather than pill-width: `x = 3 (int)` needs a fraction of
+    // 352px, and a wide box with the name pinned left and the value pinned
+    // right made the two hard to read as one statement.
+    '.tk-dbg-vars{position:absolute;top:calc(100% + 6px);left:0;width:max-content;',
+      'min-width:132px;max-width:100%;background:#fff;border-radius:8px;',
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.18);',
       'padding:5px 6px;max-height:168px;overflow-y:auto;overflow-x:hidden;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
     '.tk-dbg-vars[hidden]{display:none}',
-    '.tk-dbg-vrow{display:grid;grid-template-columns:16px 1fr auto 16px;gap:0 7px;',
-      'align-items:center;padding:2px 1px;border-top:1px solid #f1f4f7}',
+    // x, a deliberate gap, then the up-arrow: the two sit side by side and one
+    // of them is destructive, so they do not share an edge.
+    '.tk-dbg-vrow{display:grid;grid-template-columns:14px 9px 14px 1fr;gap:0 3px;',
+      'align-items:center;padding:2px 6px 2px 3px;border-top:1px solid #f1f4f7;border-radius:4px}',
     '.tk-dbg-vrow:first-child{border-top:0}',
-    '.tk-dbg-vn{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#1a7f37;',
-      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.tk-dbg-vv{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#1f2328;',
-      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;',
-      'font-variant-numeric:tabular-nums;justify-self:end}',
+    '.tk-dbg-stmt{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;',
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:4px}',
+    '.tk-dbg-vn{color:#1a7f37}',
+    '.tk-dbg-vv{color:#1f2328;font-variant-numeric:tabular-nums}',
+    '.tk-dbg-vt{color:#8794a1}',
+    // The variable this step just defined or changed. A row tint, not a
+    // control fill -- this one is a table row and wants to be found at a
+    // glance while stepping.
+    '.tk-dbg-vrow.changed{background:#eaf3fd}',
     '.tk-dbg-vrow.changed .tk-dbg-vv{color:#0550ae;font-weight:600}',
+    '.tk-dbg-vrow.changed .tk-dbg-vn{font-weight:600}',
     // Same no-fill rule as the pill: muted at rest, colour on hover.
     '.tk-dbg-vbtn{border:0;background:none!important;cursor:pointer;padding:1px;line-height:1;',
       'color:#c3cbd3;font-size:11px;transition:color 90ms ease}',
@@ -471,8 +482,12 @@
     } catch (e) { $vars.hidden = true; return; }
     if (!model) { $vars.hidden = true; return; }
 
-    var vals = Object.create(null), was = Object.create(null), i;
-    for (i = 0; i < now.length; i++) vals[now[i].name] = now[i].repr;
+    var vals = Object.create(null), was = Object.create(null);
+    var types = Object.create(null), i;
+    for (i = 0; i < now.length; i++) {
+      vals[now[i].name] = now[i].repr;
+      types[now[i].name] = now[i].type;
+    }
     for (i = 0; i < prev.length; i++) was[prev[i].name] = prev[i].repr;
 
     var names = [];
@@ -499,15 +514,23 @@
       for (i = 0; i < names.length; i++) {
         var n2 = names[i];
         var v = n2 in vals ? vals[n2] : null;
-        var changed = v !== null && was[n2] !== undefined && was[n2] !== v;
+        // Newly defined counts as changed too -- the first assignment is the
+        // most recent update there has been.
+        var changed = v !== null && (was[n2] === undefined || was[n2] !== v);
+        var ty = n2 in types ? types[n2] : null;
+        var stmt = v === null
+          ? escHtml(n2) + ' <span class="tk-dbg-vt">not defined yet</span>'
+          : '<span class="tk-dbg-vn">' + escHtml(n2) + '</span> = '
+              + '<span class="tk-dbg-vv">' + escHtml(v) + '</span>'
+              + (ty ? ' <span class="tk-dbg-vt">(' + escHtml(ty) + ')</span>' : '');
         html += '<div class="tk-dbg-vrow' + (changed ? ' changed' : '') + '">'
           + '<button type="button" class="tk-dbg-vbtn rm" data-vact="rm" data-var="' + escAttr(n2)
           + '" title="Remove ' + escAttr(n2) + ' from this list" aria-label="Remove ' + escAttr(n2) + '">' + RM + '</button>'
-          + '<span class="tk-dbg-vn" title="' + escAttr(n2) + '">' + escHtml(n2) + '</span>'
-          + '<span class="tk-dbg-vv" title="' + escAttr(v === null ? 'not defined at this step' : v) + '">'
-          + (v === null ? '&mdash;' : escHtml(v)) + '</span>'
+          + '<span></span>'
           + '<button type="button" class="tk-dbg-vbtn up" data-vact="up" data-var="' + escAttr(n2)
           + '" title="Move ' + escAttr(n2) + ' to the top" aria-label="Move ' + escAttr(n2) + ' to the top">' + UP + '</button>'
+          + '<span class="tk-dbg-stmt" title="' + escAttr(n2 + (v === null ? ' is not defined at this step' : ' = ' + v)) + '">'
+          + stmt + '</span>'
           + '</div>';
       }
     }
