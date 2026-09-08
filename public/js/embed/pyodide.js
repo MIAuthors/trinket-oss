@@ -2163,7 +2163,12 @@ function enterReplay(rec) {
   if (rec.error) notes.push('ends with an error');
   debugBaseNote = notes.join(' · ');
   $('#debug-note').text(debugBaseNote);
-  showVariables();
+  // Without the floating panel the controls only exist inside the Variables
+  // tab, so entering replay has to open it. With the panel, opening it would
+  // defeat the point of the feature: the student is stepping precisely so they
+  // can watch the Result pane change. paintReplaySnap keeps writing the table
+  // either way, so switching to Variables by hand still shows the right step.
+  if (!debugPanelEnabled()) showVariables();
   renderDebugStep();   // ends in debugPanelSync()
 }
 

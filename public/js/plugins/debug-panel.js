@@ -33,7 +33,8 @@
   var $pill   = null;
   var mounted = false;
   var placed  = false;  // true once the student has dragged it; stop auto-placing
-  var open    = true;
+  var placeTries = 0;   // bounded retries while the editor is still hidden
+  var expanded = true;
 
   // ---------------------------------------------------------------------
   // Where the layer lives, and why it is not just `position: fixed`
@@ -79,6 +80,7 @@
       'box-shadow:0 4px 14px rgba(0,0,0,.22);font-size:13px;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;',
       'max-width:calc(100% - 16px);transition:box-shadow 140ms ease}',
+    '.tk-dbg-body{max-width:100%;overflow:hidden}',
     '.tk-dbg.dragging{box-shadow:0 10px 28px rgba(0,0,0,.28);transition:none}',
     '.tk-dbg[hidden]{display:none!important}',
     '.tk-dbg-grip{display:flex;align-items:center;gap:2px;padding:0 5px 0 8px;',
@@ -192,17 +194,37 @@
   // student drags it, after which their position wins -- including across runs.
   function place() {
     if (placed || !$pill || $pill.hidden) return;
+    var editor = document.querySelector('#editor');
     var nav = document.querySelector('#editor .tab-nav');
-    var tabs = document.querySelector('#editor .tab-nav .scrollable-content');
     var host = $layer.getBoundingClientRect();
-    if (!nav || !host.width) return;
+    if (!editor || !nav || !host.width) return;
     var nr = nav.getBoundingClientRect();
-    var tr = tabs ? tabs.getBoundingClientRect() : null;
-    var left = (tr && tr.width ? tr.right : nr.left + 120) - host.left + 10;
-    var top = nr.top - host.top + 2;
-    var maxLeft = host.width - $pill.offsetWidth - 6;
+    if (!nr.width) {
+      if (placeTries++ < 40) window.requestAnimationFrame(place);
+      return;
+    }
+
+    // Anchor to the right edge of the LAST FILE TAB, not to the strip that
+    // holds them. `.scrollable-content` is a <dl> that runs wider than the bar
+    // and is clipped by .tab-nav's overflow:hidden -- so its rect reports an
+    // un-clipped right edge past the editor pane entirely, which put the pill
+    // out over the output pane.
+    var strip = nav.querySelector('.scrollable-content');
+    var tabsEls = strip ? strip.children : null;
+    var lastTab = tabsEls && tabsEls.length ? tabsEls[tabsEls.length - 1] : null;
+    var anchor = lastTab ? lastTab.getBoundingClientRect().right : nr.left + 120;
+
+    // And keep the whole pill inside the EDITOR pane. Clamping to the layer
+    // (the whole embed) is not enough: the layer spans the output pane too,
+    // so a wide expanded panel sat over the Variables table quite happily.
+    var opts = nav.querySelector('.right-options');
+    var or_ = opts ? opts.getBoundingClientRect() : null;
+    var rightBound = (or_ && or_.width ? or_.left : editor.getBoundingClientRect().right) - 8;
+
+    var left = anchor - host.left + 10;
+    var maxLeft = rightBound - host.left - $pill.offsetWidth;
     $pill.style.left = Math.max(6, Math.min(left, maxLeft)) + 'px';
-    $pill.style.top = Math.max(2, top) + 'px';
+    $pill.style.top = Math.max(2, nr.top - host.top + 2) + 'px';
   }
 
   // ---------------------------------------------------------------------
@@ -246,9 +268,9 @@
       if (!b || b.disabled || b.tagName === 'INPUT') return;
       var act = b.getAttribute('data-act');
       if (act === 'toggle') {
-        open = !open;
-        $pill.classList.toggle('open', open);
-        b.setAttribute('aria-expanded', String(open));
+        expanded = !expanded;
+        $pill.classList.toggle('open', expanded);
+        b.setAttribute('aria-expanded', String(expanded));
         place();
         return;
       }
