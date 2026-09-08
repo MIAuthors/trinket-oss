@@ -604,3 +604,33 @@ No new file to guard, and **nobody's open PR or issue touches variable
 rendering** — #262 is Redis rate limiting, and Steve's and Andrew's queues are
 LTI, deploys, auth and email. The single sentence from section 10 still covers
 it.
+
+## 12. Gate: slice 4 waits for a second message to collaborators
+
+**Decided 2026-09-08. Do not start slice 4 (matplotlib frame capture) until
+Larry has sent collaborators a follow-up message naming its code regions.**
+Slices 0-3 and 5 are not gated.
+
+The reason is a promise already made in writing. The Mattermost post of
+2026-09-08 gave collaborators the region list from section 10, pinned to
+`7706618` with blob hashes, and said plainly that **work anywhere else would
+not conflict**. That list covers the panel and the paperclip. It does not cover
+slice 4, which additionally reaches:
+
+- `RECORD_HELPER` in `pyodide.js`
+- `MATPLOTLIB_SETUP_CODE` / `plt.close('all')` around `pyodide.js:44`
+- the end-of-run auto-display guard around `pyodide.js:3250` (issue `#254`)
+- `pyodide-worker.js` `MPL_SETUP`
+- possibly `worker-client.js`, if a frame read needs a new message type
+- `#graphic` / `#graphic-wrap` in `lib/views/embed/pyodide.html`
+
+Breaking that promise costs more than a merge conflict does, so the sequencing
+is: finish slices 0-3 and 5, send the follow-up, then start slice 4.
+
+**And the converse, decided at the same time:** omissions from the posted list
+that **nobody else is touching** &mdash; the `features.debugPanel` flag in
+`config/default.yaml`, whatever emits the `<script>` tag for a new
+`public/js/plugins/*.js`, test files &mdash; are deliberately **kept out** of
+the collaborator message. Completeness and collision risk are different
+questions and only the second warrants a correction. They belong in this
+document and in the wish list, not in a second Mattermost post.
