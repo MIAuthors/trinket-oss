@@ -2018,6 +2018,20 @@ function debugErrorLine() {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// The one line of a traceback worth putting in front of a student: the
+// trailing `SomeError: what went wrong`. The frames above it are noise when the
+// program is eight lines long, and the whole traceback is still in the console.
+// Last non-blank line, because a SyntaxError's final line is the message while
+// the two above it are the offending source and a caret.
+function debugErrorMessage() {
+  if (!debugRec || !debugRec.error) return null;
+  var lines = String(debugRec.error).replace(/\s+$/, '').split('\n');
+  for (var i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim()) return lines[i].trim();
+  }
+  return null;
+}
+
 function debugHasBreakpoints() {
   for (var f in debugBreakpoints) {
     for (var l in debugBreakpoints[f]) return true;
@@ -3938,6 +3952,7 @@ window.TrinketAPI = {
                   // job, not its own.
                 , hasError       : !!(debugRec && debugRec.error)
                 , errorLine      : debugErrorLine()
+                , errorMsg       : debugErrorMessage()
                   // The panel starts a recording on the same click that opens
                   // it, and runStepThrough() refuses while anything else is
                   // executing. Without knowing that, the panel would open and

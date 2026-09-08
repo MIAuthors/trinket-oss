@@ -322,8 +322,15 @@
     // The error banner. Red is otherwise reserved on this panel for the one
     // control that ends the session -- this is text rather than a control, and
     // error-red is a strong enough convention to be worth the second use.
-    '.tk-dbg-verr{font-size:11.5px;font-weight:700;color:#cf222e;',
-      'padding:1px 3px 5px;line-height:1.35;white-space:nowrap}',
+    // NOT nowrap: an error message is a sentence, and "unindent does not match
+    // any outer indentation level" on one line would drag the window far wider
+    // than the pill. The line number stays bold; the message sits under it at a
+    // notch smaller and normal weight, so the two read as heading and detail.
+    '.tk-dbg-verr{font-size:11.5px;color:#cf222e;padding:1px 3px 5px;',
+      'line-height:1.35;max-width:236px}',
+    '.tk-dbg-verr b{font-weight:700;display:block}',
+    '.tk-dbg-verr span{display:block;font-weight:400;font-size:11px;',
+      'white-space:normal;overflow-wrap:break-word;margin-top:1px}',
     // The edit-exit message, in the slot the variable rows normally fill. Set
     // on the element itself, never only on the wrapper: Foundation styles bare
     // block text and an explicit rule on the element beats inheritance.
@@ -808,8 +815,12 @@
     var err = '';
     if (s.hasError) {
       err = '<div class="tk-dbg-verr">'
-          + (s.errorLine ? 'Error on line ' + s.errorLine
-                         : 'The program ended with an error')
+          + '<b>' + (s.errorLine ? 'Error on line ' + s.errorLine : 'Error')
+          + '</b>'
+          // WHAT is wrong, not only where. Where alone sends a student to the
+          // right line to stare at it; the message is the half that tells them
+          // what to change.
+          + (s.errorMsg ? '<span>' + escHtml(s.errorMsg) + '</span>' : '')
           + '</div>';
     }
 
