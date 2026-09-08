@@ -261,3 +261,54 @@ built, not for this.
 4. On the fresh-namespace wart: is re-running on Step-through acceptable, or
    should the pill only appear when the program is namespace-clean?
 5. matplotlib frames: `gcf()` only, or every open figure?
+
+## 7. Calibration against plotpolish (the one estimate we can now audit)
+
+Wish item **07 "style panel"** was sized at **2.5-3 engineer-days**. It is the
+only wish that has been built end to end, so it is the only place the ledger
+can be checked against reality. Measured 2026-09-08:
+
+| | Estimated | Delivered |
+|---|---|---|
+| Scope | "rcParams style panel" | standalone BSD-3 repo, web component, single-file Python core, host adapter |
+| Source | — | ~6 900 lines (`src/`, `python/`, excluding tests) |
+| Tests | — | ~9 600 lines |
+| Docs | — | ~1 800 lines across 6 files (plus a demo GIF) |
+| Trinket side | — | 356-line adapter + 3 hooks in `pyodide.js` |
+| History | — | 75 commits over 3 calendar days; 4 releases to v0.3.2 |
+| PRs | — | ~6 in plotpolish, 3 in Trinket (#251, #256, #261) |
+| Reaching a student | implied | **not yet** — `features.plotStyle` is `false` in `config/default.yaml`, not overridden in production, and #261 is in someone else's merge queue |
+
+Calendar days here are agent-assisted and are **not** the same currency as
+engineer-days, so the honest comparison is scope-to-scope, not time-to-time.
+On scope, the overrun is large. Where it came from, and whether it repeats:
+
+**Would not repeat (one-time costs, already paid):** new repo, CI, a release
+pipeline that gates four version strings, the IIFE build, the Python packaging
+— none of that applies to a Trinket plugin file. And the floating pill with a
+grip, a collapsed state and drag was **designed three times** (flat panel:
+"overwhelming"; strip under the figure: "breadcrumbs suck"; floating pill:
+kept). Two of those rounds were thrown away. That component now exists.
+
+**Would repeat:**
+
+1. **UX rounds on the part that is not specified.** Larry's screenshot pins
+   the collapsed pill and where it lives — far more specification than the
+   plotpolish brief started with. It says nothing about what the *expanded*
+   panel contains, and that is precisely where plotpolish's discarded rounds
+   were spent.
+2. **Review passes.** The plotpolish work ran multiple Copilot passes per PR
+   and accumulated 48 unresolved threads at its peak.
+3. **The two-runtime tax.** The adapter's `hostRcKeys` had to become
+   runtime-conditional because main thread and worker set different rc keys.
+   Figure capture (slice 4) hits the same fork harder: figure lifecycle, the
+   save path and the worker's missing `plt.close('all')` all differ.
+4. **Merge latency**, which is not engineering time at all but is what
+   "delivered" waits on.
+
+**Restated estimate.** 4-6 d is a fair figure for slices 0-4 *as specified*.
+Against this precedent, "in front of a student" is realistically **8-12 d**,
+and the multiplier sits almost entirely in items 1-4 above rather than in the
+code scoped in section 5. Note also that the ledger's own line for this work,
+**"03 debugger UX (2 d)"**, is what 4-6 d is replacing — so the estimate has
+already grown 2-3x on inspection, before any of the plotpolish-style overrun.
