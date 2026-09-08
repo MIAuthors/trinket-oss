@@ -192,6 +192,10 @@
       'text-overflow:ellipsis;flex:1;min-width:0}',
     '.tk-dbg-recording{font-size:14px;font-weight:600;color:#0969da;white-space:nowrap;letter-spacing:.01em}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
+    // A hairline round-rect says "these three are one subject" without adding
+    // a fill: previous breakpoint, next breakpoint, and what a breakpoint is.
+    '.tk-dbg-bpgrp{display:flex;align-items:center;gap:0;flex:0 0 auto;',
+      'border:1px solid #dfe4ea;border-radius:999px;padding:0 1px}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
     '.tk-dbg-help{position:absolute;top:calc(100% + 6px);right:0;width:236px;background:#fff;',
       'border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.45;color:#1f2328;',
@@ -207,9 +211,13 @@
     // 352px, and a wide box with the name pinned left and the value pinned
     // right made the two hard to read as one statement.
     '.tk-dbg-vars{position:absolute;top:calc(100% + 6px);left:0;width:max-content;',
-      'min-width:132px;max-width:100%;background:#fff;border-radius:8px;',
+      'min-width:132px;max-width:100%;min-height:34px;background:#fff;border-radius:8px;',
+      // resize needs a non-visible overflow, which it already has. The native
+      // handle is the bottom-right CORNER only -- browsers give no edge grips
+      // without hand-built ones, which is not worth the code here.
+      'resize:both;',
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.18);',
-      'padding:5px 6px;max-height:168px;overflow-y:auto;overflow-x:hidden;',
+      'padding:5px 6px;max-height:168px;overflow:auto;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
     '.tk-dbg-vars[hidden]{display:none}',
     // x, a deliberate gap, then the up-arrow: the two sit side by side and one
@@ -233,6 +241,9 @@
       'color:#c3cbd3;font-size:11px;transition:color 90ms ease}',
     '.tk-dbg-vbtn.rm:hover{color:#cf222e}',
     '.tk-dbg-vbtn.up:hover{color:#1a7f37}',
+    // Promotion is sticky, so the control that did it says so permanently
+    // rather than only while the pointer is on it.
+    '.tk-dbg-vbtn.up.on{color:#1a7f37}',
     '.tk-dbg-vars .empty{font-size:11px;color:#8794a1;padding:3px 2px;white-space:nowrap}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
@@ -295,9 +306,11 @@
     +         ' title="Play / pause" aria-label="Play / pause">'
     +         '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
     +       '<span class="tk-dbg-sep"></span>'
-    +       btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
-    +       btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
-    +       btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
+    +       '<span class="tk-dbg-bpgrp">'
+    +         btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
+    +         btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
+    +         btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
+    +       '</span>'
     +       '<span class="tk-dbg-sep"></span>'
     +       btn('exit', 'fa-times', 'Exit step-through')
     +     '</span>'
@@ -464,6 +477,11 @@
   function toggleHelp() {
     if (!$help) return;
     if (!$help.hidden) { $help.hidden = true; return; }
+    showHelp();
+  }
+
+  function showHelp() {
+    if (!$help) return;
     $help.hidden = false;
     if ($vars) $vars.hidden = true;   // they would sit on top of each other
   }
@@ -535,8 +553,11 @@
           + '<button type="button" class="tk-dbg-vbtn rm" data-vact="rm" data-var="' + escAttr(n2)
           + '" title="Remove ' + escAttr(n2) + ' from this list" aria-label="Remove ' + escAttr(n2) + '">' + RM + '</button>'
           + '<span></span>'
-          + '<button type="button" class="tk-dbg-vbtn up" data-vact="up" data-var="' + escAttr(n2)
-          + '" title="Move ' + escAttr(n2) + ' to the top" aria-label="Move ' + escAttr(n2) + ' to the top">' + UP + '</button>'
+          + '<button type="button" class="tk-dbg-vbtn up' + (lifted.indexOf(n2) >= 0 ? ' on' : '')
+          + '" data-vact="up" data-var="' + escAttr(n2) + '" aria-pressed="'
+          + (lifted.indexOf(n2) >= 0) + '" title="'
+          + (lifted.indexOf(n2) >= 0 ? escAttr(n2) + ' is pinned to the top' : 'Move ' + escAttr(n2) + ' to the top')
+          + '">' + UP + '</button>'
           + '<span class="tk-dbg-stmt" title="' + escAttr(n2 + (v === null ? ' is not defined at this step' : ' = ' + v)) + '">'
           + stmt + '</span>'
           + '</div>';
@@ -584,9 +605,14 @@
     var strip = nav.querySelector('.scrollable-content');
     var tabsEls = strip ? strip.children : null;
     var lastTab = tabsEls && tabsEls.length ? tabsEls[tabsEls.length - 1] : null;
+    // Prefer Run's left edge -- but never overlap the file tabs, which would
+    // make them unclickable. On a narrow window the toolbar compresses and Run
+    // slides left of the tabs, so take whichever is further right.
+    var tabRight = lastTab ? lastTab.getBoundingClientRect().right + 8 : null;
     var underRun = !!(rr && rr.width);
     var anchor = underRun ? rr.left
-               : (lastTab ? lastTab.getBoundingClientRect().right : nr.left + 120);
+               : (tabRight !== null ? tabRight : nr.left + 120);
+    if (tabRight !== null && anchor < tabRight) anchor = tabRight;
 
     // And keep the whole pill inside the EDITOR pane. Clamping to the layer
     // (the whole embed) is not enough: the layer spans the output pane too,
@@ -595,7 +621,7 @@
     var or_ = opts ? opts.getBoundingClientRect() : null;
     var rightBound = (or_ && or_.width ? or_.left : editor.getBoundingClientRect().right) - 8;
 
-    var left = anchor - host.left + (underRun ? 0 : 10);
+    var left = anchor - host.left;
     var maxLeft = rightBound - host.left - $dock.offsetWidth;
     var x = Math.max(6, Math.min(left, maxLeft));
     var y = Math.max(2, nr.top - host.top + 2);
@@ -655,9 +681,11 @@
       $pill.querySelector('[data-act="back"]').disabled = atStart;
       $pill.querySelector('[data-act="fwd"]').disabled = atEnd;
       $pill.querySelector('[data-act="last"]').disabled = atEnd;
-      var noBp = !s.hasBreakpoints;
-      $pill.querySelector('[data-act="prevbp"]').disabled = noBp;
-      $pill.querySelector('[data-act="nextbp"]').disabled = noBp;
+      // Deliberately NOT disabled with no breakpoints set: a dead control
+      // teaches nothing, and clicking one is the moment the student is asking
+      // what breakpoints are. The handler answers with the hint instead.
+      $pill.querySelector('[data-act="prevbp"]').disabled = false;
+      $pill.querySelector('[data-act="nextbp"]').disabled = false;
     }
     place();
     paintVars();
@@ -687,6 +715,11 @@
         return;
       }
       if (act === 'bphelp') { toggleHelp(); return; }
+      if (act === 'prevbp' || act === 'nextbp') {
+        var st = {};
+        try { st = ctx.getState() || {}; } catch (e) { st = {}; }
+        if (!st.hasBreakpoints) { showHelp(); return; }
+      }
       hideHelp();
       if (act === 'play') { playing() ? stopPlay() : startPlay(); return; }
 
