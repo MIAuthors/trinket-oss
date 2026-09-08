@@ -177,7 +177,9 @@
     '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
     '.tk-dbg-bug{display:block;color:inherit}',
     '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
-      'gap:3px;padding:0 8px 2px 6px;min-width:0;flex:1;overflow:hidden}',
+      // Symmetric: the 2px bottom padding was pushing the (centred) content up
+      // by a pixel, leaving 6 above against 8 below.
+      'gap:3px;padding:0 8px 0 6px;min-width:0;flex:1;overflow:hidden}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
     // Row 1 transport + jumps + exit; row 2 the slider and its counter.
     '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
@@ -195,7 +197,12 @@
       'gap:5px;flex:1;min-width:0}',
     '.tk-dbg-grid{display:grid;grid-template-columns:auto auto;gap:3px 9px;',
       'justify-items:center;align-items:end;flex:1;min-width:0}',
+    // The note is a third grid row. Empty -- which is almost always -- it still
+    // occupied 6px plus a gap at the BOTTOM, which is what pushed everything
+    // visible upward and left 2px of margin above against 13px below. Out of
+    // flow until it has something to say.
     '.tk-dbg-grid > .tk-dbg-note{grid-column:1 / -1;justify-self:start}',
+    '.tk-dbg-grid > .tk-dbg-note:empty{display:none}',
     // Exit sits outside the grid so it can centre against BOTH rows, and the
     // pill's right edge curls around it.
     '.tk-dbg-btn.exit{font-size:16px;padding:4px 4px;align-self:center}',
