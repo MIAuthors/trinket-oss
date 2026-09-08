@@ -106,7 +106,7 @@
       // The "outline" is the shadow's own hairline ring, not a border: a 1px
       // border plus a shadow reads as two edges at this radius.
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 3px 12px rgba(31,35,40,.18);',
-      'width:72px;height:32px;overflow:hidden;font-size:13px;',
+      'width:72px;height:32px;font-size:13px;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;',
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
@@ -132,8 +132,7 @@
     '.tk-dbg-toggle{display:flex;flex-direction:column;align-items:center;',
       'justify-content:center;gap:1px;border:0;background:none;cursor:pointer;',
       'color:#0969da;padding:0 10px 0 4px;border-radius:0 999px 999px 0;',
-      'flex:0 0 auto;line-height:1;transform:translateZ(0);backface-visibility:hidden;',
-      'transition:color 90ms ease}',
+      'flex:0 0 auto;line-height:1;transition:color 90ms ease}',
     '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #e6eaef;padding-right:9px}',
     // No fill on hover, here or on any control below. The icon-only convention
     // is a muted resting colour resolving to the accent on hover, with the
@@ -149,9 +148,10 @@
     '.tk-dbg-toggle{position:relative}',
     // flex:1 + a line-height of 1 lets the glyph occupy the whole remaining
     // height; font-size then sets how much of that it actually inks.
-    '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1;transform:translateZ(0)}',
+    '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
+    '.tk-dbg-bug{display:block;color:inherit}',
     '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
-      'gap:2px;padding:0 8px 0 6px;min-width:0;flex:1}',
+      'gap:2px;padding:0 8px 0 6px;min-width:0;flex:1;overflow:hidden}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
     // Row 1 transport + jumps + exit; row 2 the slider and its counter.
     '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
@@ -214,7 +214,7 @@
     '.tk-dbg-vars[hidden]{display:none}',
     // x, a deliberate gap, then the up-arrow: the two sit side by side and one
     // of them is destructive, so they do not share an edge.
-    '.tk-dbg-vrow{display:grid;grid-template-columns:14px 9px 14px 1fr;gap:0 3px;',
+    '.tk-dbg-vrow{display:grid;grid-template-columns:14px 4px 14px 1fr;gap:0 2px;',
       'align-items:center;padding:2px 6px 2px 3px;border-top:1px solid #f1f4f7;border-radius:4px}',
     '.tk-dbg-vrow:first-child{border-top:0}',
     '.tk-dbg-stmt{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;',
@@ -261,7 +261,14 @@
     + '</button>'
     + '<button type="button" class="tk-dbg-toggle" data-act="toggle" aria-expanded="false"'
     +   ' title="Step through this program line by line">'
-    +   '<span class="w">DEBUG</span><i class="fa fa-bug" aria-hidden="true"></i>'
+    +   '<span class="w">DEBUG</span>'
+    +   '<svg class="tk-dbg-bug" width="17" height="17" viewBox="0 0 16 16" aria-hidden="true">'
+    +     '<g fill="currentColor">'
+    +       '<ellipse cx="8" cy="9.5" rx="3.4" ry="4.1"/><circle cx="8" cy="4.1" r="2.15"/>'
+    +       '<path d="M8.7 1.15l1.9-1.05.5.9-1.9 1.05zM5.4 1.05l.5-.9 1.9 1.05-.5.9z'
+    +         'M1.15 7.15l3.15.6-.2 1-3.15-.6zM11.9 7.75l3.15-.6.2 1-3.15.6z'
+    +         'M1.5 12.4l2.85-1.45.5.9-2.85 1.45zM11.65 10.95l2.85 1.45-.5.9-2.85-1.45z"/>'
+    +     '</g></svg>'
     +   '<span class="tk-dbg-live" data-el="live" hidden'
     +     ' title="Still stepping - the output below is the recording, not a live run">'
     +   '</span>'
