@@ -34,6 +34,19 @@
   var $help   = null;
   var $vars   = null;
   var $dock   = null;
+  var armWaiting = false;  // queued a recording, waiting for the runner to idle
+  var noteTimer = null;
+
+  // A transient line in the panel's own note slot, for things the debugger
+  // itself has no note for.
+  function note(msg) {
+    var n = el('note');
+    if (!n) return;
+    n.textContent = msg;
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { if (el('note')) el('note').textContent = ''; }, 6000);
+  }
+
   var varsPlaced = false;  // true once the window has been dragged off the pill
   var dropped = {};     // names the student has dismissed with the red x
   var lifted  = [];     // names promoted with the green arrow, most recent first
@@ -309,8 +322,8 @@
     +     '<span class="tk-dbg-recording">step through</span>'
     +   '</span>'
     +   '<span data-grp="recording" hidden>'
-    +     '<span class="tk-dbg-recording">Recording&hellip;</span>'
-    +     btn('cancel', 'fa-times', 'Cancel the recording')
+    +     '<span class="tk-dbg-recording" data-el="busy">Recording&hellip;</span>'
+    +     btn('cancel', 'fa-times', 'Cancel')
     +   '</span>'
     +   '<span data-grp="controls" hidden>'
     +     '<span class="tk-dbg-row">'
@@ -494,14 +507,25 @@
   // pill and nothing else. Wait for the runner to go quiet instead, then
   // record -- and give up if they close the pill or start something else.
   function armRecording(tries) {
-    if (!expanded || !ctx || !ctx.actions) return;
+    if (!expanded || !ctx || !ctx.actions) { armWaiting = false; return; }
     var s = {};
     try { s = ctx.getState() || {}; } catch (e) { return; }
     if (s.recording || s.replaying) return;
     if (s.busy) {
-      if (tries < 150) setTimeout(function() { armRecording(tries + 1); }, 200);
-      return;                                   // ~30s, then leave the button
+      if (tries < 150) {
+        armWaiting = true;
+        setTimeout(function() { armRecording(tries + 1); }, 200);
+        sync();
+      } else {
+        // Gave up after ~30s. Say so rather than sitting there: the launch
+        // button comes back and the student can try again.
+        armWaiting = false;
+        note('the program is still running \u2014 press again when it stops');
+        sync();
+      }
+      return;
     }
+    armWaiting = false;
     try { ctx.actions.start(); } catch (e) {}
     sync();
   }
@@ -741,8 +765,17 @@
     var live = el('live');
     if (live) live.hidden = !(s.replaying && !expanded);
 
-    grp('launch').hidden     = s.recording || s.replaying;
-    grp('recording').hidden  = !s.recording;
+    // Three states, not two: recording, waiting for the runner to go quiet
+    // before it can start recording, and idle. The middle one used to render
+    // as "Recording..." with nothing happening, which is indistinguishable
+    // from a recording that has hung.
+    var waiting = !s.recording && !s.replaying && s.busy && expanded && armWaiting;
+    grp('launch').hidden     = s.recording || s.replaying || waiting;
+    grp('recording').hidden  = !(s.recording || waiting);
+    var busyEl = el('busy');
+    if (busyEl) {
+      busyEl.innerHTML = s.recording ? 'Recording&hellip;' : 'Waiting for the run&hellip;';
+    }
     grp('controls').hidden   = !s.replaying;
     if (!s.replaying) hideHelp();
 
