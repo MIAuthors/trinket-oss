@@ -301,6 +301,16 @@
     '.tk-dbg-btn.rate{display:inline-flex;align-items:center;justify-content:center;',
       'font-size:11px;font-weight:700;padding:2px 2px;line-height:1;',
       'font-variant-numeric:tabular-nums;color:#4a5b69!important}',
+    // THE RUNNING RATE. This has to be more specific than a bare
+    // [aria-pressed="true"], not merely later: `.tk-dbg-btn.rate` and
+    // `.tk-dbg-btn[aria-pressed="true"]` are BOTH (0,2,0), both !important, and
+    // the .rate block is further down the sheet -- so the generic accent rule
+    // lost the tie and the driving rate stayed muted. Measured in the embed:
+    // aria-pressed="true" with computed colour rgb(74,91,105). That silently
+    // cost the whole point of putting numerals here, which was to make the
+    // speed readable while it plays, since nobody hovers a running control.
+    // (0,3,0) settles it wherever the rule sits.
+    '.tk-dbg-btn.rate[aria-pressed="true"]{color:#0969da!important}',
     '.tk-dbg-btn.rate:hover:not(:disabled){color:#0969da!important}',
     '.tk-dbg-btn.rate:active:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.frac{padding:2px 3px}',
