@@ -33,7 +33,8 @@
   var $pill   = null;
   var mounted = false;
   var placed  = false;  // true once the student has dragged it; stop auto-placing
-  var placeTries = 0;   // bounded retries while the editor is still hidden
+  var placeTries = 0;   // bounded retries while the layout is still settling
+  var placeLast  = null; // last computed left/top, to detect convergence
   var expanded = true;
 
   // ---------------------------------------------------------------------
@@ -64,10 +65,15 @@
   // Styles, inlined
   // ---------------------------------------------------------------------
   //
-  // Colours are the debugger's own literals, not new ones: #2b6c9e is
-  // .debug-btn and #14435f its hover (lib/views/embed/pyodide.html), #a94442 is
-  // .debug-bp-btn. Trinket has no dark mode and no CSS custom properties, so
-  // everything here is a literal light value on purpose.
+  // Palette is plotpolish's, read out of its src/panel.css :host block, because
+  // the two pills should look like one family: accent #0969da, accent-tint
+  // #ddf0ff (the pill's own fill), border #d0d7de, muted #59636e. Hover is
+  // Primer's next step down, #0550ae. The one exception is #cf222e for the
+  // breakpoint jumps, which is plotpolish's danger token -- the debugger's own
+  // #a94442 sits oddly against this blue.
+  //
+  // Trinket has no dark mode and no CSS custom properties, so these are literal
+  // light values on purpose.
   //
   // z-index 1200 is a chosen number, not a large one: it has to clear
   // .alert-box (999) and .tab-options.open (1000), and it must stay well under
@@ -76,7 +82,8 @@
   var CSS = [
     '.tk-dbg-layer{position:absolute;inset:0;pointer-events:none;z-index:1200}',
     '.tk-dbg{position:absolute;display:flex;align-items:stretch;pointer-events:auto;',
-      'background:#e7f0f7;border:1px solid #b9d0e2;border-radius:999px;',
+      'background:#ddf0ff;border:1px solid #d0d7de;border-radius:999px;',
+      'height:32px;user-select:none;-webkit-user-select:none;',
       'box-shadow:0 4px 14px rgba(0,0,0,.22);font-size:13px;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;',
       'max-width:calc(100% - 16px);transition:box-shadow 140ms ease}',
@@ -87,14 +94,23 @@
       'cursor:grab;border-radius:999px 0 0 999px;flex:0 0 auto;background:none;border:0}',
     '.tk-dbg.dragging .tk-dbg-grip{cursor:grabbing}',
     '.tk-dbg-grip span{display:flex;flex-direction:column;gap:2px}',
-    '.tk-dbg-grip i{width:3px;height:3px;border-radius:50%;background:#6d8ea8;display:block}',
-    '.tk-dbg-toggle{display:flex;flex-direction:column;align-items:center;justify-content:center;',
-      'gap:1px;border:0;background:none;cursor:pointer;color:#2b6c9e;',
-      'padding:3px 9px 3px 3px;border-radius:0 999px 999px 0;flex:0 0 auto;line-height:1}',
-    '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #c3d6e5;padding-right:8px}',
-    '.tk-dbg-toggle:hover{color:#14435f}',
-    '.tk-dbg-toggle .w{font-size:8.5px;font-weight:700;letter-spacing:.13em}',
-    '.tk-dbg-toggle .fa{font-size:14px}',
+    '.tk-dbg-grip i{width:3px;height:3px;border-radius:50%;background:#59636e;display:block}',
+    // Fills the pill's height rather than sitting in a box inside it: the
+    // label takes only the space its 8px caps need, and the glyph gets the
+    // rest via flex:1. Backgrounds stay transparent in every state except a
+    // faint hover tint -- a filled rectangle inside a rounded pill reads as a
+    // second object, which is exactly what it looked like.
+    '.tk-dbg-toggle{display:flex;flex-direction:column;align-items:center;',
+      'justify-content:space-between;gap:0;border:0;background:none;cursor:pointer;',
+      'color:#0969da;padding:2px 10px 1px 4px;border-radius:0 999px 999px 0;',
+      'flex:0 0 auto;line-height:1;align-self:stretch}',
+    '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #c3d9ef;padding-right:9px}',
+    '.tk-dbg-toggle:hover{color:#0550ae;background:rgba(9,105,218,.09)}',
+    '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;',
+      'flex:0 0 auto;padding-top:1px}',
+    // flex:1 + a line-height of 1 lets the glyph occupy the whole remaining
+    // height; font-size then sets how much of that it actually inks.
+    '.tk-dbg-toggle .fa{flex:1;display:flex;align-items:center;font-size:16px;line-height:1}',
     '.tk-dbg-body{display:none;align-items:center;gap:1px;padding:0 6px 0 6px;min-width:0}',
     /* Groups lay themselves out with flex, so `hidden` has to beat that: the
        attribute alone carries only UA-level display:none, which any stylesheet
@@ -102,18 +118,18 @@
     '.tk-dbg [data-grp]{display:flex;align-items:center;gap:1px}',
     '.tk-dbg [data-grp][hidden]{display:none!important}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
-    '.tk-dbg-btn{border:0;background:none;cursor:pointer;color:#2b6c9e;padding:4px;',
+    '.tk-dbg-btn{border:0;background:none;cursor:pointer;color:#0969da;padding:4px;',
       'line-height:1;border-radius:4px;flex:0 0 auto;font-size:13px}',
-    '.tk-dbg-btn:hover:not(:disabled){color:#14435f;background:#d9e8f3}',
+    '.tk-dbg-btn:hover:not(:disabled){color:#0550ae;background:rgba(9,105,218,.11)}',
     '.tk-dbg-btn:disabled{opacity:.38;cursor:default}',
-    '.tk-dbg-btn.bp{color:#a94442}',
-    '.tk-dbg-slider{width:112px;margin:0 4px;accent-color:#2b6c9e;height:14px;flex:0 0 auto}',
-    '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#14435f;',
+    '.tk-dbg-btn.bp{color:#cf222e}',
+    '.tk-dbg-slider{width:112px;margin:0 4px;accent-color:#0969da;height:14px;flex:0 0 auto}',
+    '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;',
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
-    '.tk-dbg-note{font-size:10.5px;color:#b06000;white-space:nowrap;overflow:hidden;',
+    '.tk-dbg-note{font-size:10.5px;color:#59636e;white-space:nowrap;overflow:hidden;',
       'text-overflow:ellipsis;max-width:190px;padding:0 4px}',
-    '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d6e5;margin:4px 3px;flex:0 0 auto}',
-    '.tk-dbg :focus-visible{outline:2px solid #2b6c9e;outline-offset:1px}',
+    '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
+    '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg{transition:none}}'
   ].join('');
 
@@ -204,15 +220,21 @@
       return;
     }
 
-    // Anchor to the right edge of the LAST FILE TAB, not to the strip that
-    // holds them. `.scrollable-content` is a <dl> that runs wider than the bar
-    // and is clipped by .tab-nav's overflow:hidden -- so its rect reports an
-    // un-clipped right edge past the editor pane entirely, which put the pill
-    // out over the output pane.
+    // Line the pill up under the Run button, which is what was actually asked
+    // for -- the row below Run, starting where Run starts.
+    //
+    // Not the last file tab (an earlier pass), and emphatically not
+    // `.scrollable-content`: that <dl> runs wider than the bar and is clipped
+    // by .tab-nav's overflow:hidden, so its rect reports an un-clipped right
+    // edge past the editor pane entirely, which put the pill over the output.
+    var run = document.querySelector('a.run-it');
+    var rr = run ? run.getBoundingClientRect() : null;
     var strip = nav.querySelector('.scrollable-content');
     var tabsEls = strip ? strip.children : null;
     var lastTab = tabsEls && tabsEls.length ? tabsEls[tabsEls.length - 1] : null;
-    var anchor = lastTab ? lastTab.getBoundingClientRect().right : nr.left + 120;
+    var underRun = !!(rr && rr.width);
+    var anchor = underRun ? rr.left
+               : (lastTab ? lastTab.getBoundingClientRect().right : nr.left + 120);
 
     // And keep the whole pill inside the EDITOR pane. Clamping to the layer
     // (the whole embed) is not enough: the layer spans the output pane too,
@@ -221,10 +243,25 @@
     var or_ = opts ? opts.getBoundingClientRect() : null;
     var rightBound = (or_ && or_.width ? or_.left : editor.getBoundingClientRect().right) - 8;
 
-    var left = anchor - host.left + 10;
+    var left = anchor - host.left + (underRun ? 0 : 10);
     var maxLeft = rightBound - host.left - $pill.offsetWidth;
-    $pill.style.left = Math.max(6, Math.min(left, maxLeft)) + 'px';
-    $pill.style.top = Math.max(2, nr.top - host.top + 2) + 'px';
+    var x = Math.max(6, Math.min(left, maxLeft));
+    var y = Math.max(2, nr.top - host.top + 2);
+    $pill.style.left = x + 'px';
+    $pill.style.top = y + 'px';
+
+    // Keep recomputing until two consecutive passes agree. The first call
+    // happens inside initialize(), while the toolbar and the off-canvas column
+    // are still settling -- a one-shot placement there reads a Run button that
+    // has not reached its final x yet, and nothing later moves the pill,
+    // because sync() only fires when the DEBUGGER's state changes. Converges
+    // in two or three frames; bounded so a permanently unstable layout cannot
+    // spin.
+    var key = x + ',' + y;
+    if (key !== placeLast && placeTries++ < 40) {
+      placeLast = key;
+      window.requestAnimationFrame(place);
+    }
   }
 
   // ---------------------------------------------------------------------
