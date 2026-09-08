@@ -177,7 +177,7 @@
     '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
     '.tk-dbg-bug{display:block;color:inherit}',
     '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
-      'gap:5px;padding:2px 8px 2px 6px;min-width:0;flex:1;overflow:hidden}',
+      'gap:3px;padding:0 8px 2px 6px;min-width:0;flex:1;overflow:hidden}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
     // Row 1 transport + jumps + exit; row 2 the slider and its counter.
     '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
@@ -200,6 +200,8 @@
     '.tk-dbg-btn:active:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69!important}',
     '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e!important}',
+    // The circle glyphs read small against the chevrons next door.
+    '.tk-dbg-btn.bp,.tk-dbg-btn[data-act="bphelp"]{font-size:15px;padding:3px 4px}',
     // Chevrons read lighter and narrower than the filled triangles they
     // replace, so they get a size bump and tighter padding to hold the same
     // weight in the row.
@@ -217,9 +219,10 @@
     '.tk-dbg-btn.primary .fa{font-size:14px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
-    '.tk-dbg-slidewrap{flex:1;min-width:56px;height:21px;display:flex;align-items:center;',
-      'align-self:flex-end}',
-    '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
+    '.tk-dbg-slidewrap{flex:0 0 70px;min-width:0;height:25px;display:flex;',
+      'align-items:center;align-self:flex-end}',
+    '.tk-dbg-slider{width:100%;min-width:0;flex:none;margin:0;accent-color:#0969da;',
+      'height:14px}',
 
     '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
       'text-overflow:ellipsis;flex:0 1 auto;min-width:0;align-self:flex-end;padding-bottom:6px}',
@@ -233,8 +236,8 @@
     '.tk-dbg-grp{display:flex;flex-direction:column;align-items:center;gap:1px;flex:0 0 auto}',
     '.tk-dbg-cap{font-size:7.5px;font-weight:700;letter-spacing:.09em;color:#8794a1;',
       'line-height:1;white-space:nowrap;text-transform:uppercase}',
-    '.tk-dbg-box{display:flex;align-items:center;gap:0;',
-      'border:1px solid #dfe4ea;border-radius:999px;padding:0 2px}',
+    '.tk-dbg-box{display:flex;align-items:center;justify-content:center;gap:0;',
+      'border:1px solid #dfe4ea;border-radius:999px;padding:0 3px;min-height:25px}',
     '.tk-dbg-grp.active .tk-dbg-box{border-color:#0969da;background:#f2f8fe}',
     // The transport is the busiest box and has the room, so give its five
     // controls some air.
@@ -373,7 +376,7 @@
     +           btn('rw5', 'fa-angle-double-left', 'Rewind at 5 lines per second', 'chev')
     +           btn('rw2', 'fa-angle-left', 'Rewind at 2 lines per second', 'chev')
     +           '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
-    +             ' title="Play at 1 line per second" aria-label="Play or pause">'
+    +             ' title="Play at 1 line per second, or pause" aria-label="Play or pause">'
     +             '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
     +           btn('ff2', 'fa-angle-right', 'Play at 2 lines per second', 'chev')
     +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second', 'chev')
@@ -534,7 +537,10 @@
       if (b) b.setAttribute('aria-pressed', String(playAct === act));
     }
     var i = el('playicon');
-    if (i) i.className = 'fa fa-' + (playAct === 'play' ? 'pause' : 'play');
+    // Pause whenever ANYTHING in auto mode is running, not only when the centre
+    // button started it: a transport running at 2x with a play glyph showing is
+    // a lie about what the button will do.
+    if (i) i.className = 'fa fa-' + (playAct !== null ? 'pause' : 'play');
     paintMode();
   }
 
@@ -923,7 +929,12 @@
       // another switches speed or direction without stopping first.
       if (TRANSPORT[act]) {
         mode = 'auto';
-        if (playAct === act) stopPlay(); else startPlay(act);
+        // The centre button is the master: while anything is playing it shows a
+        // pause glyph and pausing is what it does. The flanking buttons switch
+        // speed and direction, and pressing the one already driving pauses.
+        if (act === 'play' && playAct !== null) stopPlay();
+        else if (playAct === act) stopPlay();
+        else startPlay(act);
         return;
       }
       if (act === 'first' || act === 'back' || act === 'fwd' || act === 'last') {
