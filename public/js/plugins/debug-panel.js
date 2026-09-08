@@ -103,7 +103,7 @@
       '{background:none!important;background-color:transparent!important;box-shadow:none;',
       'text-shadow:none}',
     '.tk-dbg-dock{position:absolute;pointer-events:none;display:inline-block;max-width:calc(100% - 12px)}',
-    '.tk-dbg-dock > *{pointer-events:auto}',
+    '.tk-dbg-dock > *,.tk-dbg-layer > *{pointer-events:auto}',
     '.tk-dbg{position:relative;display:flex;align-items:center;pointer-events:auto;',
       'background:#ffffff;border:0;border-radius:999px;',
       // The "outline" is the shadow's own hairline ring, not a border: a 1px
