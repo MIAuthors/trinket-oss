@@ -427,3 +427,63 @@ library. Two moves get the optionality and the groundwork at near-zero cost:
   publishable on its own and does not need a repo to exist first.
 
 Revisit the spinout only when a **second host actually asks**.
+
+## 10. What collaborators would need to avoid
+
+Snapshot of `PICUP-Physics/trinket-oss` on 2026-09-08. **Re-check before
+acting; this goes stale fast.**
+
+### The honest headline: almost nothing
+
+Open PRs are exactly **two**: **#262** (Steve, Redis rate-limit TTL) and
+**#261** (Larry's own plotpolish vendor). Steve's open-issue queue is LTI,
+deploys, the share dialog, static assets, grading and docs; Andrew's is auth
+and email. **None of it is in the Pyodide embed runner.** Asking either of them
+to avoid files they are not touching would buy friction and nothing else.
+
+Add to that: the feature lands behind `features.debugPanel: false`, so it can
+merge dark. There is no reason for anyone to hold off on anything.
+
+### Worth a heads-up, not a freeze (narrow regions, not whole files)
+
+| Where | Why |
+|---|---|
+| `pyodide.js` ~1712-2290 | the recorder and replay themselves |
+| `pyodide.js` ~2380 | `renderVariables()`'s `if (debugRec) return;` — the "replay owns the table" guard |
+| `pyodide.js` ~3659-3666 | document-level ←/→ key handler, which the floating panel has to re-adjudicate against Ace |
+| `pyodide.html` 412-478 + CSS ~72-300 | the `#variables-wrap` markup and its scoped styles |
+| `_code_editor.scss:332` (`.tab-nav`) and `code-editor.js:947` / `.right-options` | any change to the file-tab bar moves the pill's default position |
+| `#graphic` / `#graphic-wrap` | plotpolish's pill already anchors to `#graphic-wrap` and frame replay wants an `<img>` in `#graphic` — two features, one container |
+
+Note the first three are **regions of a 4 078-line file**, not the file. Asking
+for a ping on those is reasonable; asking for `pyodide.js` to be left alone is
+not, and would block the sympy and file-output work for no benefit.
+
+### The real risks are ordering, not simultaneous editing
+
+1. **#261 should land first.** Larry's own, and the debug panel shares the
+   overlay/pill concept with the adapter it re-vendors. Building on an
+   unmerged vendor branch means rebasing over a 685-line diff.
+2. **The matplotlib bump (#215's successor) is the landmine.** It replaces
+   Pyodide's matplotlib patch 0004 with a restructured 0003 — new
+   `backend_pyodide.py`, new `mpl_pyodide.js`, a different mock socket. Every
+   line reference and every intercept in the frame-capture work must be
+   re-verified at that bump. **This is the one thing worth explicitly asking to
+   be told about in advance**, and Pyodide is still 0.28.1 today, so there is
+   time.
+3. **#253 / fork PR #4** carries the FS read plumbing that lazy frame-reading
+   would reuse. Larry's own branch; just do not let it be refactored away.
+4. **#254** ("a figure created after `plt.show()` is silently never drawn") is
+   the *same* auto-display guard that frame capture touches. Better fixed **as
+   part of** this work than separately, so two people are not in the same
+   twenty lines.
+5. **#247** (production gate for `features.mathOutput`) — `runProgram()` and
+   `_trinket_display.py` wrap program execution, and the recorder wraps
+   execution too. Worth knowing when that flag flips.
+
+### One thing to ask *for* rather than warn about
+
+**#206** — "turn on the browser integration suite we already have". Section 8
+put hands-on verification as the dominant term in Larry's own time on this
+feature. If Steve lands #206, it attacks exactly that cost. That is a request
+to make, not a conflict to avoid.
