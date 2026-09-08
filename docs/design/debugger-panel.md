@@ -634,3 +634,94 @@ that **nobody else is touching** &mdash; the `features.debugPanel` flag in
 the collaborator message. Completeness and collision risk are different
 questions and only the second warrants a correction. They belong in this
 document and in the wish list, not in a second Mattermost post.
+
+## 13. What the [Consult Fable] audit changed (2026-09-08)
+
+The section 10 region list had already been given to collaborators as a promise
+that work elsewhere would not conflict, so it was re-read adversarially against
+`7706618` by a second model. **Every anchor held at its stated line.** The list
+was incomplete, and three claims of this document were wrong.
+
+### Added — regions the first pass missed
+
+| File → region | Slice | Collision risk |
+|---|---|---|
+| `pyodide.html:543-563` — the `js` list and the `{% if config.features.plotStyle %}{% set js = js.concat(...) %}` at 560-562, emitted via `cachify_js` | 1 | **Moderate — the only one that matters.** Same script-emission path as Steve's open **#234** (content-addressing client-built asset URLs); he edited `lib/util/nunjucks.js` on 2026-09-04 and `lib/util/cachify.js` is the obvious next target. |
+| `base.html:40-46` — the hand-maintained per-flag projection into `window.trinket.config` | 1 | Adjacent to #234. Without a `debugPanel` line the plugin never sees its flag. |
+| `config/default.yaml:10-19` — the `features:` block | 1 | Low. Two lines of YAML. |
+| `pyodide.js` five hook sites: `initialize()` ~3716-3735, `finishRun` 3225-3226, `onEditorChange` 3711-3713, `clearMemory` 3866-3890, `resetOutput` 139-140 | 1, 2, 4, 5 | Low. Only Larry has touched these since August. |
+| `pyodide.js:3384-3394` — the auto-display guard, `g.querySelector('canvas')` at **3387** | 4 | Low, and it is `#254`, which this work already claims. |
+| `pyodide.js:39-45` — `MATPLOTLIB_SETUP_CODE`, `_plt.close('all')` at :43 | 4 | Low, but note the existing sequencing constraint: the SymPy slice injects into the same region. |
+| `plotpolish-adapter.js:205-239, 243-264` | 4 (interaction) | None — Larry's own, on #261. |
+| `lib/views/static/whats-new.html:31-36` — user-facing text says step-through lives in the Variables tab | 1 | None. Docs-only, but it goes stale the moment the pill ships. |
+
+Per Larry's instruction (2026-09-08), **only the `#234` overlap goes to
+collaborators**; the rest are completeness, not collision, and live here.
+
+### Withdrawn
+
+`_code_editor.scss:332` and `code-editor.js` 947 / 1116 / 1120 / 1168 / 1293
+**will not change.** The panel floats on its own layer and is never a child of
+the tab bar. Listing them was harmless but it pointed at safe files while the
+ones above went unlisted.
+
+### Corrections to this document
+
+1. **"Two or three small hooks" was wrong — it is five.** plotpolish needed
+   `init`, `afterRun` twice, `onEditorChange` and `onFigureGone`, every one of
+   them outside the handler block.
+2. **The auto-display guard is at `3387`, not ~3250**, and no listed range
+   covered it.
+3. **`#253`'s FS read plumbing is NOT in `main`.** At `7706618` there is no
+   `FS.readFile` or output-file code in `pyodide.js`, `pyodide-worker.js` or
+   `worker-client.js` — it exists only on the fork branch. Section 3's "mostly
+   assembled" was wrong; slice 4's lazy-frame route is **new code**, which puts
+   it at the top of its 1.5-2.5 d range.
+4. Section 2b cited `paintReplaySnap` at `:2097`; it is `:2035`.
+
+### Confirmed as correctly absent
+
+Slice 4 needs **neither** `pyodide-worker.js`'s `MPL_SETUP` **nor** new
+`worker-client.js` message types, because the recorder never runs in the worker
+(`pyodide.js:2207`). It needs no CSP change either: the real policy already
+carries `img-src * data: blob:` and `style-src ... 'unsafe-inline'`.
+
+### The overlay layer — where it can actually live
+
+This was the open risk, and it is now answered. The chain is `#wrapper` (fixed,
+inset 0) → `.trinket-wrapper` (`position: relative`) →
+`.trinket-content-wrapper` (no position) → `#codeOutput` → `#outputContainer`
+(absolute) → `#graphic-wrap`. **`#codeOutput` carries `overflow: hidden` in
+`.mode-standard` at medium-up, and `#outputTabs` is `overflow: hidden` too**, so
+an `absolute; inset: 0` layer under either is trapped — which is what the
+slice-0 prototype does, and it would not survive the real embed.
+
+Two mounts work, both reachable from the plugin with **no SCSS edit**, so "one
+plugin file" survives: append the layer to `.trinket-wrapper`, which is already
+`position: relative`; or use `position: fixed`, as plotpolish does.
+
+**Z-index budget, to be agreed rather than discovered:** clear `.alert-box`
+(999) and `.tab-options.open` (1000) — and plotpolish's pill is `fixed` at
+`z-index: 2147483000` inside a shadow root, so with both features on the DEBUG
+panel renders *under* it unless a number is chosen on purpose.
+
+**Unverified:** Foundation 5.5.3's `.off-canvas-wrap { overflow: hidden }` and
+the `.inner-wrap` transform on `.move-right`. `public/components` is gitignored
+and absent from this checkout, so if that transform is present a `fixed` pill
+will jump when the left off-canvas menu opens. **Check before choosing `fixed`.**
+
+### Test surface
+
+`embed-csp-contract.test.js:17-22` scans only `public/js/embed/*.js`, so a file
+under `plugins/` is outside it, and it forbids only
+`createElement('form'|'iframe')` and `.submit()` — nothing about overlays,
+canvases or images. The one spec reading this markup is
+`worker-runtime.spec.js:251-270` (`#variables-table tbody tr`), which variant A
+leaves intact and variant B would have to update. No spec references `#debug-*`.
+
+Also: `features.stepDebugger` requiring `features.variableExplorer` **is
+enforced in code**, not only in docs — `pyodide.js:1721-1724` and
+`pyodide.html:430`. Variant B relaxes both. And the `outputOnly` template branch
+has no `#variables-wrap` or `#outputTabs` at all (`pyodide.html:400-409`) and
+would not load the plugin, so the panel is absent there by construction — the
+plugin should still null-check.
