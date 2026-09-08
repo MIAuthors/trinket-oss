@@ -1,0 +1,54 @@
+Subject: Heads-up: working on the step-through debugger for the next few days
+
+I'd like to spend the next few days upgrading the step-through debugger: moving its controls out of the Variables tab into a small floating panel, and adding per-variable "pin to watch" and matplotlib frame capture. Everything lands behind a new feature flag (features.debugPanel, default false), so nothing changes for users until we decide to turn it on.
+
+I am NOT asking anyone to stay out of pyodide.js. It's 4,078 lines and plenty of other work legitimately lives in it. I'm only asking for a ping if you're about to change one of the specific regions below, so we don't collide.
+
+HOW TO KNOW WHETHER THESE LINE NUMBERS ARE STILL VALID
+
+Line numbers go stale, so here is the exact pin. All ranges below refer to:
+
+commit 7706618dd5da80f23c3561a167fc9b6ecb99206d (main, "Merge pull request #251 from lengelhardt/feature/plot-style")
+
+and specifically to these file contents (git blob hashes):
+
+a275821301fea8e918bee1700f1d1d15b3f6acbc  public/js/embed/pyodide.js
+94538c60f686d80d41a48a6d1fa6b4dcfbfaab88  lib/views/embed/pyodide.html
+d230b906a5bd3eb1626fa4225c47a6c7ca4ffd76  static/scss/embed/_code_editor.scss
+0c7f97346e0d716faa3f6af5b0e1a2dbc423b6a6  public/js/plugins/code-editor.js
+
+The blob hash is the useful part, because it identifies the file contents rather than the commit. To check whether my line numbers still apply to whatever you have checked out, run:
+
+git rev-parse HEAD:public/js/embed/pyodide.js
+
+If that prints a275821301fea8e918bee1700f1d1d15b3f6acbc, the line numbers below are exact. If it prints anything else, the file has moved and you should use the anchor text in each entry instead of the numbers. Note that the commit SHA alone is weaker than the blob hash: a commit that touches other files leaves pyodide.js identical, and the blob hash tells you that directly.
+
+To re-locate every region in a current checkout regardless of drift:
+
+grep -n "Step-through debugger (record & replay)\|Phase 3: gutter breakpoints\|^var lastVars\|^function varRowHtml\|^function paintVariables\|^function paintReplaySnap\|replay owns the table\|Copy a variable's repr" public/js/embed/pyodide.js
+
+And to see everything that has changed in the file since my pin:
+
+git diff 7706618dd5da80f23c3561a167fc9b6ecb99206d..HEAD -- public/js/embed/pyodide.js
+
+THE REGIONS
+
+1. public/js/embed/pyodide.js lines 1712-2287. The recorder and replay engine. Anchor: the section comment "// --- Step-through debugger (record & replay)" at 1712, running to just before "var lastVars = []". Includes the gutter-breakpoints sub-section whose anchor comment is "// --- Phase 3: gutter breakpoints" at 1932. Key symbols: RECORD_HELPER, runStepThrough, enterReplay, exitReplay, debugStepTo, paintReplaySnap, debugJumpBreakpoint.
+
+2. public/js/embed/pyodide.js lines 2289-2480. Variable explorer rendering. Anchor: "var lastVars = []" at 2289 through the end of hideVariables, stopping before "function ensureWorkerClient". Key symbols: renderVariables, varRowHtml, varNoteRowHtml, paintVariables, toggleVarRow, collapseSubtree. Also note the single line "if (debugRec) return; // replay owns the table" at 2380, which is the coupling between the two features.
+
+3. public/js/embed/pyodide.js lines 3582-3670. The delegated event handlers. Anchor: the "$('#variablesTab').on(" binding at 3582 through the end of the arrow-key stepping handler. This covers the .var-copy and .var-toggle handlers, all the #debug-* control bindings, and the document-level left/right arrow handler.
+
+4. lib/views/embed/pyodide.html lines 72-307 (the scoped CSS between "{% if config.features.variableExplorer %}" and the two closing "{% endif %}" before "</style>") and lines 412-478 (the #outputTabs bar, the #debug-start-alt icon, and the whole #variables-wrap block).
+
+5. Smaller, and only if the panel ends up docked in the file-tab bar: static/scss/embed/_code_editor.scss, the ".tab-nav" rule at line 332 (it is height 2.275rem with overflow hidden, which is why the panel has to float rather than live inside the bar); and public/js/plugins/code-editor.js, the $PLUGIN_TEMPLATE string at line 947 plus the "dl.right-options" appends at 1116, 1120, 1168 and 1293.
+
+One useful fact: pyodide.js and pyodide.html are byte-identical between main (7706618) and my vendor/plotpolish-0.3.2 branch, so PR #261 does not affect any of the above.
+
+TWO ACTUAL REQUESTS
+
+1. Please tell me before the Pyodide/matplotlib bump lands. That bump replaces Pyodide's matplotlib patch 0004 with a restructured 0003 (new backend_pyodide.py, new mpl_pyodide.js, a different mock socket), which invalidates every line reference and every intercept in the plot-capture part of this work. We're still on Pyodide 0.28.1, so there's no rush, but I'd rather re-verify before it lands than after.
+
+2. Please leave issue #254 to me ("Main thread: a figure created after plt.show() is silently never drawn"). It's the same auto-display guard the plot-capture work touches, so it's better fixed as part of this than separately, and that keeps two people out of the same twenty lines.
+
+And one thing I'd like rather than avoid: if #206 (turning on the browser integration suite we already have) is anywhere near the top of the queue, it would help this work a lot. Hands-on verification is the biggest cost in the whole feature and that issue attacks it directly.
