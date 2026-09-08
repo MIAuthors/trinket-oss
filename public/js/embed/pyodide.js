@@ -3832,13 +3832,33 @@ window.TrinketAPI = {
 
     editor.change(function() {
       api.triggerChange();
+      // A recording is a snapshot of the source that produced it, so an edit
+      // invalidates it. This is not a new rule -- showResult and replaceMain
+      // already exitReplay() for a fresh run and for a replaced program; a
+      // keystroke is the same event class and was simply never wired up.
+      //
+      // Without it the student keeps stepping a recording of code that no
+      // longer exists, and it fails SILENTLY rather than visibly: the Ace
+      // marker is an unanchored Range, so the highlight band stays on its row
+      // while the text on that row changes, and the variables window goes on
+      // showing values -- even names -- from the old program. Verified in a
+      // running embed: the panel reported `dt = 0.1` and a variable `x` that
+      // appeared nowhere in the file on screen.
+      //
+      // Not quiet: the non-quiet path restores the console the way the panel's
+      // exit already does, so nothing left behind becomes a lie either.
+      var wasReplaying = !!debugRec;
+      if (wasReplaying) exitReplay();
       // Guarded like the afterRun hooks: editor.change is single-owner, so a
       // throw from the optional plugin would take the change pipeline with it.
       if (window.trinketPlotpolish) {
         try { trinketPlotpolish.onEditorChange(); } catch (e) {}
       }
       if (window.trinketDebugPanel) {
-        try { trinketDebugPanel.onEditorChange(); } catch (e) {}
+        // The flag says WHY replay ended. That is what lets the panel put an
+        // explanation where the values were instead of just emptying the
+        // window and leaving the student to wonder where their variables went.
+        try { trinketDebugPanel.onEditorChange(wasReplaying); } catch (e) {}
       }
     });
 
