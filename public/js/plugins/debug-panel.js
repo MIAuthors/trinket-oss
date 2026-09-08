@@ -97,8 +97,10 @@
     // once, for every control in here and any added later.
     '.tk-dbg button,.tk-dbg input,.tk-dbg-vars button{margin:0}',
     '.tk-dbg button,.tk-dbg button:hover,.tk-dbg button:focus,.tk-dbg button:active,',
-      '.tk-dbg-vars button,.tk-dbg-vars button:hover,.tk-dbg-vars button:focus',
-      '{background:none!important;background-color:transparent!important;box-shadow:none}',
+      '.tk-dbg-vars button,.tk-dbg-vars button:hover,.tk-dbg-vars button:focus,',
+      '.tk-dbg-vars button:active',
+      '{background:none!important;background-color:transparent!important;box-shadow:none;',
+      'text-shadow:none}',
     '.tk-dbg-dock{position:absolute;pointer-events:none;display:inline-block;max-width:calc(100% - 12px)}',
     '.tk-dbg-dock > *{pointer-events:auto}',
     '.tk-dbg{position:relative;display:flex;align-items:center;pointer-events:auto;',
@@ -138,8 +140,8 @@
     // is a muted resting colour resolving to the accent on hover, with the
     // tooltip carrying the meaning and opacity alone marking disabled -- a
     // filled rectangle inside a rounded pill reads as a second object.
-    '.tk-dbg-toggle{color:#4a5b69}',
-    '.tk-dbg-toggle:hover,.tk-dbg-toggle:active{color:#0969da;background:none}',
+    '.tk-dbg-toggle{color:#4a5b69!important}',
+    '.tk-dbg-toggle:hover,.tk-dbg-toggle:active{color:#0969da!important;background:none}',
     '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;line-height:1}',
     // Shown only while the pill is shut and replay is still live.
     '.tk-dbg-live{position:absolute;top:5px;right:6px;width:6px;height:6px;',
@@ -168,23 +170,24 @@
     '.tk-dbg [data-grp="controls"]{flex-direction:column;align-items:stretch;',
       'gap:3px;flex:1;min-width:0}',
     '.tk-dbg-btn{border:0;background:none!important;cursor:pointer;color:#4a5b69;',
-      'padding:3px 4px;line-height:1;flex:0 0 auto;font-size:13px;transition:color 90ms ease}',
-    '.tk-dbg-btn:hover:not(:disabled){color:#0969da}',
-    '.tk-dbg-btn:active:not(:disabled){color:#0550ae}',
-    '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69}',
-    '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e}',
+      'padding:3px 4px;line-height:1;flex:0 0 auto;font-size:13px;transition:color 90ms ease;',
+      'color:#4a5b69!important}',
+    '.tk-dbg-btn:hover:not(:disabled){color:#0969da!important}',
+    '.tk-dbg-btn:active:not(:disabled){color:#0550ae!important}',
+    '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69!important}',
+    '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e!important}',
     // A toggle that is ON says so with the accent, never a filled chip -- and
     // for play/pause the glyph swaps too, which is the real signal.
-    '.tk-dbg-btn[aria-pressed="true"]{color:#0969da}',
+    '.tk-dbg-btn[aria-pressed="true"]{color:#0969da!important}',
     // THE DEFAULT ACTION. Everything else in the row is a small muted glyph;
     // this one is labelled, larger and accent-coloured from rest, so what to
     // click to advance one line is not a guess. Still no background.
-    '.tk-dbg-btn.primary{color:#0969da;font-size:12.5px;font-weight:600;',
+    '.tk-dbg-btn.primary{color:#0969da!important;font-size:12.5px;font-weight:600;',
       'display:flex;align-items:center;gap:4px;padding:3px 7px 3px 5px;',
       'letter-spacing:.01em}',
     '.tk-dbg-btn.primary .fa{font-size:14px}',
-    '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae}',
-    '.tk-dbg-btn.primary:disabled{color:#8794a1;opacity:.6}',
+    '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
+    '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
     '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
     '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;',
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
@@ -217,7 +220,12 @@
       // without hand-built ones, which is not worth the code here.
       'resize:both;',
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.18);',
-      'padding:5px 6px;max-height:168px;overflow:auto;',
+      'padding:5px 6px;overflow:auto;',
+      // 168px was a hard cap, so the resize grip could never grow the box
+      // past about six rows. A generous ceiling instead: short lists stay
+      // short (height is auto), long ones scroll, and dragging works up to
+      // most of the viewport.
+      'max-height:70vh;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
     '.tk-dbg-vars[hidden]{display:none}',
     // x, a deliberate gap, then the up-arrow: the two sit side by side and one
@@ -238,12 +246,12 @@
     '.tk-dbg-vrow.changed .tk-dbg-vn{font-weight:600}',
     // Same no-fill rule as the pill: muted at rest, colour on hover.
     '.tk-dbg-vbtn{border:0;background:none!important;cursor:pointer;padding:1px;line-height:1;',
-      'color:#c3cbd3;font-size:11px;transition:color 90ms ease}',
-    '.tk-dbg-vbtn.rm:hover{color:#cf222e}',
-    '.tk-dbg-vbtn.up:hover{color:#1a7f37}',
+      'color:#c3cbd3!important;font-size:11px;transition:color 90ms ease}',
+    '.tk-dbg-vbtn.rm:hover{color:#cf222e!important}',
+    '.tk-dbg-vbtn.up:hover{color:#1a7f37!important}',
     // Promotion is sticky, so the control that did it says so permanently
     // rather than only while the pointer is on it.
-    '.tk-dbg-vbtn.up.on{color:#1a7f37}',
+    '.tk-dbg-vbtn.up.on{color:#1a7f37!important}',
     '.tk-dbg-vars .empty{font-size:11px;color:#8794a1;padding:3px 2px;white-space:nowrap}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
