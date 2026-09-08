@@ -487,3 +487,120 @@ not, and would block the sympy and file-output work for no benefit.
 put hands-on verification as the dominant term in Larry's own time on this
 feature. If Steve lands #206, it attacks exactly that cost. That is a request
 to make, not a conflict to avoid.
+
+## 11. Added ask: pin ("paperclip") a variable to a watch pane
+
+Requested 2026-09-08: a paperclip button on the left edge of each variable row;
+clicking it (a) floats that variable to the top of the list and (b) populates a
+window docked to the bottom of the debug panel, the way plotpolish's popovers
+dock under its pill.
+
+### Why this is cheaper than it sounds — four facts from the code
+
+1. **Both paint paths already funnel through one row builder.** `paintVariables()`
+   (`pyodide.js:2379`, live explorer) and `paintReplaySnap()` (`:2035`, replay)
+   both emit rows via **`varRowHtml()` (`:2337`)`. A paperclip cell added there
+   appears in both surfaces at once. One insertion point, not two.
+2. **Row identity already exists.** Every row carries `data-root` (top-level
+   variable name) and `data-path` (path to this node), stashed for the lazy
+   expand handler. That is exactly the key a pin set needs — no new identity
+   scheme.
+3. **Per-row buttons already have a precedent to copy.** `.var-copy` and
+   `.var-toggle` are delegated handlers on `#variables-table`
+   (`:3599`, `:3609`) with styles at `pyodide.html:170-196`. The paperclip is a
+   third one beside them.
+4. **Replay snapshots are flat** — `paintReplaySnap` always passes
+   `expandable: false, path: [], depth: 0`. So in replay there are only
+   top-level rows and the hard cases cannot arise.
+
+### Where the sharp edges actually are
+
+- **Ordering currently belongs to Python.** The only sort is
+  `_out.sort(key=lambda d: (d['kind'] != 'value', d['name']))` at
+  `pyodide.js:1541`, inside the helper. Pin-to-top means **JS takes over final
+  ordering** — a stable sort in the two paint functions, pinned first,
+  preserving the existing order within each group. Small, but it is a shift in
+  which layer owns presentation order, and worth doing deliberately rather
+  than by accident.
+- **Pinning a *child* row is the one genuinely messy case.** `data-path` is
+  *positional*, so a pinned child of a dict can silently come to mean a
+  different key after mutation. **Recommendation: v1 pins top-level rows only**
+  (spacer for child rows, exactly as `.var-toggle-spacer` already does). That
+  removes the whole class of bugs, and costs nothing in replay where child rows
+  do not exist anyway.
+- **A pinned name need not exist at step *k*.** Needs an explicit "not defined
+  yet" state in the watch pane, not a blank row — a variable appearing partway
+  through the loop is the normal case, not an edge case.
+
+### The finding worth acting on: history is already recorded
+
+The recording holds **every** snapshot in `debugRec.snaps[]`. So the full time
+series of any pinned variable is **already in memory**, for free, with zero
+recorder changes. The watch pane can therefore show not just the current value
+but the variable's whole trajectory across the run, with a click on any point
+jumping `debugIdx` there.
+
+That is the real teaching feature — watch `i` and `total` evolve across a whole
+loop — and it is **impossible in a live debugger**, which only ever has "now".
+It is a dividend of the record & replay architecture, not a workaround for it.
+
+Caveats to build in honestly:
+
+- The recorder's caps still apply: 50 vars/step and 120-char reprs. A variable
+  dropped by the 50-var cap has **holes** in its history — render gaps as gaps,
+  never as continuity.
+- Snapshot values are **reprs (strings)**, not numbers. A numeric sparkline
+  means parsing a repr back to a float; do that only when it parses cleanly and
+  fall back to a text strip otherwise. Do not over-invest here.
+- **Live mode has no history** — one snapshot only. So the pane has two modes:
+  replay = timeline, live = current value. Decide that asymmetry on purpose.
+
+### The boundary to write down now, because a paperclip invites crossing it
+
+`pyodide-debugger-mvp.md` lists **"watch expressions"** as explicitly out of
+scope. What is being asked for here is watch **variables** — pinning a name
+that the recorder already captured — which is the cheap half and fine. Watching
+an **expression** (`len(xs)`, `total/n`) is the expensive half and record &
+replay **cannot do it retroactively**: the value never existed, so it would
+require re-recording with the expression registered up front. Expect the
+request ("why can't I watch `total/n`?") and have that answer ready.
+
+### Cost
+
+| Piece | Est. |
+|---|---|
+| Paperclip cell, delegated handler, pin state, pin-to-top stable sort | 0.5 d |
+| Docked watch pane, current values, "not defined yet" state | 0.5-0.75 d |
+| History timeline over `debugRec.snaps` with click-to-jump | 0.75-1 d |
+| Pin persistence across runs/recordings | 0.25 d |
+| **Total** | **1.5-2.5 d** |
+
+Slices 0-4 go from **4-6 d** to **5.5-8.5 d**.
+
+**In Larry's own time the ratio barely moves.** Almost all of this is
+mechanical work in code with a clear precedent two lines away, and his
+description plus plotpolish's docked-popover pattern already specify the
+design. Section 8's ratio goes from ~0.5-0.7x to roughly **~0.55-0.75x** if
+the pane shows current values, and **~0.7-0.9x** if he wants the history
+timeline — the timeline being the only part that needs real design judgment
+from him.
+
+Free bonus: pin-to-top composes with the existing `.var-changed` diff
+highlighting. Pinned rows at the top, highlighted the moment they change, is
+most of a watch window before the docked pane is even built.
+
+### Does it add a block to warn collaborators about?
+
+**Yes, but it needs no new message** — it widens section 10's `pyodide.js`
+heads-up from three regions to four:
+
+- **new:** ~2321-2430 (`renderVariables`, `varRowHtml`, `paintVariables`)
+- **new:** ~3595-3625 (the delegated `#variables-table` handlers)
+- already listed: ~2035 (`paintReplaySnap`), ~2380 (the replay guard),
+  ~3659 (keys), plus `pyodide.html`'s CSS which is inside the 72-300 range
+  already flagged
+
+No new file to guard, and **nobody's open PR or issue touches variable
+rendering** — #262 is Redis rate limiting, and Steve's and Andrew's queues are
+LTI, deploys, auth and email. The single sentence from section 10 still covers
+it.
