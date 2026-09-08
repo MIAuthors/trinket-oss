@@ -132,7 +132,8 @@
     '.tk-dbg-toggle{display:flex;flex-direction:column;align-items:center;',
       'justify-content:center;gap:1px;border:0;background:none;cursor:pointer;',
       'color:#0969da;padding:0 10px 0 4px;border-radius:0 999px 999px 0;',
-      'flex:0 0 auto;line-height:1}',
+      'flex:0 0 auto;line-height:1;transform:translateZ(0);backface-visibility:hidden;',
+      'transition:color 90ms ease}',
     '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #e6eaef;padding-right:9px}',
     // No fill on hover, here or on any control below. The icon-only convention
     // is a muted resting colour resolving to the accent on hover, with the
@@ -148,7 +149,7 @@
     '.tk-dbg-toggle{position:relative}',
     // flex:1 + a line-height of 1 lets the glyph occupy the whole remaining
     // height; font-size then sets how much of that it actually inks.
-    '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
+    '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1;transform:translateZ(0)}',
     '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
       'gap:2px;padding:0 8px 0 6px;min-width:0;flex:1}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
@@ -271,7 +272,7 @@
     +     '<span class="tk-dbg-recording">step through</span>'
     +   '</span>'
     +   '<span data-grp="recording" hidden>'
-    +     '<span class="tk-dbg-recording">recording&hellip;</span>'
+    +     '<span class="tk-dbg-recording">Recording&hellip;</span>'
     +     btn('cancel', 'fa-times', 'Cancel the recording')
     +   '</span>'
     +   '<span data-grp="controls" hidden>'
