@@ -136,7 +136,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:334px;height:86px}',
+    '.tk-dbg.open{width:296px;height:84px}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -191,8 +191,18 @@
        rule outranks -- an inline display:flex here would never hide. */
     '.tk-dbg [data-grp]{display:flex;align-items:center;gap:1px}',
     '.tk-dbg [data-grp][hidden]{display:none!important}',
-    '.tk-dbg [data-grp="controls"]{flex-direction:column;align-items:stretch;',
-      'gap:3px;flex:1;min-width:0}',
+    '.tk-dbg [data-grp="controls"]{flex-direction:row;align-items:center;',
+      'gap:5px;flex:1;min-width:0}',
+    '.tk-dbg-grid{display:grid;grid-template-columns:auto auto;gap:3px 9px;',
+      'justify-items:center;align-items:end;flex:1;min-width:0}',
+    '.tk-dbg-grid > .tk-dbg-note{grid-column:1 / -1;justify-self:start}',
+    // Exit sits outside the grid so it can centre against BOTH rows, and the
+    // pill's right edge curls around it.
+    '.tk-dbg-btn.exit{font-size:16px;padding:4px 4px;align-self:center}',
+    // Needs :not(:disabled) to outrank the generic .tk-dbg-btn:hover rule --
+    // they were tied on specificity and the generic one came later, so exit
+    // hovered accent-blue rather than red.
+    '.tk-dbg-btn.exit:hover:not(:disabled){color:#cf222e!important}',
     '.tk-dbg-btn{border:0;background:none!important;cursor:pointer;color:#4a5b69;',
       'padding:3px 4px;line-height:1;flex:0 0 auto;font-size:13px;transition:color 90ms ease;',
       'color:#4a5b69!important}',
@@ -362,7 +372,7 @@
     +     btn('cancel', 'fa-times', 'Cancel')
     +   '</span>'
     +   '<span data-grp="controls" hidden>'
-    +     '<span class="tk-dbg-row top">'
+    +     '<span class="tk-dbg-grid">'
     +       '<span class="tk-dbg-grp step"><span class="tk-dbg-cap">Step mode</span>'
     +         '<span class="tk-dbg-box">'
     +           btn('first', 'fa-fast-backward', 'Back to the first step')
@@ -382,9 +392,6 @@
     +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second', 'chev')
     +         '</span>'
     +       '</span>'
-    +       btn('exit', 'fa-times', 'Exit step-through')
-    +     '</span>'
-    +     '<span class="tk-dbg-row two">'
     +       '<span class="tk-dbg-grp"><span class="tk-dbg-cap">Breakpoints</span>'
     +         '<span class="tk-dbg-box">'
     +           btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
@@ -398,7 +405,9 @@
     +       '</span>'
     +       '<span class="tk-dbg-note" data-el="note"></span>'
     +     '</span>'
-
+    +     '<button type="button" class="tk-dbg-btn exit" data-act="exit"'
+    +       ' title="Leave step-through" aria-label="Leave step-through">'
+    +       '<i class="fa fa-times" aria-hidden="true"></i></button>'
     +   '</span>'
     + '</span>';
 
