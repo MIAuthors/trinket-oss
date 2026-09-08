@@ -136,7 +136,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:352px;height:92px}',
+    '.tk-dbg.open{width:412px;height:88px}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -221,8 +221,21 @@
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     // A hairline round-rect says "these three are one subject" without adding
     // a fill: previous breakpoint, next breakpoint, and what a breakpoint is.
-    '.tk-dbg-bpgrp{display:flex;align-items:center;gap:0;flex:0 0 auto;',
-      'border:1px solid #dfe4ea;border-radius:999px;padding:0 1px}',
+    // Three labelled groups. The caption is what lets the icons stay pure: two
+    // different play buttons are unambiguous when one sits under STEP MODE and
+    // the other under AUTO MODE, so neither needs a word inside it.
+    '.tk-dbg-grp{display:flex;flex-direction:column;align-items:center;gap:1px;flex:0 0 auto}',
+    '.tk-dbg-cap{font-size:7.5px;font-weight:700;letter-spacing:.09em;color:#8794a1;',
+      'line-height:1;white-space:nowrap;text-transform:uppercase}',
+    '.tk-dbg-box{display:flex;align-items:center;gap:0;',
+      'border:1px solid #dfe4ea;border-radius:999px;padding:0 2px}',
+    '.tk-dbg-grp.active .tk-dbg-box{border-color:#0969da;background:#f2f8fe}',
+    '.tk-dbg-grp.active .tk-dbg-cap{color:#0969da}',
+    // A speed multiplier riding the glyph: 2 and 5 read at this size where a
+    // second chevron would not.
+    '.tk-dbg-btn .sp{font-size:7.5px;font-weight:700;vertical-align:super;',
+      'margin-left:-1px;letter-spacing:0}',
+    '.tk-dbg-row.top{align-items:flex-end;gap:7px}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
     '.tk-dbg-help{position:absolute;top:calc(100% + 6px);right:0;width:236px;background:#fff;',
       'border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.45;color:#1f2328;',
@@ -301,6 +314,14 @@
   // ---------------------------------------------------------------------
   // Markup
   // ---------------------------------------------------------------------
+  // A transport button carrying its speed as a superscript.
+  function spd(id, icon, mult, title) {
+    return '<button type="button" class="tk-dbg-btn" data-act="' + id + '"'
+         + ' aria-pressed="false" title="' + title + '" aria-label="' + title + '">'
+         + '<i class="fa ' + icon + '" aria-hidden="true"></i>'
+         + '<span class="sp" aria-hidden="true">' + mult + '</span></button>';
+  }
+
   function btn(id, icon, title, cls) {
     return '<button type="button" class="tk-dbg-btn' + (cls ? ' ' + cls : '') + '"'
          + ' data-act="' + id + '" title="' + title + '" aria-label="' + title + '">'
@@ -336,38 +357,42 @@
     +     btn('cancel', 'fa-times', 'Cancel')
     +   '</span>'
     +   '<span data-grp="controls" hidden>'
-    +     '<span class="tk-dbg-row">'
-    +       btn('first', 'fa-fast-backward', 'First step')
-    +       btn('back', 'fa-step-backward', 'Previous step')
-    +       '<button type="button" class="tk-dbg-btn primary" data-act="fwd"'
-    +         ' title="Run the next line (\u2192)" aria-label="Next step">'
-    +         'Step<i class="fa fa-step-forward" aria-hidden="true"></i></button>'
-    +       btn('last', 'fa-fast-forward', 'Last step')
-    +       '<span class="tk-dbg-sep"></span>'
-    +       '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
-    +         ' title="Play / pause" aria-label="Play / pause">'
-    +         '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
-    +       '<span class="tk-dbg-sep"></span>'
-    +       '<span class="tk-dbg-bpgrp">'
-    +         btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
-    +         btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
-    +         btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
+    +     '<span class="tk-dbg-row top">'
+    +       '<span class="tk-dbg-grp step"><span class="tk-dbg-cap">Step mode</span>'
+    +         '<span class="tk-dbg-box">'
+    +           btn('first', 'fa-fast-backward', 'Back to the first step')
+    +           btn('back', 'fa-step-backward', 'Back one line')
+    +           btn('fwd', 'fa-play', 'Run the next line')
+    +           btn('last', 'fa-fast-forward', 'Forward to the last step')
+    +         '</span>'
     +       '</span>'
-    +       '<span class="tk-dbg-sep"></span>'
+    +       '<span class="tk-dbg-grp auto"><span class="tk-dbg-cap">Auto mode</span>'
+    +         '<span class="tk-dbg-box">'
+    +           spd('rw5', 'fa-backward', '5', 'Rewind at 5 lines per second')
+    +           spd('rw2', 'fa-backward', '2', 'Rewind at 2 lines per second')
+    +           '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
+    +             ' title="Play at 1 line per second" aria-label="Play or pause">'
+    +             '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
+    +           spd('ff2', 'fa-forward', '2', 'Play at 2 lines per second')
+    +           spd('ff5', 'fa-forward', '5', 'Play at 5 lines per second')
+    +         '</span>'
+    +       '</span>'
+    +       '<span class="tk-dbg-grp"><span class="tk-dbg-cap">Breakpoints</span>'
+    +         '<span class="tk-dbg-box">'
+    +           btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
+    +           btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
+    +           btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
+    +         '</span>'
+    +       '</span>'
     +       btn('exit', 'fa-times', 'Exit step-through')
     +     '</span>'
     +     '<span class="tk-dbg-row two">'
     +       '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
     +         ' aria-label="Step position">'
     +       '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
-    +     '</span>'
-    +     '<span class="tk-dbg-row three">'
-    +       '<i class="fa fa-tachometer tk-dbg-spd-ic" aria-hidden="true"></i>'
-    +       '<input type="range" class="tk-dbg-speed" data-act="speed" min="0" max="4" step="1"'
-    +         ' value="2" aria-label="Playback speed">'
-    +       '<span class="tk-dbg-rate" data-el="rate">1 / sec</span>'
     +       '<span class="tk-dbg-note" data-el="note"></span>'
     +     '</span>'
+
     +   '</span>'
     + '</span>';
 
@@ -447,9 +472,17 @@
   // array -- so it belongs in the panel rather than in pyodide.js. Five
   // discrete detents rather than a continuous slider: these are the five
   // speeds worth having, and a continuous control makes 1/sec fiddly to hit.
-  var SPEEDS = [5, 2, 1, 0.5, 0.2];              // seconds per step
-  var RATES  = ['1 / 5 s', '1 / 2 s', '1 / sec', '2 / sec', '5 / sec'];
-  var speedIx = 2;
+  // Rate and DIRECTION, because auto mode now runs backwards too -- something
+  // only record & replay can offer, and the best way there is to watch a loop.
+  var TRANSPORT = {
+      rw5  : { rate: 5, dir: -1 }
+    , rw2  : { rate: 2, dir: -1 }
+    , play : { rate: 1, dir:  1 }
+    , ff2  : { rate: 2, dir:  1 }
+    , ff5  : { rate: 5, dir:  1 }
+  };
+  var mode = 'step';       // 'step' or 'auto' -- whichever was last driven
+  var playAct = null;      // which transport button is driving, or null
   var playTimer = null;
 
   function playing() { return playTimer !== null; }
@@ -458,35 +491,61 @@
     if (playTimer === null) return;
     clearInterval(playTimer);
     playTimer = null;
+    playAct = null;
     paintPlay();
   }
 
-  function startPlay() {
-    if (!ctx || !ctx.actions || playTimer !== null) return;
+  function startPlay(act) {
+    if (!ctx || !ctx.actions) return;
+    var t = TRANSPORT[act];
+    if (!t) return;
+    if (playTimer !== null) { clearInterval(playTimer); playTimer = null; }
     var s0 = {};
     try { s0 = ctx.getState() || {}; } catch (e) { return; }
     if (!s0.replaying) return;
-    if (s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
+    // Parked at the end it is heading for: jump to the far end so the press
+    // does something rather than nothing.
+    if (t.dir > 0 && s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
+    if (t.dir < 0 && s0.idx <= 0) { try { ctx.actions.last(); } catch (e) {} }
+    playAct = act;
     playTimer = setInterval(function() {
       var st = {};
       try { st = ctx.getState() || {}; } catch (e) { stopPlay(); return; }
-      // At five steps a second a 5,000-step recording still takes sixteen
-      // minutes, so autoplay is for watching a loop turn, not for traversing
-      // a program: it stops at the end rather than wrapping.
-      if (!st.replaying || st.idx >= st.total) { stopPlay(); return; }
-      try { ctx.actions.step(1); } catch (e) { stopPlay(); }
-    }, SPEEDS[speedIx] * 1000);
+      // Stops at whichever end it reaches rather than wrapping: at five lines a
+      // second a 5,000-step recording still takes sixteen minutes, so auto mode
+      // is for watching a loop turn, not traversing a program.
+      if (!st.replaying
+          || (t.dir > 0 && st.idx >= st.total)
+          || (t.dir < 0 && st.idx <= 0)) { stopPlay(); return; }
+      try { ctx.actions.step(t.dir); } catch (e) { stopPlay(); }
+    }, (1 / t.rate) * 1000);
     paintPlay();
   }
 
   function paintPlay() {
     if (!mounted) return;
-    var b = $pill.querySelector('[data-act="play"]');
+    // Whichever button is driving reads as pressed; the centre one also swaps
+    // its glyph, since that is the one a student reads as "playing".
+    for (var act in TRANSPORT) {
+      var b = $pill.querySelector('[data-act="' + act + '"]');
+      if (b) b.setAttribute('aria-pressed', String(playAct === act));
+    }
     var i = el('playicon');
-    var r = el('rate');
-    if (b) b.setAttribute('aria-pressed', String(playing()));
-    if (i) i.className = 'fa fa-' + (playing() ? 'pause' : 'play');
-    if (r) r.textContent = RATES[speedIx];
+    if (i) i.className = 'fa fa-' + (playAct === 'play' ? 'pause' : 'play');
+    paintMode();
+  }
+
+  // Exactly one box is highlighted, so which mode a press will act in is never
+  // a guess. Pressing a control in the other box moves the highlight.
+  function paintMode() {
+    if (!mounted) return;
+    var groups = $pill.querySelectorAll('.tk-dbg-grp');
+    for (var k = 0; k < groups.length; k++) {
+      var isAuto = groups[k].classList.contains('auto');
+      var isStep = groups[k].classList.contains('step');
+      groups[k].classList.toggle('active',
+        (isAuto && mode === 'auto') || (isStep && mode === 'step'));
+    }
   }
 
   // Opening the pill IS the request to step through -- the student should not
@@ -732,6 +791,11 @@
     var rightBound = (or_ && or_.width ? or_.left : editor.getBoundingClientRect().right) - 8;
 
     var left = anchor - host.left;
+    // The expanded pill is 412px. On a narrow window the editor pane is
+    // narrower than that, and clamping into the pane would shove it hard left
+    // and still overflow -- so when it cannot fit the pane, clamp to the whole
+    // embed instead. It is draggable either way.
+    if ($dock.offsetWidth > rightBound - nr.left) rightBound = host.left + host.width - 6;
     var maxLeft = rightBound - host.left - $dock.offsetWidth;
     var x = Math.max(6, Math.min(left, maxLeft));
     var y = Math.max(2, nr.top - host.top + 2);
@@ -841,7 +905,16 @@
         if (!st.hasBreakpoints) { showHelp(); return; }
       }
       hideHelp();
-      if (act === 'play') { playing() ? stopPlay() : startPlay(); return; }
+      // Any transport button: pressing the one already driving pauses; pressing
+      // another switches speed or direction without stopping first.
+      if (TRANSPORT[act]) {
+        mode = 'auto';
+        if (playAct === act) stopPlay(); else startPlay(act);
+        return;
+      }
+      if (act === 'first' || act === 'back' || act === 'fwd' || act === 'last') {
+        mode = 'step';
+      }
 
       var a = ctx && ctx.actions;
       if (!a) return;
@@ -867,15 +940,11 @@
     var slider = $pill.querySelector('[data-act="slider"]');
     slider.addEventListener('input', function() {
       if (!ctx || !ctx.actions) return;
+      mode = 'step';        // scrubbing by hand is stepping, not auto
       stopPlay();
       try { ctx.actions.stepTo(parseInt(this.value, 10) || 0); } catch (e) {}
     });
 
-    $pill.querySelector('[data-act="speed"]').addEventListener('input', function() {
-      speedIx = Math.max(0, Math.min(parseInt(this.value, 10) || 0, SPEEDS.length - 1));
-      paintPlay();
-      if (playing()) { stopPlay(); startPlay(); }   // re-arm, keep the position
-    });
 
     dragging();
   }
