@@ -1748,10 +1748,6 @@ var DEBUG_MAX_VARS = 50;
 var DEBUG_MAX_REPR = 120;
 var DEBUG_MAX_DEPTH = 20;
 var DEBUG_MAX_BYTES = 2 * 1024 * 1024;
-// Phase 3: with breakpoints set the tracer idles (no snapshots) until one is
-// hit — but an infinite loop BEFORE the first breakpoint would otherwise spin
-// forever, so dormant line events are capped too (cheap: a set lookup each).
-var DEBUG_MAX_DORMANT = 200000;
 
 // The user program is compiled with filename '<debug>' and exec'd in a fresh
 // namespace: user frames are exactly the '<debug>' frames (functions defined in
@@ -1845,16 +1841,33 @@ var RECORD_HELPER = [
   '            return _f.f_lineno, _file_label(_f.f_code.co_filename)',
   '        _f = _f.f_back',
   '    return None, None',
-  // Phase 3: deferred recording. With breakpoints set, stay dormant (no
-  // snapshots, no step cap) until execution first touches a breakpoint line —
-  // long preambles don't burn the cap. Dormant line events are still counted
-  // and capped so an infinite loop BEFORE any breakpoint can't spin forever.
+  // Breakpoints do NOT gate recording. They used to: with any breakpoint set
+  // the tracer stayed dormant -- no snapshots at all -- until execution first
+  // touched a breakpoint line, so the steps before it did not exist and the
+  // replay opened AT the breakpoint. That is the opposite of what a breakpoint
+  // means everywhere else, and it also made a whole class of failure: an
+  // orphaned breakpoint (a file renamed or deleted, or a dot on a line that
+  // never runs) could never be hit, so every recording for the rest of the
+  // page session came back empty. The recording now always starts at the
+  // program's first line and _bp_set only reports whether a breakpoint was
+  // ever reached; auto mode is what stops there.
+  //
+  // The one deleted `return _tracer` in the old else-arm WAS the whole bug.
+  //
+  // Losing the dormant cap loses no protection: it bounded a hazard the
+  // dormant branch itself created (a loop spinning while no steps accumulate,
+  // so the step cap could never trip). With every line event recorded, the
+  // armed-path check below is reached from the first event of every run, and
+  // the bound is strictly tighter than before -- 5000 steps or 2 MB, rather
+  // than 200,000 dormant events PLUS 5000 recorded ones.
   '_bp_set = set()',
   'for _k in _bp:',
   '    for _l in _bp[_k]:',
   '        _bp_set.add((_k, _l))',
-  '_armed = [not _bp_set]',
-  '_dormant = [0]',
+  // "has a breakpoint line actually executed", not "has recording started".
+  // The initializer is already right for that meaning: True (nothing to
+  // report) when no breakpoints are set, False until one is hit when there are.
+  '_hit = [not _bp_set]',
   'def _tracer(_frame, _event, _arg):',
   '    if not _is_user(_frame.f_code.co_filename):',
   '        return None',
@@ -1869,16 +1882,11 @@ var RECORD_HELPER = [
   // pre-breakpoint prints still ship in the recording's output.
   '    _size[0] += _buf.tell() - _last_out[0]',
   '    _last_out[0] = _buf.tell()',
-  '    if not _armed[0]:',
+  // No early return here: every line event falls through into the recording
+  // path below, breakpoints set or not.
+  '    if not _hit[0]:',
   "        _lbl = _file_label(_frame.f_code.co_filename) or '<main>'",
-  '        if (_lbl, _frame.f_lineno) in _bp_set:',
-  '            _armed[0] = True',
-  '        else:',
-  '            _dormant[0] += 1',
-  '            if _dormant[0] > _max_dormant or _size[0] > _max_bytes:',
-  '                _truncated[0] = True',
-  '                raise _TrinketStopRecording()',
-  '            return _tracer',
+  '        if (_lbl, _frame.f_lineno) in _bp_set: _hit[0] = True',
   // Armed path: per-step dict overhead joins the accounting.
   '    _size[0] += 40',
   '    if len(_steps) >= _max_steps or _size[0] > _max_bytes:',
@@ -1915,7 +1923,7 @@ var RECORD_HELPER = [
   "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",
   '_note_new(_g)',
   '_snaps.append(_snap_ns(_g))',
-  "json.dumps({'error': _err, 'truncated': _truncated[0], 'armed': _armed[0], 'skipped': _dormant[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
+  "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
 ].join('\n');
 
 var debugRec = null;       // active recording ({error, truncated, output, steps, snaps}) or null
@@ -1983,20 +1991,57 @@ function debugShowLine(st) {
 
 // --- Phase 3: gutter breakpoints ---------------------------------------------
 //
-// A breakpoint in the record & replay model pauses nothing — it is a
-// navigation filter over the finished recording (next/prev-breakpoint jumps
-// debugIdx to the nearest matching step), plus a recorder hint: when
-// breakpoints are set, the tracer stays dormant until execution first touches
-// one, so long preambles don't burn the step cap ("deferred recording").
-// Fully dynamic: toggling breakpoints mid-replay updates jump targets
-// instantly.
+// A breakpoint does two things over the finished recording. It is a navigation
+// filter (next/prev-breakpoint jumps debugIdx to the nearest matching step),
+// and it STOPS AUTO MODE: autoplay advances one step and pauses if it lands on
+// a marked line. It no longer gates the recorder in any way -- see the tracer.
+// Fully dynamic: the predicate reads this table live, so toggling a breakpoint
+// mid-replay updates both the jump targets and where autoplay will stop, with
+// no re-record.
 
 var debugBreakpoints = {}; // file name -> { line(1-based): true }
 
 function debugToggleBreakpoint(file, line) {
   var bp = debugBreakpoints[file] || (debugBreakpoints[file] = {});
   if (bp[line]) delete bp[line]; else bp[line] = true;
+  // The panel paints hasBreakpoints/atBreakpoint from this table, so it has to
+  // be told when it changes. Harmless while breakpoints only fed the jump
+  // buttons; wrong the moment any of it is rendered.
+  debugPanelSync();
   return !!bp[line];
+}
+
+// Is the step at i on a line the student has marked? One definition, read live
+// so a breakpoint toggled mid-replay takes effect immediately. The synthetic
+// '<end>' step has a null line, so it can never be mistaken for a breakpoint.
+function debugIsBpStep(i) {
+  if (!debugRec) return false;
+  var st = debugRec.steps[i];
+  if (!st || st.line == null) return false;
+  var f = st.file || mainFile;
+  return !!(debugBreakpoints[f] && debugBreakpoints[f][st.line]);
+}
+
+// Auto mode's single primitive: advance one step, then report why it stopped.
+// ADVANCE FIRST, then test where it landed -- the step it departed from is
+// never tested. That asymmetry is what stops the play button being dead on the
+// very breakpoint the student is parked on: pressing play always moves off it
+// and continues to the NEXT one.
+//
+// It lives here rather than in the panel because breakpoints live here, and it
+// is an action rather than a getState flag so that a paint function never
+// decides control flow -- and so any future in-tab play button inherits the
+// pause for nothing. Deliberately NOT inside debugStepTo: every control routes
+// through that (fwd, back, first, last, both jumps, the slider, the arrow
+// keys), and a refusal there would trap the playhead.
+function debugAutoStep() {
+  if (!debugRec) return 'end';
+  var end = debugRec.steps.length - 1;
+  if (debugIdx >= end) return 'end';
+  debugStepTo(debugIdx + 1);
+  if (debugIdx >= end) return 'end';
+  if (!debugIsBpStep(debugIdx)) return 'moved';
+  return 'breakpoint';
 }
 
 // The line a failed recording died on, for the panel's error banner. Two
@@ -2101,13 +2146,7 @@ function debugJumpBreakpoint(dir) {
     return;
   }
   for (var i = debugIdx + dir; i >= 0 && i < debugRec.steps.length; i += dir) {
-    var st = debugRec.steps[i];
-    if (st.line == null) continue;
-    var f = st.file || mainFile;
-    if (debugBreakpoints[f] && debugBreakpoints[f][st.line]) {
-      debugStepTo(i);
-      return;
-    }
+    if (debugIsBpStep(i)) { debugStepTo(i); return; }
   }
   flashDebugNote(dir > 0 ? 'no breakpoint ahead' : 'no breakpoint behind');
 }
@@ -2282,10 +2321,13 @@ function enterReplay(rec) {
   $('#debug-launch').addClass('hide');
   $('#debug-controls').removeClass('hide');
   var notes = [];
-  // rec.armed is false only when breakpoints were set but never hit;
-  // rec.skipped counts dormant line events before the first breakpoint fired.
-  if (rec.armed === false) notes.push('no breakpoint was reached — nothing recorded');
-  else if (rec.skipped) notes.push('recording started at the first breakpoint');
+  // bpHit is false only when breakpoints were set and none of them ever ran --
+  // a dot on a dead branch, an uncalled def, a blank line, or a file that has
+  // since been renamed. That used to produce an EMPTY recording; now the whole
+  // program is recorded and steppable, and this note says why nothing paused.
+  if (rec.bpHit === false) {
+    notes.push('your breakpoint was not reached — that line never ran');
+  }
   if (rec.truncated) notes.push('recording stopped after ' + (rec.steps.length - 1) + ' steps');
   // Only when the floating panel is absent. With the panel on, the error gets
   // a bold red banner at the TOP of the variables window instead -- "ends with
@@ -2409,15 +2451,15 @@ function runStepThrough() {
             // Secondary .py files sync to the Pyodide FS home dir; frames from
             // there are user code the tracer should step through (Phase 2).
             _user_prefix: '/home/pyodide/',
-            // Phase 3: with breakpoints set, the tracer stays dormant until
-            // one is hit (deferred recording).
+            // Breakpoints are passed in so the recorder can report whether one
+            // was ever REACHED (_hit). They no longer gate recording: see the
+            // tracer's comment on why deferred recording was removed.
             _bp: debugBreakpointPayload(),
             _max_steps: DEBUG_MAX_STEPS,
             _max_vars: DEBUG_MAX_VARS,
             _max_repr: DEBUG_MAX_REPR,
             _max_depth: DEBUG_MAX_DEPTH,
-            _max_bytes: DEBUG_MAX_BYTES,
-            _max_dormant: DEBUG_MAX_DORMANT
+            _max_bytes: DEBUG_MAX_BYTES
           });
           return JSON.parse(pyodide.runPython(RECORD_HELPER, { globals: ns }));
         } finally {
@@ -3948,6 +3990,13 @@ window.TrinketAPI = {
                 , atEnd          : !!(st && st.func === '<end>')
                 , note           : debugBaseNote
                 , hasBreakpoints : debugHasBreakpoints()
+                  // For painting only. The pause itself is actions.autoStep, so
+                  // that a paint value never becomes a control value.
+                , line           : (function() {
+                    var st = debugRec ? debugRec.steps[debugIdx] : null;
+                    return st ? st.line : null;
+                  })()
+                , atBreakpoint   : debugIsBpStep(debugIdx)
                   // The panel is a VIEW, so parsing a traceback is this side's
                   // job, not its own.
                 , hasError       : !!(debugRec && debugRec.error)
@@ -3974,6 +4023,7 @@ window.TrinketAPI = {
               , step   : function(d) { debugStepTo(debugIdx + d); }
               , first  : function() { debugStepTo(0); }
               , last   : function() { debugStepTo(debugRec ? debugRec.steps.length - 1 : 0); }
+              , autoStep : debugAutoStep
               , jumpBp : debugJumpBreakpoint
               , exit   : function() { exitReplay(); }
             }
