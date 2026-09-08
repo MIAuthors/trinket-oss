@@ -1774,10 +1774,39 @@ var RECORD_HELPER = [
   '_truncated = [False]',
   '_buf = io.StringIO()',
   '_last_out = [0]',
+  // Names a library put in the namespace, tracked as execution goes so that
+  // _snap_ns can drop them BEFORE the per-step cap applies. That ordering is
+  // the whole point: _ns.items() runs in insertion order and _snap_ns stops at
+  // _max_vars, so `from sympy import *` fills all fifty slots with sympy
+  // before the student's own two variables are ever reached -- filtering
+  // afterwards, in JS, then leaves nothing at all.
+  //
+  // A `line` event fires BEFORE its line runs, so anything that appeared since
+  // the last event was bound by the PREVIOUS line. If that line was an import,
+  // the new names are library furniture. No blocklist, and it covers
+  // `import x`, `from x import y` and `from x import *` alike.
+  '_src_lines = _user_source.split(chr(10))',
+  '_imported = set()',
+  '_seen = set()',
+  '_prev_line = [0]',
+  '_ns_len = [-1]',
+  'def _is_import_line(_n):',
+  '    if _n <= 0 or _n > len(_src_lines): return False',
+  '    _t = _src_lines[_n - 1].lstrip()',
+  "    if _t.startswith('import '): return True",
+  "    return _t.startswith('from ') and ' import' in _t",
+  'def _note_new(_ns):',
+  '    if len(_ns) == _ns_len[0]: return',
+  '    _ns_len[0] = len(_ns)',
+  '    _new = set(_ns.keys()) - _seen',
+  '    if _new:',
+  '        if _is_import_line(_prev_line[0]): _imported.update(_new)',
+  '        _seen.update(_new)',
   'def _snap_ns(_ns):',
   '    _out = []',
   '    for _name, _val in list(_ns.items()):',
   '        if _name in _SKIP: continue',
+  '        if _name in _imported: continue',
   "        if _name.startswith('__') and _name.endswith('__'): continue",
   '        if isinstance(_val, types.ModuleType): continue',
   '        if isinstance(_val, (types.FunctionType, types.BuiltinFunctionType, types.LambdaType)): continue',
@@ -1858,7 +1887,12 @@ var RECORD_HELPER = [
   '    _d = _depth_of(_frame)',
   '    _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
   "    _steps.append({'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff})",
+  // Only the module frame: imports bind into globals, and the len() guard
+  // keeps this to one comparison per line that actually added a name.
+  '    if _d == 0:',
+  '        _note_new(_frame.f_locals)',
   '    _snaps.append(_snap_ns(_frame.f_locals))',
+  '    _prev_line[0] = _frame.f_lineno if _d == 0 else _prev_line[0]',
   '    return _tracer',
   "_g = {'__name__': '__main__'}",
   '_err = None',
@@ -1879,6 +1913,7 @@ var RECORD_HELPER = [
   'finally:',
   '    sys.stdout, sys.stderr = _old_out, _old_err',
   "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",
+  '_note_new(_g)',
   '_snaps.append(_snap_ns(_g))',
   "json.dumps({'error': _err, 'truncated': _truncated[0], 'armed': _armed[0], 'skipped': _dormant[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
 ].join('\n');
@@ -2175,6 +2210,14 @@ function debugBuildVarModel() {
 
   var order = [], firstStep = {}, fromImport = {};
   for (var k = 0; k < debugRec.snaps.length; k++) {
+    // Main-file steps only. `from lots import *` executes lots.py, and the
+    // tracer follows user modules -- so those steps snapshot THAT module's
+    // globals, where the star-exported names are local and legitimate. They
+    // are not the student's variables, and without this the list filled with
+    // the first fifty of them. A variable defined in a second file the student
+    // wrote is excluded too; that is the deliberate trade.
+    var stp = debugRec.steps[k];
+    if (stp && stp.file) continue;
     var snap = debugRec.snaps[k] || [];
     for (var j = 0; j < snap.length; j++) {
       var nm = snap[j].name;

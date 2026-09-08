@@ -189,7 +189,7 @@
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
     '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
       'text-overflow:ellipsis;flex:1;min-width:0}',
-    '.tk-dbg-recording{font-size:11px;color:#59636e;white-space:nowrap}',
+    '.tk-dbg-recording{font-size:14px;font-weight:600;color:#0969da;white-space:nowrap;letter-spacing:.01em}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
     '.tk-dbg-help{position:absolute;top:calc(100% + 6px);right:0;width:236px;background:#fff;',
