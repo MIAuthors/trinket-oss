@@ -104,11 +104,20 @@
     // Foundation 5 ships `button { margin-bottom: 1.25rem }`, which lands on
     // every control in here and shoves each flex child 20px off the pill's
     // midline. Reset it, or nothing inside will ever centre.
-    // Foundation 5 ships `button { margin-bottom: 1.25rem }` plus background
-    // colours on button, button:hover and button:focus. `button:hover` (0,1,1)
-    // outranks a plain class rule (0,1,0), which is why the grip kept its blue
-    // wash however many times its own background was set to none. Blanket it,
-    // once, for every control in here and any added later.
+    //
+    // It also ships `button:hover, button:focus { background-color; color:#fff }`
+    // at (0,1,1), which outranks any plain class rule (0,1,0) in this file. The
+    // background half is why the grip kept its blue wash however many times its
+    // own background was set to none; blanket that here, once, for every control
+    // and any added later. The COLOUR half is the vanishing-icon bug: a clicked
+    // button is :focus, so its glyph went #fff on the white pill until the
+    // pointer came back (the :hover rule below is (0,2,0) and wins), then went
+    // white again on leaving. Confirmed by real click + screen capture in Chrome
+    // 152 with the colours de-!important-ed: computed color rgb(255,255,255),
+    // zero ink. Every colour a control sets below is therefore !important -- a
+    // new button here needs one too, or Foundation's :focus paints it white.
+    // (Scripted el.focus() in an unfocused browser pane does NOT reproduce it:
+    // :focus only matches while the document itself has focus.)
     '.tk-dbg button,.tk-dbg input,.tk-dbg-vars button{margin:0}',
     '.tk-dbg button,.tk-dbg button:hover,.tk-dbg button:focus,.tk-dbg button:active,',
       '.tk-dbg-vars button,.tk-dbg-vars button:hover,.tk-dbg-vars button:focus,',
@@ -154,6 +163,7 @@
     // is a muted resting colour resolving to the accent on hover, with the
     // tooltip carrying the meaning and opacity alone marking disabled -- a
     // filled rectangle inside a rounded pill reads as a second object.
+    // !important is load-bearing: see the Foundation `button:focus` note above.
     '.tk-dbg-toggle{color:#4a5b69!important}',
     '.tk-dbg-toggle:hover,.tk-dbg-toggle:active{color:#0969da!important;background:none}',
     '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;line-height:1}',
