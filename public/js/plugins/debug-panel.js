@@ -34,6 +34,7 @@
   var $help   = null;
   var $vars   = null;
   var $dock   = null;
+  var varsPlaced = false;  // true once the window has been dragged off the pill
   var dropped = {};     // names the student has dismissed with the red x
   var lifted  = [];     // names promoted with the green arrow, most recent first
   var mounted = false;
@@ -205,6 +206,16 @@
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.2);',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
     '.tk-dbg-help[hidden]{display:none}',
+    // Attached: hung off the dock. Detached: absolute in the layer with its
+    // own left/top, set in JS.
+    // .attached is positioned in JS from the dock's rect; see placeVars().
+    '.tk-dbg-vgrip{display:flex;align-items:center;gap:2px;padding:1px 2px 3px;',
+      'cursor:grab;border:0;background:none;width:100%}',
+    '.tk-dbg-vgrip.dragging{cursor:grabbing}',
+    '.tk-dbg-vgrip span{display:flex;flex-direction:column;gap:2px}',
+    '.tk-dbg-vgrip i{width:3px;height:3px;border-radius:50%;background:#c3cbd3;display:block;',
+      'transition:background 90ms ease}',
+    '.tk-dbg-vgrip:hover i{background:#0969da}',
     '.tk-dbg-help b{font-weight:600}',
     '.tk-dbg-help .dot{display:inline-block;width:9px;height:9px;border-radius:20px 0 0 20px;',
       'background:#cf222e;vertical-align:-1px;margin:0 2px}',
@@ -213,7 +224,7 @@
     // Content-sized rather than pill-width: `x = 3 (int)` needs a fraction of
     // 352px, and a wide box with the name pinned left and the value pinned
     // right made the two hard to read as one statement.
-    '.tk-dbg-vars{position:absolute;top:calc(100% + 6px);left:0;width:max-content;',
+    '.tk-dbg-vars{position:absolute;width:max-content;',
       'min-width:132px;max-width:100%;min-height:34px;background:#fff;border-radius:8px;',
       // resize needs a non-visible overflow, which it already has. The native
       // handle is the bottom-right CORNER only -- browsers give no edge grips
@@ -367,10 +378,27 @@
     $vars = document.createElement('div');
     $vars.className = 'tk-dbg-vars';
     $vars.setAttribute('aria-label', 'Variables so far');
+    $vars.classList.add('attached');
     $vars.hidden = true;
-    $dock.appendChild($vars);
+    // In the LAYER, not the dock: a child of the dock cannot outlive the
+    // dock's position, and the point is to move it independently.
     $layer.appendChild($dock);
+    $layer.appendChild($vars);
+    // Delegated, because paintVars() rewrites innerHTML and replaces the grip.
+    $vars.addEventListener('pointerdown', function (e) {
+      if (!e.target.closest('[data-vgrip]')) return;
+      draggable($vars, '[data-vgrip]', $vars, detachVars);
+      var g = $vars.querySelector('[data-vgrip]');
+      if (g && !g.__wired) {
+        g.__wired = true;
+        g.dispatchEvent(new PointerEvent('pointerdown', {
+          pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY, bubbles: false
+        }));
+      }
+    }, true);
+
     $vars.addEventListener('click', function(e) {
+      if (e.target.closest('[data-vgrip]')) return;   // that is the drag handle
       var b = e.target.closest('[data-vact]');
       if (!b) return;
       var nm = b.getAttribute('data-var');
@@ -443,7 +471,9 @@
   // flight: re-expanding mid-replay must not throw the recording away, and
   // re-expanding after a deliberate exit leaves the launch button to click.
   function setExpanded(on, alsoRecord) {
-    if (!on) { hideHelp(); if ($vars) $vars.hidden = true; }
+    // Coming home on collapse means a window dragged somewhere unhelpful is
+    // always one collapse away from being findable again.
+    if (!on) { hideHelp(); varsPlaced = false; if ($vars) $vars.hidden = true; }
     expanded = on;
     $pill.classList.toggle('open', on);
     var t = $pill.querySelector('[data-act="toggle"]');
@@ -493,6 +523,12 @@
     $help.hidden = false;
     if ($vars) $vars.hidden = true;   // they would sit on top of each other
   }
+
+  var VGRIP = '<button type="button" class="tk-dbg-vgrip" data-vgrip="1"'
+            + ' title="Drag this window" aria-label="Move the variables window;'
+            + ' arrow keys also move it">'
+            + '<span><i></i><i></i><i></i></span><span><i></i><i></i><i></i></span>'
+            + '</button>';
 
   var RM = '<svg width="9" height="9" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor"'
          + ' d="M13 4.2L11.8 3 8 6.8 4.2 3 3 4.2 6.8 8 3 11.8 4.2 13 8 9.2 11.8 13 13 11.8 9.2 8z"/></svg>';
@@ -571,8 +607,40 @@
           + '</div>';
       }
     }
-    $vars.innerHTML = html;
+    $vars.innerHTML = VGRIP + html;
     $vars.hidden = false;
+    placeVars();
+  }
+
+  // Attached: CSS hangs it off the dock and there is nothing to compute.
+  // Detached: it keeps whatever coordinates the student dragged it to, clamped
+  // into the layer so a resize or a window change cannot strand it offscreen.
+  function placeVars() {
+    if (!$vars || $vars.hidden) return;
+    var b = $layer.getBoundingClientRect();
+    if (!varsPlaced) {
+      $vars.classList.add('attached');
+      var dr = $dock.getBoundingClientRect();
+      if (!dr.width) return;
+      $vars.style.left = Math.round(dr.left - b.left) + 'px';
+      $vars.style.top = Math.round(dr.bottom - b.top + 6) + 'px';
+      return;
+    }
+    $vars.classList.remove('attached');
+    var x = parseFloat($vars.style.left) || 0, y = parseFloat($vars.style.top) || 0;
+    $vars.style.left = Math.max(4, Math.min(x, b.width - $vars.offsetWidth - 4)) + 'px';
+    $vars.style.top = Math.max(4, Math.min(y, b.height - 28)) + 'px';
+  }
+
+  // Detaching happens on the first drag: freeze where it currently sits, in
+  // layer coordinates, then let the pointer take over from there.
+  function detachVars() {
+    if (varsPlaced) return;
+    var vr = $vars.getBoundingClientRect(), b = $layer.getBoundingClientRect();
+    varsPlaced = true;
+    $vars.classList.remove('attached');
+    $vars.style.left = Math.round(vr.left - b.left) + 'px';
+    $vars.style.top = Math.round(vr.top - b.top) + 'px';
   }
 
   function escHtml(t) {
@@ -648,6 +716,7 @@
       placeLast = key;
       setTimeout(place, 16);   // not rAF: see armRecording
     }
+    placeVars();   // attached, it hangs off the dock, so it moves when this does
   }
 
   // ---------------------------------------------------------------------
@@ -773,6 +842,52 @@
   // stopped from bubbling -- otherwise they would reach the debugger's
   // document-level stepping handler and step the recording instead of moving
   // the panel. (Adjudicating those keys against Ace is slice 3.)
+  // Pointer drag by a grip, shared by the pill's dock and the variables
+  // window. `onFirstMove` lets the variables window detach itself the moment a
+  // real drag starts rather than on mousedown, so a tap still means "click".
+  function draggable(target, gripSel, root, onFirstMove) {
+    var grip = root.querySelector(gripSel);
+    if (!grip) return;
+    var down = null;
+    function bounds() { return $layer.getBoundingClientRect(); }
+    function put(left, top) {
+      var b = bounds();
+      target.style.left = Math.max(4, Math.min(left, b.width - target.offsetWidth - 4)) + 'px';
+      target.style.top = Math.max(4, Math.min(top, b.height - target.offsetHeight - 4)) + 'px';
+    }
+    grip.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var r = target.getBoundingClientRect(), b = bounds();
+      down = { dx: e.clientX - r.left, dy: e.clientY - r.top, bx: b.left, by: b.top,
+               sx: e.clientX, sy: e.clientY, moved: false };
+      try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+      grip.classList.add('dragging');
+    });
+    grip.addEventListener('pointermove', function (e) {
+      if (!down) return;
+      if (!down.moved && (Math.abs(e.clientX - down.sx) > 4 || Math.abs(e.clientY - down.sy) > 4)) {
+        down.moved = true;
+        if (onFirstMove) onFirstMove();
+        var r = target.getBoundingClientRect(), b = bounds();
+        down.dx = down.sx - r.left; down.dy = down.sy - r.top; down.bx = b.left; down.by = b.top;
+      }
+      if (down.moved) put(e.clientX - down.bx - down.dx, e.clientY - down.by - down.dy);
+    });
+    function end() { if (down) grip.classList.remove('dragging'); down = null; }
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    grip.addEventListener('keydown', function (e) {
+      var map = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] };
+      var d = map[e.key];
+      if (!d) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (onFirstMove) onFirstMove();
+      put((parseFloat(target.style.left) || 0) + d[0], (parseFloat(target.style.top) || 0) + d[1]);
+    });
+  }
+
   function dragging() {
     var grip = $pill.querySelector('[data-grip]');
     var down = null;
@@ -783,6 +898,7 @@
       $dock.style.left = Math.max(4, Math.min(left, b.width - $pill.offsetWidth - 4)) + 'px';
       $dock.style.top  = Math.max(4, Math.min(top,  b.height - $pill.offsetHeight - 4)) + 'px';
       if (draggedSinceDown) placed = true;
+      placeVars();
     }
 
     grip.addEventListener('pointerdown', function(e) {
@@ -827,7 +943,8 @@
       sync();
       // Reposition with the layout while the student has not moved it. Passive
       // and cheap: place() returns immediately once `placed` is true.
-      window.addEventListener('resize', place);
+        window.addEventListener('resize', place);
+      window.addEventListener('resize', placeVars);
     },
     // Called wherever the debugger's own state changes.
     sync: sync,
