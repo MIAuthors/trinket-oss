@@ -209,11 +209,22 @@
     '.tk-dbg-grid > .tk-dbg-note:empty{display:none}',
     // Exit sits outside the grid so it can centre against BOTH rows, and the
     // pill's right edge curls around it.
-    '.tk-dbg-btn.exit{font-size:16px;padding:4px 4px;align-self:center}',
-    // Needs :not(:disabled) to outrank the generic .tk-dbg-btn:hover rule --
-    // they were tied on specificity and the generic one came later, so exit
-    // hovered accent-blue rather than red.
-    '.tk-dbg-btn.exit:hover:not(:disabled){color:#cf222e!important}',
+    // Red AT REST, not only on hover: this is the one control that ends the
+    // session, and a student should be able to see which one that is without
+    // hunting for it with the pointer. It stays the only red thing on the pill,
+    // so red still means exactly one thing here -- the error banner is text,
+    // not a control.
+    //
+    // (0,2,0) beats the generic .tk-dbg-btn's (0,1,0), so the rest colour lands
+    // without !important games. Hover has to work harder: the generic
+    // .tk-dbg-btn:hover:not(:disabled) is (0,3,0) and would repaint it
+    // accent-blue, so the exit's own hover rule keeps its :not(:disabled) to
+    // reach (0,4,0). Deepening rather than changing hue on hover, since the
+    // colour is no longer the thing that changes.
+    '.tk-dbg-btn.exit{font-size:16px;padding:4px 4px;align-self:center;',
+      'color:#cf222e!important}',
+    '.tk-dbg-btn.exit:hover:not(:disabled){color:#a40e26!important}',
+    '.tk-dbg-btn.exit:active:not(:disabled){color:#8b0a1f!important}',
     '.tk-dbg-btn{border:0;background:none!important;cursor:pointer;color:#4a5b69;',
       'padding:3px 4px;line-height:1;flex:0 0 auto;font-size:13px;transition:color 90ms ease;',
       'color:#4a5b69!important}',
