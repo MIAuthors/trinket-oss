@@ -1103,15 +1103,28 @@
   // ---------------------------------------------------------------------
   function wire() {
     $pill.addEventListener('click', function(e) {
+      // CONSUME draggedSinceDown here. It is set by the grip's pointermove and
+      // exists to swallow the click that ends a drag -- but it was cleared in
+      // exactly one place, the grip's own pointerdown, so after dragging the
+      // COLLAPSED pill anywhere, clicking DEBUG did nothing at all, silently
+      // and for ever. The pill's only entry point was dead after an ordinary
+      // "move it out of my way" gesture, and the sole recovery was pressing the
+      // grip again without moving it, which nobody would guess.
+      //
+      // Consumed here rather than cleared in the drag's end(): pointerup fires
+      // BEFORE click, so clearing it there would let the drag's own trailing
+      // click open the pill -- precisely what the flag exists to prevent.
+      var wasDrag = draggedSinceDown;
+      draggedSinceDown = false;
       // Collapsed, the whole pill is the target -- including the grip, so long
       // as the pointer did not actually travel (that is a drag, not a click).
       if (!expanded) {
-        if (!draggedSinceDown) setExpanded(true, true);
+        if (!wasDrag) setExpanded(true, true);
         return;
       }
       // Expanded, the grip is a toggle as well: tap collapses, drag moves.
       if (e.target.closest('[data-grip]')) {
-        if (!draggedSinceDown) setExpanded(false);
+        if (!wasDrag) setExpanded(false);
         return;
       }
       var b = e.target.closest('[data-act]');
@@ -1276,7 +1289,22 @@
       }
       put(e.clientX - down.bx - down.dx, e.clientY - down.by - down.dy);
     });
-    function end() { down = null; $pill.classList.remove('dragging'); }
+    function end() {
+      down = null;
+      $pill.classList.remove('dragging');
+      // Belt and braces for the clamped-edge case. In an ordinary drag the pill
+      // follows the pointer, so the release lands ON the pill and its click
+      // handler consumes draggedSinceDown. But once put() clamps the pill
+      // against the layer edge the pointer keeps going and the release can land
+      // OFF it, so no pill click ever runs and the flag would survive to
+      // swallow the student's next real click.
+      //
+      // DEFERRED, because pointerup fires BEFORE the click that ends the drag
+      // and that click must still be swallowed. setTimeout and not rAF:
+      // requestAnimationFrame does not tick in a hidden or occluded tab, which
+      // would strand the flag exactly where it is hardest to notice.
+      setTimeout(function() { draggedSinceDown = false; }, 0);
+    }
     grip.addEventListener('pointerup', end);
     grip.addEventListener('pointercancel', end);
 
@@ -1313,7 +1341,15 @@
     },
     // Called wherever the debugger's own state changes.
     sync: sync,
-    afterRun: function() { stopPlay(); sync(); },
+    // A normal Run also answers the edit-exit message: the student has moved on
+    // from editing and is looking at output. sync() alone could not clear it --
+    // showResult calls exitReplay(true), which returns at its own first line
+    // because debugRec is already null, so the panel is never told; and sync's
+    // own clear only fires while recording or replaying, neither of which a
+    // plain Run is. Without this the message and the "Restart Debugger" label
+    // sat there run after run, describing an edit several runs old, with no
+    // control to dismiss it.
+    afterRun: function() { editExited = false; stopPlay(); sync(); },
     // Editing invalidates the recording's line numbers, so a marching
     // highlight would be walking over code that no longer means anything.
     // wasReplaying is passed by pyodide.js, which has already called
