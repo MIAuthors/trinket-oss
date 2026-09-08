@@ -560,6 +560,12 @@
   {% if config.features.plotStyle %}
     {% set js = js.concat(['/js/vendor/plotpolish.iife.js', '/js/plugins/plotpolish-adapter.js']) %}
   {% endif %}
+  {# Same reasoning as the block above: appended after pyodide.js, and read only
+     from inside initialize(). Requires stepDebugger -- the panel drives that
+     debugger's own functions and has nothing to show without it. #}
+  {% if config.features.stepDebugger and config.features.debugPanel %}
+    {% set js = js.concat(['/js/plugins/debug-panel.js']) %}
+  {% endif %}
   {{ cachify_js('embed-pyodide', js) | safe }}
 
   {% endif %}

@@ -1723,6 +1723,23 @@ function stepDebuggerEnabled() {
     && !!(window.trinket && window.trinket.config && window.trinket.config.stepDebugger);
 }
 
+// The floating panel (public/js/plugins/debug-panel.js) is a view over the
+// state below and owns none of it. Requires stepDebugger, because it drives
+// that debugger's own functions.
+function debugPanelEnabled() {
+  return stepDebuggerEnabled()
+    && !!(window.trinket && window.trinket.config && window.trinket.config.debugPanel);
+}
+
+// Tell the panel the debugger's state moved. Called from every place that
+// already repaints the in-tab controls, so the two views cannot disagree.
+// A no-op when the flag is off, and guarded so a panel bug can never break
+// stepping -- the in-tab controls stay authoritative.
+function debugPanelSync() {
+  if (!window.trinketDebugPanel) return;
+  try { trinketDebugPanel.sync(); } catch (e) {}
+}
+
 // Recorder caps (see the MVP doc). The step/size caps abort the traced exec
 // from INSIDE the tracer — that's what bounds `while True:` on the main
 // thread, where JS cannot interrupt synchronous Python.
@@ -2098,6 +2115,7 @@ function renderDebugStep() {
                   st,
                   debugIdx > 0 ? debugRec.snaps[debugIdx - 1] : null);
   debugShowLine(st);
+  debugPanelSync();
   if (jqconsole) {
     var wantErr = isEnd && !!debugRec.error;
     if (debugLastOut === -1 || st.out < debugLastOut || wantErr !== debugErrShown) {
@@ -2146,7 +2164,7 @@ function enterReplay(rec) {
   debugBaseNote = notes.join(' · ');
   $('#debug-note').text(debugBaseNote);
   showVariables();
-  renderDebugStep();
+  renderDebugStep();   // ends in debugPanelSync()
 }
 
 // Leave replay mode. `quiet` skips the console restore — used by callers that
@@ -2178,6 +2196,7 @@ function exitReplay(quiet) {
     if (rec.error) consoleWrite('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
   }
   paintVariables();
+  debugPanelSync();
 }
 
 // Run the program under the recorder, then enter replay. Mirrors startRun's
@@ -2191,6 +2210,7 @@ function runStepThrough() {
   debugCancelled = false;
   $('#debug-launch').addClass('hide');
   $('#debug-recording').removeClass('hide');
+  debugPanelSync();
 
   // `ran` says whether the recorder actually executed the program. The bails
   // above it (debugCancelled, a normal run got in first, VPython, console) resolve
@@ -2208,6 +2228,7 @@ function runStepThrough() {
     if (ran && window.trinketPlotpolish) {
       try { trinketPlotpolish.afterRun('main'); } catch (e) {}
     }
+    debugPanelSync();
   }
 
   ensurePyodide().then(function() {
@@ -3226,6 +3247,11 @@ function finishRun(serializedCode, err) {
     try { trinketPlotpolish.afterRun(window.__trinketRuntime); } catch (e) {}
   }
 
+  // The panel's "is there anything to step?" answer can change with a run.
+  if (window.trinketDebugPanel) {
+    try { trinketDebugPanel.afterRun(window.__trinketRuntime); } catch (e) {}
+  }
+
   // A Run was clicked while the previous (VPython) run was being cancelled;
   // now that it has stopped, start the fresh run.
   if (rerunQueued) {
@@ -3711,6 +3737,9 @@ window.TrinketAPI = {
       if (window.trinketPlotpolish) {
         try { trinketPlotpolish.onEditorChange(); } catch (e) {}
       }
+      if (window.trinketDebugPanel) {
+        try { trinketDebugPanel.onEditorChange(); } catch (e) {}
+      }
     });
 
     // The plot-style panel lives in public/js/plugins/plotpolish-adapter.js.
@@ -3730,6 +3759,47 @@ window.TrinketAPI = {
               // (wasReplActive) -- this is the sibling that guard was missing.
               return running || debugRecording || replEvaluating
                   || (workerClient && workerClient.isRunning());
+            }
+        });
+      } catch (e) {}
+    }
+
+    // The floating debugger panel lives in public/js/plugins/debug-panel.js.
+    // Same handover reason as plotpolish above: this file is a closure, so the
+    // replay state and its actions are not reachable from out there. The panel
+    // is a VIEW -- it reads getState() and calls back into these functions;
+    // it holds no debugger state of its own, and the in-tab controls keep
+    // working whether it is present or not.
+    if (debugPanelEnabled() && window.trinketDebugPanel) {
+      try {
+        trinketDebugPanel.init({
+            isAvailable : function() {
+              // Slice 1: available whenever the debugger is. The "only after a
+              // Run, only with >= 2 non-import lines, never for VPython" rule
+              // is slice 2 and belongs here.
+              return stepDebuggerEnabled();
+            }
+          , getState : function() {
+              var st = debugRec ? debugRec.steps[debugIdx] : null;
+              return {
+                  recording      : debugRecording
+                , replaying      : !!debugRec
+                , idx            : debugIdx
+                , total          : debugRec ? debugRec.steps.length - 1 : 0
+                , atEnd          : !!(st && st.func === '<end>')
+                , note           : debugBaseNote
+                , hasBreakpoints : debugHasBreakpoints()
+              };
+            }
+          , actions : {
+                start  : runStepThrough
+              , cancel : function() { debugCancelled = true; }
+              , stepTo : debugStepTo
+              , step   : function(d) { debugStepTo(debugIdx + d); }
+              , first  : function() { debugStepTo(0); }
+              , last   : function() { debugStepTo(debugRec ? debugRec.steps.length - 1 : 0); }
+              , jumpBp : debugJumpBreakpoint
+              , exit   : function() { exitReplay(); }
             }
         });
       } catch (e) {}
