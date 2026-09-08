@@ -136,7 +136,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:326px;height:86px}',
+    '.tk-dbg.open{width:334px;height:86px}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -217,11 +217,12 @@
     '.tk-dbg-btn.primary .fa{font-size:14px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
-    '.tk-dbg-slider{flex:0 1 104px;min-width:56px;margin:0 0 3px;accent-color:#0969da;height:14px}',
-    '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;padding-bottom:3px;',
-      'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
+    '.tk-dbg-slidewrap{flex:1;min-width:56px;height:21px;display:flex;align-items:center;',
+      'align-self:flex-end}',
+    '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
+
     '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
-      'text-overflow:ellipsis;flex:1;min-width:0}',
+      'text-overflow:ellipsis;flex:0 1 auto;min-width:0;align-self:flex-end;padding-bottom:6px}',
     '.tk-dbg-recording{font-size:14px;font-weight:600;color:#0969da;white-space:nowrap;letter-spacing:.01em}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     // A hairline round-rect says "these three are one subject" without adding
@@ -235,6 +236,9 @@
     '.tk-dbg-box{display:flex;align-items:center;gap:0;',
       'border:1px solid #dfe4ea;border-radius:999px;padding:0 2px}',
     '.tk-dbg-grp.active .tk-dbg-box{border-color:#0969da;background:#f2f8fe}',
+    // The transport is the busiest box and has the room, so give its five
+    // controls some air.
+    '.tk-dbg-grp.auto .tk-dbg-box{gap:3px;padding:0 4px}',
     '.tk-dbg-grp.active .tk-dbg-cap{color:#0969da}',
     // A speed multiplier riding the glyph: 2 and 5 read at this size where a
     // second chevron would not.
@@ -286,7 +290,8 @@
       'align-items:center;padding:2px 6px 2px 3px;border-top:1px solid #f1f4f7;border-radius:4px}',
     '.tk-dbg-vrow:first-child{border-top:0}',
     '.tk-dbg-stmt{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;',
-      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:4px}',
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:4px;',
+      'cursor:default}',
     '.tk-dbg-vn{color:#1a7f37}',
     '.tk-dbg-vv{color:#1f2328;font-variant-numeric:tabular-nums}',
     '.tk-dbg-vt{color:#8794a1}',
@@ -384,9 +389,10 @@
     +           btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
     +         '</span>'
     +       '</span>'
-    +       '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
-    +         ' aria-label="Step position">'
-    +       '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
+    +       '<span class="tk-dbg-slidewrap">'
+    +         '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
+    +           ' aria-label="Step position">'
+    +       '</span>'
     +       '<span class="tk-dbg-note" data-el="note"></span>'
     +     '</span>'
 
@@ -628,6 +634,12 @@
   // Opt-OUT, not opt-in: every variable the student defines appears here by
   // itself, in the order it came into existence, and grows as they step. A
   // list you have to go and build is a list nobody builds.
+  var VAL_CHARS = 34;   // displayed; the tooltip carries what the recorder kept
+
+  function clipVal(v) {
+    return v.length > VAL_CHARS ? v.slice(0, VAL_CHARS - 1) + '\u2026' : v;
+  }
+
   function paintVars() {
     if (!mounted || !ctx || !ctx.getVarModel) return;
     var s = {};
@@ -678,10 +690,11 @@
         // most recent update there has been.
         var changed = v !== null && (was[n2] === undefined || was[n2] !== v);
         var ty = n2 in types ? types[n2] : null;
+        var shown = v === null ? null : clipVal(v);
         var stmt = v === null
           ? escHtml(n2) + ' <span class="tk-dbg-vt">not defined yet</span>'
           : '<span class="tk-dbg-vn">' + escHtml(n2) + '</span> = '
-              + '<span class="tk-dbg-vv">' + escHtml(v) + '</span>'
+              + '<span class="tk-dbg-vv">' + escHtml(shown) + '</span>'
               + (ty ? ' <span class="tk-dbg-vt">(' + escHtml(ty) + ')</span>' : '');
         html += '<div class="tk-dbg-vrow' + (changed ? ' changed' : '') + '">'
           + '<button type="button" class="tk-dbg-vbtn rm" data-vact="rm" data-var="' + escAttr(n2)
@@ -692,7 +705,9 @@
           + (lifted.indexOf(n2) >= 0) + '" title="'
           + (lifted.indexOf(n2) >= 0 ? escAttr(n2) + ' is pinned to the top' : 'Move ' + escAttr(n2) + ' to the top')
           + '">' + UP + '</button>'
-          + '<span class="tk-dbg-stmt" title="' + escAttr(n2 + (v === null ? ' is not defined at this step' : ' = ' + v)) + '">'
+          + '<span class="tk-dbg-stmt" title="'
+          + escAttr(v === null ? n2 + ' is not defined at this step'
+                    : n2 + ' = ' + v + (v.length > VAL_CHARS ? '' : '')) + '">'
           + stmt + '</span>'
           + '</div>';
       }
@@ -855,7 +870,9 @@
       var slider = $pill.querySelector('[data-act="slider"]');
       slider.max = s.total;
       slider.value = s.idx;
-      el('pos').textContent = s.atEnd ? 'end' : (s.idx + 1) + ' / ' + s.total;
+      slider.title = s.atEnd
+        ? 'The end of the recording \u2014 drag to go back'
+        : 'Step ' + (s.idx + 1) + ' of ' + s.total + ' \u2014 drag to scrub';
       el('note').textContent = s.note || '';
       var atStart = s.idx <= 0, atEnd = s.idx >= s.total;
       $pill.querySelector('[data-act="first"]').disabled = atStart;
@@ -1054,6 +1071,14 @@
       // and cheap: place() returns immediately once `placed` is true.
         window.addEventListener('resize', place);
       window.addEventListener('resize', placeVars);
+      // The pill's width/height are transitioned, so anything measured against
+      // it has to be re-measured once the transition lands.
+      $pill.addEventListener('transitionend', function (e) {
+        if (e.propertyName === 'width' || e.propertyName === 'height') {
+          place();
+          placeVars();
+        }
+      });
     },
     // Called wherever the debugger's own state changes.
     sync: sync,
