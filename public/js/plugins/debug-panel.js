@@ -43,12 +43,21 @@
 
   // A transient line in the panel's own note slot, for things the debugger
   // itself has no note for.
+  // NOTHING the panel has to say goes in the pill. The pill is full by design:
+  // 296x84 holding three captioned boxes, a slider and an exit, settled over
+  // ten rounds at the screen. Every message -- this transient one, the
+  // recorder's own persistent notes, the error banner and the edit-exit line --
+  // renders at the TOP OF THE VARIABLES WINDOW instead, which is where the
+  // student is already looking and which can grow.
+  //
+  // Held as state and painted by paintVars rather than written to a node, so
+  // there is no element in the pill for a message to land in even by mistake.
+  var transientNote = '';
   function note(msg) {
-    var n = el('note');
-    if (!n) return;
-    n.textContent = msg;
+    transientNote = msg || '';
     if (noteTimer) clearTimeout(noteTimer);
-    noteTimer = setTimeout(function () { if (el('note')) el('note').textContent = ''; }, 6000);
+    noteTimer = setTimeout(function () { transientNote = ''; paintVars(); }, 6000);
+    paintVars();
   }
 
   var varsPlaced = false;  // true once the window has been dragged off the pill
@@ -205,10 +214,6 @@
     // occupied 6px plus a gap at the BOTTOM, which is what pushed everything
     // visible upward and left 2px of margin above against 13px below. Out of
     // flow until it has something to say.
-    // Out of flow until it has something to say: an empty grid child still
-    // occupied a row plus a gap, which is what used to push all the visible
-    // content upward. Same rule now that it is a body child.
-    '.tk-dbg-body > .tk-dbg-note:empty{display:none}',
     // Exit sits outside the grid so it can centre against BOTH rows, and the
     // pill's right edge curls around it.
     // Red AT REST, not only on hover: this is the one control that ends the
@@ -258,8 +263,11 @@
     '.tk-dbg-slider{width:100%;min-width:0;flex:none;margin:0;accent-color:#0969da;',
       'height:14px}',
 
-    '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
-      'text-overflow:ellipsis;flex:0 1 auto;min-width:0;align-self:flex-end;padding-bottom:6px}',
+    // Messages, at the top of the variables window. Wraps -- these are
+    // sentences, and this window can grow where the pill cannot.
+    '.tk-dbg-vnote{font-size:11px;line-height:1.4;color:#59636e;',
+      'padding:1px 3px 4px;max-width:236px;white-space:normal;',
+      'overflow-wrap:break-word}',
     '.tk-dbg-recording{font-size:14px;font-weight:600;color:#0969da;white-space:nowrap;letter-spacing:.01em}',
     // Centred in the pill rather than pinned left: in the launch state it is
     // the only thing in the body, and after an edit-exit it is the one thing
@@ -535,7 +543,6 @@
     // the exit button, which is itself inside the controls group, so it moved
     // out of the grid and no further; verified by walking the ancestry in the
     // live embed.)
-    +   '<span class="tk-dbg-note" data-el="note"></span>'
     + '</span>';
 
   function mount() {
@@ -850,32 +857,15 @@
     placeVars();
   }
 
-  function paintVars() {
-    if (!mounted || !ctx || !ctx.getVarModel) return;
-    var s = {};
-    try { s = ctx.getState() || {}; } catch (e) { s = {}; }
-    if (!s.replaying || !expanded) {
-      // Editing ended the replay, so say so where the values used to be. This
-      // window is the right channel for it and #debug-note is not: the note
-      // lives inside #debug-controls, which is only un-hidden DURING replay,
-      // so anything written there at exit time goes into a display:none box.
-      if (editExited && expanded) {
-        $vars.innerHTML = VGRIP + '<div class="tk-dbg-vmsg">'
-          + 'Step-through debugger exited so you can edit the code.</div>';
-        $vars.hidden = false;
-        placeVars();
-        return;
-      }
-      $vars.hidden = true;
-      return;
-    }
-
-    // Top of the window, bold and red: the one thing worth knowing before any
-    // value. Shown for the whole replay, not only at the last step -- the run
-    // ends badly whichever step you are looking at.
-    var err = '';
+  // Everything the panel has to say, composed in one place and rendered at the
+  // top of the variables window. Order is worst-first: the error outranks a
+  // note, and both outrank the values.
+  function saysHtml(s) {
+    var out = '';
+    // Bold and red, and shown for the WHOLE replay rather than only at the last
+    // step -- the run ends badly whichever step you are looking at.
     if (s.hasError) {
-      err = '<div class="tk-dbg-verr">'
+      out += '<div class="tk-dbg-verr">'
           + '<b>' + (s.errorLine ? 'Error on line ' + s.errorLine : 'Error')
           + '</b>'
           // WHAT is wrong, not only where. Where alone sends a student to the
@@ -883,6 +873,46 @@
           // what to change.
           + (s.errorMsg ? '<span>' + escHtml(s.errorMsg) + '</span>' : '')
           + '</div>';
+    }
+    // Parked on the synthetic <end> step: the program ran to completion and
+    // there is nothing further to step to. Derived from state rather than from
+    // autoplay's return value, so it is equally true when the student walks
+    // there by hand or presses jump-to-last -- and it cannot be left stale,
+    // because stepping back clears it on the next paint.
+    //
+    // Suppressed when the recording carries an error: it did not reach the end
+    // SUCCESSFULLY, and the red banner above is the fact that matters.
+    if (s.atEnd && !s.hasError) {
+      out += '<div class="tk-dbg-vnote">Reached the end &amp; stopped</div>';
+    }
+    // s.note is the recorder's own persistent note (truncation, "your
+    // breakpoint was not reached"); transientNote is the panel's own, and the
+    // two are different sentences about different things, so both can show.
+    var msgs = [];
+    if (s.note) msgs.push(s.note);
+    if (transientNote) msgs.push(transientNote);
+    for (var i = 0; i < msgs.length; i++) {
+      out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
+    }
+    return out;
+  }
+
+  function paintVars() {
+    if (!mounted || !ctx || !ctx.getVarModel) return;
+    var s = {};
+    try { s = ctx.getState() || {}; } catch (e) { s = {}; }
+    var err = saysHtml(s);
+
+    if (!expanded) { $vars.hidden = true; return; }
+    if (!s.replaying) {
+      // Not replaying, but there may still be plenty to say: the edit-exit
+      // line, the ~30s "still running" give-up, a VPython or console bail.
+      if (editExited) {
+        err += '<div class="tk-dbg-vmsg">'
+             + 'Step-through debugger exited so you can edit the code.</div>';
+      }
+      varsHtml(err);
+      return;
     }
 
     var model = null, now = [], prev = [];
@@ -1132,7 +1162,6 @@
       slider.title = s.atEnd
         ? 'The end of the recording \u2014 drag to go back'
         : 'Step ' + (s.idx + 1) + ' of ' + s.total + ' \u2014 drag to scrub';
-      el('note').textContent = s.note || '';
       var atStart = s.idx <= 0, atEnd = s.idx >= s.total;
       $pill.querySelector('[data-act="first"]').disabled = atStart;
       $pill.querySelector('[data-act="back"]').disabled = atStart;
