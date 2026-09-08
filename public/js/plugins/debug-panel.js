@@ -136,7 +136,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:412px;height:88px}',
+    '.tk-dbg.open{width:326px;height:86px}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -177,7 +177,7 @@
     '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
     '.tk-dbg-bug{display:block;color:inherit}',
     '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
-      'gap:2px;padding:0 8px 0 6px;min-width:0;flex:1;overflow:hidden}',
+      'gap:5px;padding:2px 8px 2px 6px;min-width:0;flex:1;overflow:hidden}',
     '.tk-dbg.open .tk-dbg-body{display:flex}',
     // Row 1 transport + jumps + exit; row 2 the slider and its counter.
     '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
@@ -212,8 +212,8 @@
     '.tk-dbg-btn.primary .fa{font-size:14px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
-    '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
-    '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;',
+    '.tk-dbg-slider{flex:0 1 104px;min-width:56px;margin:0 0 3px;accent-color:#0969da;height:14px}',
+    '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;padding-bottom:3px;',
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
     '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
       'text-overflow:ellipsis;flex:1;min-width:0}',
@@ -233,9 +233,9 @@
     '.tk-dbg-grp.active .tk-dbg-cap{color:#0969da}',
     // A speed multiplier riding the glyph: 2 and 5 read at this size where a
     // second chevron would not.
-    '.tk-dbg-btn .sp{font-size:7.5px;font-weight:700;vertical-align:super;',
-      'margin-left:-1px;letter-spacing:0}',
-    '.tk-dbg-row.top{align-items:flex-end;gap:7px}',
+
+    '.tk-dbg-row.top{align-items:flex-end;gap:8px}',
+    '.tk-dbg-row.two{align-items:flex-end;gap:7px}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
     '.tk-dbg-help{position:absolute;top:calc(100% + 6px);right:0;width:236px;background:#fff;',
       'border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.45;color:#1f2328;',
@@ -314,14 +314,6 @@
   // ---------------------------------------------------------------------
   // Markup
   // ---------------------------------------------------------------------
-  // A transport button carrying its speed as a superscript.
-  function spd(id, icon, mult, title) {
-    return '<button type="button" class="tk-dbg-btn" data-act="' + id + '"'
-         + ' aria-pressed="false" title="' + title + '" aria-label="' + title + '">'
-         + '<i class="fa ' + icon + '" aria-hidden="true"></i>'
-         + '<span class="sp" aria-hidden="true">' + mult + '</span></button>';
-  }
-
   function btn(id, icon, title, cls) {
     return '<button type="button" class="tk-dbg-btn' + (cls ? ' ' + cls : '') + '"'
          + ' data-act="' + id + '" title="' + title + '" aria-label="' + title + '">'
@@ -362,21 +354,24 @@
     +         '<span class="tk-dbg-box">'
     +           btn('first', 'fa-fast-backward', 'Back to the first step')
     +           btn('back', 'fa-step-backward', 'Back one line')
-    +           btn('fwd', 'fa-play', 'Run the next line')
+    +           btn('fwd', 'fa-step-forward', 'Run the next line')
     +           btn('last', 'fa-fast-forward', 'Forward to the last step')
     +         '</span>'
     +       '</span>'
     +       '<span class="tk-dbg-grp auto"><span class="tk-dbg-cap">Auto mode</span>'
     +         '<span class="tk-dbg-box">'
-    +           spd('rw5', 'fa-backward', '5', 'Rewind at 5 lines per second')
-    +           spd('rw2', 'fa-backward', '2', 'Rewind at 2 lines per second')
+    +           btn('rw5', 'fa-angle-double-left', 'Rewind at 5 lines per second')
+    +           btn('rw2', 'fa-backward', 'Rewind at 2 lines per second')
     +           '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
     +             ' title="Play at 1 line per second" aria-label="Play or pause">'
     +             '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
-    +           spd('ff2', 'fa-forward', '2', 'Play at 2 lines per second')
-    +           spd('ff5', 'fa-forward', '5', 'Play at 5 lines per second')
+    +           btn('ff2', 'fa-forward', 'Play at 2 lines per second')
+    +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second')
     +         '</span>'
     +       '</span>'
+    +       btn('exit', 'fa-times', 'Exit step-through')
+    +     '</span>'
+    +     '<span class="tk-dbg-row two">'
     +       '<span class="tk-dbg-grp"><span class="tk-dbg-cap">Breakpoints</span>'
     +         '<span class="tk-dbg-box">'
     +           btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
@@ -384,9 +379,6 @@
     +           btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
     +         '</span>'
     +       '</span>'
-    +       btn('exit', 'fa-times', 'Exit step-through')
-    +     '</span>'
-    +     '<span class="tk-dbg-row two">'
     +       '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
     +         ' aria-label="Step position">'
     +       '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
