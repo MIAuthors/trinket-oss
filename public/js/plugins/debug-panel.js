@@ -319,6 +319,11 @@
     '.tk-dbg-vgrip i{width:3px;height:3px;border-radius:50%;background:#c3cbd3;display:block;',
       'transition:background 90ms ease}',
     '.tk-dbg-vgrip:hover i{background:#0969da}',
+    // The error banner. Red is otherwise reserved on this panel for the one
+    // control that ends the session -- this is text rather than a control, and
+    // error-red is a strong enough convention to be worth the second use.
+    '.tk-dbg-verr{font-size:11.5px;font-weight:700;color:#cf222e;',
+      'padding:1px 3px 5px;line-height:1.35;white-space:nowrap}',
     // The edit-exit message, in the slot the variable rows normally fill. Set
     // on the element itself, never only on the wrapper: Foundation styles bare
     // block text and an explicit rule on the element beats inheritance.
@@ -765,6 +770,18 @@
     return v.length > VAL_CHARS ? v.slice(0, VAL_CHARS - 1) + '\u2026' : v;
   }
 
+  // Renders the variables window with whatever there is to show, or hides it
+  // when there is nothing at all. Needed because an error banner has to appear
+  // even in the states that used to hide the window outright -- a syntax error
+  // records zero steps, so there is no model and no rows, and that is exactly
+  // when the student most needs telling why.
+  function varsHtml(inner) {
+    if (!inner) { $vars.hidden = true; return; }
+    $vars.innerHTML = VGRIP + inner;
+    $vars.hidden = false;
+    placeVars();
+  }
+
   function paintVars() {
     if (!mounted || !ctx || !ctx.getVarModel) return;
     var s = {};
@@ -785,13 +802,24 @@
       return;
     }
 
+    // Top of the window, bold and red: the one thing worth knowing before any
+    // value. Shown for the whole replay, not only at the last step -- the run
+    // ends badly whichever step you are looking at.
+    var err = '';
+    if (s.hasError) {
+      err = '<div class="tk-dbg-verr">'
+          + (s.errorLine ? 'Error on line ' + s.errorLine
+                         : 'The program ended with an error')
+          + '</div>';
+    }
+
     var model = null, now = [], prev = [];
     try {
       model = ctx.getVarModel();
       now   = ctx.getVars(s.idx) || [];
       prev  = s.idx > 0 ? (ctx.getVars(s.idx - 1) || []) : [];
-    } catch (e) { $vars.hidden = true; return; }
-    if (!model) { $vars.hidden = true; return; }
+    } catch (e) { varsHtml(err); return; }
+    if (!model) { varsHtml(err); return; }
 
     var vals = Object.create(null), was = Object.create(null);
     var types = Object.create(null), i;
@@ -823,7 +851,7 @@
       return la - lb;
     });
 
-    if (!names.length && !hidden) { $vars.hidden = true; return; }
+    if (!names.length && !hidden) { varsHtml(err); return; }
 
     var html = '';
     {
@@ -860,9 +888,7 @@
       html += '<button type="button" class="tk-dbg-showall" data-vact="showall">'
             + hidden + ' hidden \u2014 show all</button>';
     }
-    $vars.innerHTML = VGRIP + html;
-    $vars.hidden = false;
-    placeVars();
+    varsHtml(err + html);
   }
 
   // Attached: CSS hangs it off the dock and there is nothing to compute.

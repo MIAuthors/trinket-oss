@@ -1999,6 +1999,25 @@ function debugToggleBreakpoint(file, line) {
   return !!bp[line];
 }
 
+// The line a failed recording died on, for the panel's error banner. Two
+// sources, because the two failure kinds leave different evidence: a RUNTIME
+// error has real steps, so the last one the tracer reached carries the line; a
+// SYNTAX error never ran at all, so the only record of it is the traceback
+// text, where Pyodide writes `File "<debug>", line N`. Last match rather than
+// first, so a multi-frame traceback reports the innermost frame.
+function debugErrorLine() {
+  if (!debugRec || !debugRec.error) return null;
+  var steps = debugRec.steps || [];
+  for (var i = steps.length - 1; i >= 0; i--) {
+    if (steps[i] && steps[i].func !== '<end>' && steps[i].line != null) {
+      return steps[i].line;
+    }
+  }
+  var re = /line (\d+)/g, m = null, x;
+  while ((x = re.exec(debugRec.error)) !== null) m = x;
+  return m ? parseInt(m[1], 10) : null;
+}
+
 function debugHasBreakpoints() {
   for (var f in debugBreakpoints) {
     for (var l in debugBreakpoints[f]) return true;
@@ -2254,7 +2273,13 @@ function enterReplay(rec) {
   if (rec.armed === false) notes.push('no breakpoint was reached — nothing recorded');
   else if (rec.skipped) notes.push('recording started at the first breakpoint');
   if (rec.truncated) notes.push('recording stopped after ' + (rec.steps.length - 1) + ' steps');
-  if (rec.error) notes.push('ends with an error');
+  // Only when the floating panel is absent. With the panel on, the error gets
+  // a bold red banner at the TOP of the variables window instead -- "ends with
+  // an error" at the foot of the pill said nothing actionable, and the actual
+  // traceback lives in the console, which sits in an output pane the student
+  // is not looking at while they step. Without the panel this note is the only
+  // channel there is, so it stays.
+  if (rec.error && !debugPanelEnabled()) notes.push('ends with an error');
   debugBaseNote = notes.join(' · ');
   $('#debug-note').text(debugBaseNote);
   // Without the floating panel the controls only exist inside the Variables
@@ -3909,6 +3934,10 @@ window.TrinketAPI = {
                 , atEnd          : !!(st && st.func === '<end>')
                 , note           : debugBaseNote
                 , hasBreakpoints : debugHasBreakpoints()
+                  // The panel is a VIEW, so parsing a traceback is this side's
+                  // job, not its own.
+                , hasError       : !!(debugRec && debugRec.error)
+                , errorLine      : debugErrorLine()
                   // The panel starts a recording on the same click that opens
                   // it, and runStepThrough() refuses while anything else is
                   // executing. Without knowing that, the panel would open and
