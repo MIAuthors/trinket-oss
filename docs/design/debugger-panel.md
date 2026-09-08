@@ -312,3 +312,37 @@ and the multiplier sits almost entirely in items 1-4 above rather than in the
 code scoped in section 5. Note also that the ledger's own line for this work,
 **"03 debugger UX (2 d)"**, is what 4-6 d is replacing — so the estimate has
 already grown 2-3x on inspection, before any of the plotpolish-style overrun.
+
+## 8. Larry's own time, as a ratio to plotpolish
+
+Asked 2026-09-08: not engineer-days, but **how much of Larry's time** this
+costs relative to plotpolish. A judgment call, not a measurement.
+
+Headline: **~0.5-0.7x of plotpolish for slices 0-4.** Including the VPython
+frame scrubber (slice 6), **~1.0-1.3x.**
+
+His time on plotpolish broke down as design judgment, hands-on verification,
+and process (review clicks, releases, merge chasing). Those three move in
+different directions here:
+
+| Category | vs plotpolish | Why |
+|---|---|---|
+| Design / UX judgment | **~0.3-0.5x** | The pill, grip, collapsed state and drag were designed three times and two were thrown away. That component now exists and he has already approved it; the screenshot settles the collapsed state. What is left unspecified is the expanded panel's contents — one or two rounds, not three. |
+| Hands-on verification | **~1.5-2x** | The higher figure, and the important one. plotpolish's claim ("the style applies") is checkable by tests plus a glance. This feature's claim — "step and watch the plot redraw" — is a *feel* claim: stepping latency, whether a captured frame lags the highlighted line, whether the pill fights Ace's arrow keys, and whether the `fig.stale` capture policy picks the right frames **for his actual teaching programs**. None of that is reachable by tests or by an agent; it needs him running real classroom code and reacting. |
+| Process | **~0.2-0.4x** | No new repo, no release pipeline, no version gates, no packaging. One or two PRs against ~9, so far fewer Copilot passes to click through, and no release decisions. |
+| Pedagogical calls | new, unavoidable | What a student should see at step *k*; whether the fresh-namespace re-run is acceptable; one figure or all. His expertise, not delegable. |
+
+**Why VPython flips it.** Slice 6 is a spike whose value can only be judged by
+eye — nobody can tell from a diff whether scrubbing a 3D scene teaches
+anything. Its verification cost alone is comparable to plotpolish's entire
+design cost, which is why it should carry its own prototype and its own
+decision, separately from slices 0-4.
+
+**The lever.** Verification is now the dominant term in his time, so the way
+to cut it is to make the prototype (slice 0) run on **his own teaching
+programs**, not on invented demo code. A canned recording of a plotting loop
+he actually assigns settles the capture policy and the feel question before any
+Trinket file is touched, and moves the expensive category earlier and cheaper.
+
+**What would falsify this.** If the expanded panel takes three design rounds
+like plotpolish did, the ratio goes to ~1x on slices 0-4 alone.
