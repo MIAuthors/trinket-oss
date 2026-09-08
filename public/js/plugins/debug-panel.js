@@ -35,7 +35,7 @@
   var placed  = false;  // true once the student has dragged it; stop auto-placing
   var placeTries = 0;   // bounded retries while the layout is still settling
   var placeLast  = null; // last computed left/top, to detect convergence
-  var expanded = true;
+  var expanded = false;
 
   // ---------------------------------------------------------------------
   // Where the layer lives, and why it is not just `position: fixed`
@@ -81,15 +81,27 @@
   // features are on the plot-style pill still wins its own corner.
   var CSS = [
     '.tk-dbg-layer{position:absolute;inset:0;pointer-events:none;z-index:1200}',
-    '.tk-dbg{position:absolute;display:flex;align-items:stretch;pointer-events:auto;',
-      'background:#ddf0ff;border:1px solid #d0d7de;border-radius:999px;',
-      'height:32px;user-select:none;-webkit-user-select:none;',
-      'box-shadow:0 4px 14px rgba(0,0,0,.22);font-size:13px;',
+    '.tk-dbg,.tk-dbg *{box-sizing:border-box}',
+    // Foundation 5 ships `button { margin-bottom: 1.25rem }`, which lands on
+    // every control in here and shoves each flex child 20px off the pill's
+    // midline. Reset it, or nothing inside will ever centre.
+    '.tk-dbg button,.tk-dbg input{margin:0}',
+    '.tk-dbg{position:absolute;display:flex;align-items:center;pointer-events:auto;',
+      'background:#ffffff;border:0;border-radius:999px;',
+      // The "outline" is the shadow's own hairline ring, not a border: a 1px
+      // border plus a shadow reads as two edges at this radius.
+      'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 3px 12px rgba(31,35,40,.18);',
+      'width:72px;height:32px;overflow:hidden;font-size:13px;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;',
-      'max-width:calc(100% - 16px);transition:box-shadow 140ms ease}',
-    '.tk-dbg-body{max-width:100%;overflow:hidden}',
-    '.tk-dbg.dragging{box-shadow:0 10px 28px rgba(0,0,0,.28);transition:none}',
+      'user-select:none;-webkit-user-select:none;',
+      'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
+    // Only the two axes change on open; the ring must survive both states.
+    '.tk-dbg.open{width:322px;height:66px;max-width:calc(100% - 16px)}',
+    '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
+    '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
+    // align-self:center rather than the pill's stretch, so the dots sit on the
+    // pill's vertical midline whatever height it is at.
     '.tk-dbg-grip{display:flex;align-items:center;gap:2px;padding:0 5px 0 8px;',
       'cursor:grab;border-radius:999px 0 0 999px;flex:0 0 auto;background:none;border:0}',
     '.tk-dbg.dragging .tk-dbg-grip{cursor:grabbing}',
@@ -101,36 +113,42 @@
     // faint hover tint -- a filled rectangle inside a rounded pill reads as a
     // second object, which is exactly what it looked like.
     '.tk-dbg-toggle{display:flex;flex-direction:column;align-items:center;',
-      'justify-content:space-between;gap:0;border:0;background:none;cursor:pointer;',
-      'color:#0969da;padding:2px 10px 1px 4px;border-radius:0 999px 999px 0;',
-      'flex:0 0 auto;line-height:1;align-self:stretch}',
+      'justify-content:center;gap:1px;border:0;background:none;cursor:pointer;',
+      'color:#0969da;padding:0 10px 0 4px;border-radius:0 999px 999px 0;',
+      'flex:0 0 auto;line-height:1}',
     '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #c3d9ef;padding-right:9px}',
     '.tk-dbg-toggle:hover{color:#0550ae;background:rgba(9,105,218,.09)}',
-    '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;',
-      'flex:0 0 auto;padding-top:1px}',
+    '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;line-height:1}',
     // flex:1 + a line-height of 1 lets the glyph occupy the whole remaining
     // height; font-size then sets how much of that it actually inks.
-    '.tk-dbg-toggle .fa{flex:1;display:flex;align-items:center;font-size:16px;line-height:1}',
-    '.tk-dbg-body{display:none;align-items:center;gap:1px;padding:0 6px 0 6px;min-width:0}',
+    '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
+    '.tk-dbg-body{display:none;flex-direction:column;justify-content:center;',
+      'gap:2px;padding:0 8px 0 6px;min-width:0;flex:1}',
+    '.tk-dbg.open .tk-dbg-body{display:flex}',
+    // Row 1 transport + jumps + exit; row 2 the slider and its counter.
+    '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
+    '.tk-dbg-row.two{gap:5px}',
     /* Groups lay themselves out with flex, so `hidden` has to beat that: the
        attribute alone carries only UA-level display:none, which any stylesheet
        rule outranks -- an inline display:flex here would never hide. */
     '.tk-dbg [data-grp]{display:flex;align-items:center;gap:1px}',
     '.tk-dbg [data-grp][hidden]{display:none!important}',
-    '.tk-dbg.open .tk-dbg-body{display:flex}',
+    '.tk-dbg [data-grp="controls"]{flex-direction:column;align-items:stretch;',
+      'gap:3px;flex:1;min-width:0}',
     '.tk-dbg-btn{border:0;background:none;cursor:pointer;color:#0969da;padding:4px;',
       'line-height:1;border-radius:4px;flex:0 0 auto;font-size:13px}',
     '.tk-dbg-btn:hover:not(:disabled){color:#0550ae;background:rgba(9,105,218,.11)}',
     '.tk-dbg-btn:disabled{opacity:.38;cursor:default}',
     '.tk-dbg-btn.bp{color:#cf222e}',
-    '.tk-dbg-slider{width:112px;margin:0 4px;accent-color:#0969da;height:14px;flex:0 0 auto}',
+    '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
     '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;',
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
-    '.tk-dbg-note{font-size:10.5px;color:#59636e;white-space:nowrap;overflow:hidden;',
-      'text-overflow:ellipsis;max-width:190px;padding:0 4px}',
+    '.tk-dbg-note{font-size:10px;color:#59636e;white-space:nowrap;overflow:hidden;',
+      'text-overflow:ellipsis;flex:1;min-width:0}',
+    '.tk-dbg-recording{font-size:11px;color:#59636e;white-space:nowrap}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
-    '@media (prefers-reduced-motion: reduce){.tk-dbg{transition:none}}'
+    '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
 
   function injectCss() {
@@ -155,30 +173,37 @@
     +   ' title="Drag the debugger" aria-label="Move the debugger; arrow keys also move it">'
     +   '<span><i></i><i></i><i></i></span><span><i></i><i></i><i></i></span>'
     + '</button>'
-    + '<button type="button" class="tk-dbg-toggle" data-act="toggle" aria-expanded="true"'
+    + '<button type="button" class="tk-dbg-toggle" data-act="toggle" aria-expanded="false"'
     +   ' title="Step through this program line by line">'
     +   '<span class="w">DEBUG</span><i class="fa fa-bug" aria-hidden="true"></i>'
     + '</button>'
     + '<span class="tk-dbg-body">'
     +   '<span data-grp="launch">'
-    +     btn('start', 'fa-step-forward', 'Records your program running from scratch, then lets you step through it')
+    +     btn('start', 'fa-step-forward', 'Record this program and step through it')
+    +     '<span class="tk-dbg-recording">step through</span>'
     +   '</span>'
     +   '<span data-grp="recording" hidden>'
+    +     '<span class="tk-dbg-recording">recording&hellip;</span>'
     +     btn('cancel', 'fa-times', 'Cancel the recording')
     +   '</span>'
     +   '<span data-grp="controls" hidden>'
-    +     btn('first', 'fa-fast-backward', 'First step')
-    +     btn('back', 'fa-step-backward', 'Previous step')
-    +     '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
-    +       ' aria-label="Step position">'
-    +     '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
-    +     btn('fwd', 'fa-step-forward', 'Next step')
-    +     btn('last', 'fa-fast-forward', 'Last step')
-    +     '<span class="tk-dbg-sep"></span>'
-    +     btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
-    +     btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
-    +     '<span class="tk-dbg-note" data-el="note"></span>'
-    +     btn('exit', 'fa-times', 'Exit step-through')
+    +     '<span class="tk-dbg-row">'
+    +       btn('first', 'fa-fast-backward', 'First step')
+    +       btn('back', 'fa-step-backward', 'Previous step')
+    +       btn('fwd', 'fa-step-forward', 'Next step')
+    +       btn('last', 'fa-fast-forward', 'Last step')
+    +       '<span class="tk-dbg-sep"></span>'
+    +       btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
+    +       btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
+    +       '<span class="tk-dbg-sep"></span>'
+    +       btn('exit', 'fa-times', 'Exit step-through')
+    +     '</span>'
+    +     '<span class="tk-dbg-row two">'
+    +       '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
+    +         ' aria-label="Step position">'
+    +       '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
+    +       '<span class="tk-dbg-note" data-el="note"></span>'
+    +     '</span>'
     +   '</span>'
     + '</span>';
 
@@ -188,7 +213,7 @@
     $layer = document.createElement('div');
     $layer.className = 'tk-dbg-layer';
     $pill = document.createElement('div');
-    $pill.className = 'tk-dbg open';
+    $pill.className = 'tk-dbg';
     $pill.setAttribute('role', 'group');
     $pill.setAttribute('aria-label', 'Step-through debugger');
     $pill.innerHTML = MARKUP;
@@ -197,6 +222,30 @@
     layerHost().appendChild($layer);
     wire();
     mounted = true;
+  }
+
+  var draggedSinceDown = false;
+
+  // Opening the pill IS the request to step through -- the student should not
+  // have to find a second button after it expands. Only when nothing is in
+  // flight: re-expanding mid-replay must not throw the recording away, and
+  // re-expanding after a deliberate exit leaves the launch button to click.
+  function setExpanded(on, alsoRecord) {
+    expanded = on;
+    $pill.classList.toggle('open', on);
+    var t = $pill.querySelector('[data-act="toggle"]');
+    if (t) t.setAttribute('aria-expanded', String(on));
+    place();
+    if (!on || !alsoRecord || !ctx || !ctx.actions) return;
+    var s = {};
+    try { s = ctx.getState() || {}; } catch (e) { return; }
+    if (s.recording || s.replaying) return;
+    // After the class is on, so the expand animation and the (blocking, on
+    // the main thread) recording do not fight for the same frame.
+    window.requestAnimationFrame(function() {
+      try { ctx.actions.start(); } catch (e) {}
+      sync();
+    });
   }
 
   function el(name) { return $pill.querySelector('[data-el="' + name + '"]'); }
@@ -287,8 +336,11 @@
       slider.value = s.idx;
       el('pos').textContent = s.atEnd ? 'end' : (s.idx + 1) + ' / ' + s.total;
       el('note').textContent = s.note || '';
-      $pill.querySelector('[data-act="back"]').disabled = s.idx <= 0;
-      $pill.querySelector('[data-act="fwd"]').disabled = s.idx >= s.total;
+      var atStart = s.idx <= 0, atEnd = s.idx >= s.total;
+      $pill.querySelector('[data-act="first"]').disabled = atStart;
+      $pill.querySelector('[data-act="back"]').disabled = atStart;
+      $pill.querySelector('[data-act="fwd"]').disabled = atEnd;
+      $pill.querySelector('[data-act="last"]').disabled = atEnd;
       var noBp = !s.hasBreakpoints;
       $pill.querySelector('[data-act="prevbp"]').disabled = noBp;
       $pill.querySelector('[data-act="nextbp"]').disabled = noBp;
@@ -301,14 +353,17 @@
   // ---------------------------------------------------------------------
   function wire() {
     $pill.addEventListener('click', function(e) {
+      // Collapsed, the whole pill is the target -- including the grip, so long
+      // as the pointer did not actually travel (that is a drag, not a click).
+      if (!expanded) {
+        if (!draggedSinceDown) setExpanded(true, true);
+        return;
+      }
       var b = e.target.closest('[data-act]');
       if (!b || b.disabled || b.tagName === 'INPUT') return;
       var act = b.getAttribute('data-act');
       if (act === 'toggle') {
-        expanded = !expanded;
-        $pill.classList.toggle('open', expanded);
-        b.setAttribute('aria-expanded', String(expanded));
-        place();
+        setExpanded(!expanded);
         return;
       }
       var a = ctx && ctx.actions;
@@ -352,18 +407,25 @@
       var b = bounds();
       $pill.style.left = Math.max(4, Math.min(left, b.width - $pill.offsetWidth - 4)) + 'px';
       $pill.style.top  = Math.max(4, Math.min(top,  b.height - $pill.offsetHeight - 4)) + 'px';
-      placed = true;
+      if (draggedSinceDown) placed = true;
     }
 
     grip.addEventListener('pointerdown', function(e) {
       e.preventDefault();
+      draggedSinceDown = false;
       var pr = $pill.getBoundingClientRect(), b = bounds();
-      down = { dx: e.clientX - pr.left, dy: e.clientY - pr.top, bx: b.left, by: b.top };
+      down = { dx: e.clientX - pr.left, dy: e.clientY - pr.top, bx: b.left, by: b.top,
+               sx: e.clientX, sy: e.clientY };
       try { grip.setPointerCapture(e.pointerId); } catch (err) {}
       $pill.classList.add('dragging');
     });
     grip.addEventListener('pointermove', function(e) {
       if (!down) return;
+      // 4px of slop: a click always jitters a pixel or two, and treating that
+      // as a drag would make the collapsed pill impossible to open by its grip.
+      if (Math.abs(e.clientX - down.sx) > 4 || Math.abs(e.clientY - down.sy) > 4) {
+        draggedSinceDown = true;
+      }
       put(e.clientX - down.bx - down.dx, e.clientY - down.by - down.dy);
     });
     function end() { down = null; $pill.classList.remove('dragging'); }
