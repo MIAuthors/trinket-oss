@@ -3794,6 +3794,12 @@ window.TrinketAPI = {
                 , atEnd          : !!(st && st.func === '<end>')
                 , note           : debugBaseNote
                 , hasBreakpoints : debugHasBreakpoints()
+                  // The panel starts a recording on the same click that opens
+                  // it, and runStepThrough() refuses while anything else is
+                  // executing. Without knowing that, the panel would open and
+                  // silently do nothing.
+                , busy           : running || replEvaluating
+                                     || !!(workerClient && workerClient.isRunning())
               };
             }
           , actions : {

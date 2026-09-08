@@ -31,6 +31,7 @@
   var ctx     = null;   // { isAvailable, getState, actions }, handed over by pyodide.js
   var $layer  = null;
   var $pill   = null;
+  var $help   = null;
   var mounted = false;
   var placed  = false;  // true once the student has dragged it; stop auto-placing
   var placeTries = 0;   // bounded retries while the layout is still settling
@@ -96,7 +97,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:322px;height:66px;max-width:calc(100% - 16px)}',
+    '.tk-dbg.open{width:352px;height:92px;max-width:calc(100% - 16px)}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -116,9 +117,19 @@
       'justify-content:center;gap:1px;border:0;background:none;cursor:pointer;',
       'color:#0969da;padding:0 10px 0 4px;border-radius:0 999px 999px 0;',
       'flex:0 0 auto;line-height:1}',
-    '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #c3d9ef;padding-right:9px}',
-    '.tk-dbg-toggle:hover{color:#0550ae;background:rgba(9,105,218,.09)}',
+    '.tk-dbg.open .tk-dbg-toggle{border-radius:0;border-right:1px solid #e6eaef;padding-right:9px}',
+    // No fill on hover, here or on any control below. The icon-only convention
+    // is a muted resting colour resolving to the accent on hover, with the
+    // tooltip carrying the meaning and opacity alone marking disabled -- a
+    // filled rectangle inside a rounded pill reads as a second object.
+    '.tk-dbg-toggle{color:#4a5b69}',
+    '.tk-dbg-toggle:hover,.tk-dbg-toggle:active{color:#0969da;background:none}',
     '.tk-dbg-toggle .w{font-size:8px;font-weight:700;letter-spacing:.14em;line-height:1}',
+    // Shown only while the pill is shut and replay is still live.
+    '.tk-dbg-live{position:absolute;top:5px;right:6px;width:6px;height:6px;',
+      'border-radius:50%;background:#0969da;box-shadow:0 0 0 1.5px #fff}',
+    '.tk-dbg-live[hidden]{display:none}',
+    '.tk-dbg-toggle{position:relative}',
     // flex:1 + a line-height of 1 lets the glyph occupy the whole remaining
     // height; font-size then sets how much of that it actually inks.
     '.tk-dbg-toggle .fa{display:block;font-size:17px;line-height:1}',
@@ -127,7 +138,11 @@
     '.tk-dbg.open .tk-dbg-body{display:flex}',
     // Row 1 transport + jumps + exit; row 2 the slider and its counter.
     '.tk-dbg-row{display:flex;align-items:center;gap:1px;min-width:0}',
-    '.tk-dbg-row.two{gap:5px}',
+    '.tk-dbg-row.two,.tk-dbg-row.three{gap:6px}',
+    '.tk-dbg-rate{font-size:10px;color:#4a5b69;white-space:nowrap;',
+      'font-variant-numeric:tabular-nums;min-width:50px}',
+    '.tk-dbg-speed{flex:0 0 72px;accent-color:#8794a1;height:12px;margin:0}',
+    '.tk-dbg-spd-ic{font-size:10px;color:#8794a1;flex:0 0 auto}',
     /* Groups lay themselves out with flex, so `hidden` has to beat that: the
        attribute alone carries only UA-level display:none, which any stylesheet
        rule outranks -- an inline display:flex here would never hide. */
@@ -135,11 +150,24 @@
     '.tk-dbg [data-grp][hidden]{display:none!important}',
     '.tk-dbg [data-grp="controls"]{flex-direction:column;align-items:stretch;',
       'gap:3px;flex:1;min-width:0}',
-    '.tk-dbg-btn{border:0;background:none;cursor:pointer;color:#0969da;padding:4px;',
-      'line-height:1;border-radius:4px;flex:0 0 auto;font-size:13px}',
-    '.tk-dbg-btn:hover:not(:disabled){color:#0550ae;background:rgba(9,105,218,.11)}',
-    '.tk-dbg-btn:disabled{opacity:.38;cursor:default}',
-    '.tk-dbg-btn.bp{color:#cf222e}',
+    '.tk-dbg-btn{border:0;background:none!important;cursor:pointer;color:#4a5b69;',
+      'padding:3px 4px;line-height:1;flex:0 0 auto;font-size:13px;transition:color 90ms ease}',
+    '.tk-dbg-btn:hover:not(:disabled){color:#0969da}',
+    '.tk-dbg-btn:active:not(:disabled){color:#0550ae}',
+    '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69}',
+    '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e}',
+    // A toggle that is ON says so with the accent, never a filled chip -- and
+    // for play/pause the glyph swaps too, which is the real signal.
+    '.tk-dbg-btn[aria-pressed="true"]{color:#0969da}',
+    // THE DEFAULT ACTION. Everything else in the row is a small muted glyph;
+    // this one is labelled, larger and accent-coloured from rest, so what to
+    // click to advance one line is not a guess. Still no background.
+    '.tk-dbg-btn.primary{color:#0969da;font-size:12.5px;font-weight:600;',
+      'display:flex;align-items:center;gap:4px;padding:3px 7px 3px 5px;',
+      'letter-spacing:.01em}',
+    '.tk-dbg-btn.primary .fa{font-size:14px}',
+    '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae}',
+    '.tk-dbg-btn.primary:disabled{color:#8794a1;opacity:.6}',
     '.tk-dbg-slider{flex:1;min-width:0;margin:0;accent-color:#0969da;height:14px}',
     '.tk-dbg-pos{font-family:monospace;font-size:10.5px;color:#1f2328;',
       'font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 3px}',
@@ -148,6 +176,16 @@
     '.tk-dbg-recording{font-size:11px;color:#59636e;white-space:nowrap}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
+    '.tk-dbg-help{position:absolute;pointer-events:auto;width:236px;background:#fff;',
+      'border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.45;color:#1f2328;',
+      'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.2);',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
+    '.tk-dbg-help[hidden]{display:none}',
+    '.tk-dbg-help b{font-weight:600}',
+    '.tk-dbg-help .dot{display:inline-block;width:9px;height:9px;border-radius:20px 0 0 20px;',
+      'background:#cf222e;vertical-align:-1px;margin:0 2px}',
+    '.tk-dbg-help p{margin:0 0 7px;font-size:11.5px;line-height:1.45;color:#1f2328}',
+    '.tk-dbg-help p:last-child{margin:0;color:#59636e}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
 
@@ -176,6 +214,9 @@
     + '<button type="button" class="tk-dbg-toggle" data-act="toggle" aria-expanded="false"'
     +   ' title="Step through this program line by line">'
     +   '<span class="w">DEBUG</span><i class="fa fa-bug" aria-hidden="true"></i>'
+    +   '<span class="tk-dbg-live" data-el="live" hidden'
+    +     ' title="Still stepping - the output below is the recording, not a live run">'
+    +   '</span>'
     + '</button>'
     + '<span class="tk-dbg-body">'
     +   '<span data-grp="launch">'
@@ -190,11 +231,18 @@
     +     '<span class="tk-dbg-row">'
     +       btn('first', 'fa-fast-backward', 'First step')
     +       btn('back', 'fa-step-backward', 'Previous step')
-    +       btn('fwd', 'fa-step-forward', 'Next step')
+    +       '<button type="button" class="tk-dbg-btn primary" data-act="fwd"'
+    +         ' title="Run the next line (\u2192)" aria-label="Next step">'
+    +         'Step<i class="fa fa-step-forward" aria-hidden="true"></i></button>'
     +       btn('last', 'fa-fast-forward', 'Last step')
+    +       '<span class="tk-dbg-sep"></span>'
+    +       '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
+    +         ' title="Play / pause" aria-label="Play / pause">'
+    +         '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
     +       '<span class="tk-dbg-sep"></span>'
     +       btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
     +       btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
+    +       btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
     +       '<span class="tk-dbg-sep"></span>'
     +       btn('exit', 'fa-times', 'Exit step-through')
     +     '</span>'
@@ -202,6 +250,12 @@
     +       '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
     +         ' aria-label="Step position">'
     +       '<span class="tk-dbg-pos" data-el="pos">0 / 0</span>'
+    +     '</span>'
+    +     '<span class="tk-dbg-row three">'
+    +       '<i class="fa fa-tachometer tk-dbg-spd-ic" aria-hidden="true"></i>'
+    +       '<input type="range" class="tk-dbg-speed" data-act="speed" min="0" max="4" step="1"'
+    +         ' value="2" aria-label="Playback speed">'
+    +       '<span class="tk-dbg-rate" data-el="rate">1 / sec</span>'
     +       '<span class="tk-dbg-note" data-el="note"></span>'
     +     '</span>'
     +   '</span>'
@@ -219,6 +273,19 @@
     $pill.innerHTML = MARKUP;
     $pill.hidden = true;
     $layer.appendChild($pill);
+    $help = document.createElement('div');
+    $help.className = 'tk-dbg-help';
+    $help.setAttribute('role', 'dialog');
+    $help.setAttribute('aria-label', 'How to add a breakpoint');
+    $help.hidden = true;
+    $help.innerHTML =
+        '<p><b>Set a breakpoint</b></p>'
+      + '<p>Click the grey margin left of a line number. A red marker'
+      + ' <span class="dot"></span> appears, and the two circled arrows jump'
+      + ' to it \u2014 forwards or back.</p>'
+      + '<p>Nothing pauses: the program has already run. A breakpoint is just a'
+      + ' place to jump to, so add and remove them as you go.</p>';
+    $layer.appendChild($help);
     layerHost().appendChild($layer);
     wire();
     mounted = true;
@@ -226,26 +293,99 @@
 
   var draggedSinceDown = false;
 
+  // Autoplay controls no execution -- the recording is already a finished
+  // array -- so it belongs in the panel rather than in pyodide.js. Five
+  // discrete detents rather than a continuous slider: these are the five
+  // speeds worth having, and a continuous control makes 1/sec fiddly to hit.
+  var SPEEDS = [5, 2, 1, 0.5, 0.2];              // seconds per step
+  var RATES  = ['1 / 5 s', '1 / 2 s', '1 / sec', '2 / sec', '5 / sec'];
+  var speedIx = 2;
+  var playTimer = null;
+
+  function playing() { return playTimer !== null; }
+
+  function stopPlay() {
+    if (playTimer === null) return;
+    clearInterval(playTimer);
+    playTimer = null;
+    paintPlay();
+  }
+
+  function startPlay() {
+    if (!ctx || !ctx.actions || playTimer !== null) return;
+    var s0 = {};
+    try { s0 = ctx.getState() || {}; } catch (e) { return; }
+    if (!s0.replaying) return;
+    if (s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
+    playTimer = setInterval(function() {
+      var st = {};
+      try { st = ctx.getState() || {}; } catch (e) { stopPlay(); return; }
+      // At five steps a second a 5,000-step recording still takes sixteen
+      // minutes, so autoplay is for watching a loop turn, not for traversing
+      // a program: it stops at the end rather than wrapping.
+      if (!st.replaying || st.idx >= st.total) { stopPlay(); return; }
+      try { ctx.actions.step(1); } catch (e) { stopPlay(); }
+    }, SPEEDS[speedIx] * 1000);
+    paintPlay();
+  }
+
+  function paintPlay() {
+    if (!mounted) return;
+    var b = $pill.querySelector('[data-act="play"]');
+    var i = el('playicon');
+    var r = el('rate');
+    if (b) b.setAttribute('aria-pressed', String(playing()));
+    if (i) i.className = 'fa fa-' + (playing() ? 'pause' : 'play');
+    if (r) r.textContent = RATES[speedIx];
+  }
+
   // Opening the pill IS the request to step through -- the student should not
   // have to find a second button after it expands. Only when nothing is in
   // flight: re-expanding mid-replay must not throw the recording away, and
   // re-expanding after a deliberate exit leaves the launch button to click.
   function setExpanded(on, alsoRecord) {
+    if (!on) hideHelp();
     expanded = on;
     $pill.classList.toggle('open', on);
     var t = $pill.querySelector('[data-act="toggle"]');
     if (t) t.setAttribute('aria-expanded', String(on));
     place();
     if (!on || !alsoRecord || !ctx || !ctx.actions) return;
+    // Deferred one tick so the expand animation and the (blocking, main-thread)
+    // recording do not fight over the same frame. setTimeout, not
+    // requestAnimationFrame: rAF is suspended while the tab is hidden or
+    // occluded, so a trinket opened in a background tab would expand the pill
+    // and then never record.
+    setTimeout(function() { armRecording(0); }, 0);
+  }
+
+  // runStepThrough() refuses outright while a normal Run, the REPL or a worker
+  // run is in flight, so a student who clicks DEBUG mid-run would get an open
+  // pill and nothing else. Wait for the runner to go quiet instead, then
+  // record -- and give up if they close the pill or start something else.
+  function armRecording(tries) {
+    if (!expanded || !ctx || !ctx.actions) return;
     var s = {};
     try { s = ctx.getState() || {}; } catch (e) { return; }
     if (s.recording || s.replaying) return;
-    // After the class is on, so the expand animation and the (blocking, on
-    // the main thread) recording do not fight for the same frame.
-    window.requestAnimationFrame(function() {
-      try { ctx.actions.start(); } catch (e) {}
-      sync();
-    });
+    if (s.busy) {
+      if (tries < 150) setTimeout(function() { armRecording(tries + 1); }, 200);
+      return;                                   // ~30s, then leave the button
+    }
+    try { ctx.actions.start(); } catch (e) {}
+    sync();
+  }
+
+  function hideHelp() { if ($help) $help.hidden = true; }
+
+  function toggleHelp() {
+    if (!$help) return;
+    if (!$help.hidden) { $help.hidden = true; return; }
+    $help.hidden = false;
+    var pr = $pill.getBoundingClientRect(), hr = $layer.getBoundingClientRect();
+    var left = pr.left - hr.left + pr.width - $help.offsetWidth;
+    $help.style.left = Math.max(4, Math.min(left, hr.width - $help.offsetWidth - 4)) + 'px';
+    $help.style.top = (pr.bottom - hr.top + 6) + 'px';
   }
 
   function el(name) { return $pill.querySelector('[data-el="' + name + '"]'); }
@@ -265,7 +405,7 @@
     if (!editor || !nav || !host.width) return;
     var nr = nav.getBoundingClientRect();
     if (!nr.width) {
-      if (placeTries++ < 40) window.requestAnimationFrame(place);
+      if (placeTries++ < 40) setTimeout(place, 16);
       return;
     }
 
@@ -309,7 +449,7 @@
     var key = x + ',' + y;
     if (key !== placeLast && placeTries++ < 40) {
       placeLast = key;
-      window.requestAnimationFrame(place);
+      setTimeout(place, 16);   // not rAF: see armRecording
     }
   }
 
@@ -318,19 +458,30 @@
   // ---------------------------------------------------------------------
   function sync() {
     if (!ctx || !mounted) return;
+    // If the debugger left replay by any route, the timer has nothing to step.
+    if (playing()) {
+      var q = {};
+      try { q = ctx.getState() || {}; } catch (e) { q = {}; }
+      if (!q.replaying) stopPlay();
+    }
     var avail = false;
     try { avail = !!ctx.isAvailable(); } catch (e) { avail = false; }
     $pill.hidden = !avail;
-    if (!avail) return;
+    if (!avail) { hideHelp(); return; }
 
     var s;
     try { s = ctx.getState() || {}; } catch (e) { return; }
 
+    var live = el('live');
+    if (live) live.hidden = !(s.replaying && !expanded);
+
     grp('launch').hidden     = s.recording || s.replaying;
     grp('recording').hidden  = !s.recording;
     grp('controls').hidden   = !s.replaying;
+    if (!s.replaying) hideHelp();
 
     if (s.replaying) {
+      paintPlay();
       var slider = $pill.querySelector('[data-act="slider"]');
       slider.max = s.total;
       slider.value = s.idx;
@@ -359,6 +510,11 @@
         if (!draggedSinceDown) setExpanded(true, true);
         return;
       }
+      // Expanded, the grip is a toggle as well: tap collapses, drag moves.
+      if (e.target.closest('[data-grip]')) {
+        if (!draggedSinceDown) setExpanded(false);
+        return;
+      }
       var b = e.target.closest('[data-act]');
       if (!b || b.disabled || b.tagName === 'INPUT') return;
       var act = b.getAttribute('data-act');
@@ -366,8 +522,15 @@
         setExpanded(!expanded);
         return;
       }
+      if (act === 'bphelp') { toggleHelp(); return; }
+      hideHelp();
+      if (act === 'play') { playing() ? stopPlay() : startPlay(); return; }
+
       var a = ctx && ctx.actions;
       if (!a) return;
+      // Manual navigation pauses: stepping by hand while the timer also steps
+      // would have the two fighting over the index.
+      if (act !== 'start') stopPlay();
       try {
         switch (act) {
           case 'start':  a.start();      break;
@@ -378,7 +541,7 @@
           case 'last':   a.last();       break;
           case 'prevbp': a.jumpBp(-1);   break;
           case 'nextbp': a.jumpBp(1);    break;
-          case 'exit':   a.exit();       break;
+          case 'exit':   a.exit(); setExpanded(false); break;
         }
       } catch (err) { /* never let the panel break the debugger */ }
       sync();
@@ -387,7 +550,14 @@
     var slider = $pill.querySelector('[data-act="slider"]');
     slider.addEventListener('input', function() {
       if (!ctx || !ctx.actions) return;
+      stopPlay();
       try { ctx.actions.stepTo(parseInt(this.value, 10) || 0); } catch (e) {}
+    });
+
+    $pill.querySelector('[data-act="speed"]').addEventListener('input', function() {
+      speedIx = Math.max(0, Math.min(parseInt(this.value, 10) || 0, SPEEDS.length - 1));
+      paintPlay();
+      if (playing()) { stopPlay(); startPlay(); }   // re-arm, keep the position
     });
 
     dragging();
@@ -456,8 +626,10 @@
     },
     // Called wherever the debugger's own state changes.
     sync: sync,
-    afterRun: function() { sync(); },
-    onEditorChange: function() { sync(); }
+    afterRun: function() { stopPlay(); sync(); },
+    // Editing invalidates the recording's line numbers, so a marching
+    // highlight would be walking over code that no longer means anything.
+    onEditorChange: function() { stopPlay(); sync(); }
   };
 
 })(window, document);
