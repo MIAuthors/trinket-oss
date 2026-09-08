@@ -456,9 +456,16 @@
             <span id="debug-last" class="debug-btn" role="button" tabindex="0" title="Last step"><i class="fa fa-fast-forward"></i></span>
             <span id="debug-prev-bp" class="debug-btn debug-bp-btn" role="button" tabindex="0" title="Previous breakpoint (Shift+←)"><i class="fa fa-chevron-circle-left"></i></span>
             <span id="debug-next-bp" class="debug-btn debug-bp-btn" role="button" tabindex="0" title="Next breakpoint (Shift+→)"><i class="fa fa-chevron-circle-right"></i></span>
-            <span id="debug-note"></span>
             <span id="debug-exit" class="debug-btn" role="button" tabindex="0" title="Exit step-through"><i class="fa fa-times"></i></span>
           </span>
+          <!-- OUTSIDE #debug-controls, which is .hide except during replay. In
+               there this span was display:none at exactly the moments it had
+               something to say: the VPython bail, the console-input bail and
+               "recording failed" are all written at recording time, so with the
+               floating panel off a student pressing "Step through" on a VPython
+               trinket got silence. Still inside #variables-toolbar, so the
+               existing descendant CSS rule keeps matching. -->
+          <span id="debug-note"></span>
           </div>
           {% endif %}
           <div class="variables-toolbar-row" id="variables-toolbar-options">

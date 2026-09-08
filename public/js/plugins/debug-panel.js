@@ -205,8 +205,10 @@
     // occupied 6px plus a gap at the BOTTOM, which is what pushed everything
     // visible upward and left 2px of margin above against 13px below. Out of
     // flow until it has something to say.
-    '.tk-dbg-grid > .tk-dbg-note{grid-column:1 / -1;justify-self:start}',
-    '.tk-dbg-grid > .tk-dbg-note:empty{display:none}',
+    // Out of flow until it has something to say: an empty grid child still
+    // occupied a row plus a gap, which is what used to push all the visible
+    // content upward. Same rule now that it is a body child.
+    '.tk-dbg-body > .tk-dbg-note:empty{display:none}',
     // Exit sits outside the grid so it can centre against BOTH rows, and the
     // pill's right edge curls around it.
     // Red AT REST, not only on hover: this is the one control that ends the
@@ -520,12 +522,20 @@
     +         '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
     +           ' aria-label="Step position">'
     +       '</span>'
-    +       '<span class="tk-dbg-note" data-el="note"></span>'
     +     '</span>'
     +     '<button type="button" class="tk-dbg-btn exit" data-act="exit"'
     +       ' title="Leave step-through" aria-label="Leave step-through">'
     +       '<i class="fa fa-times" aria-hidden="true"></i></button>'
     +   '</span>'
+    // A direct child of the BODY, outside every [data-grp]. Inside the controls
+    // group it was paintable only while replaying, so any message written in
+    // another state went into a display:none box -- the ~30s "the program is
+    // still running" give-up among them, which is the single moment a student
+    // most needs telling why nothing happened. (First attempt anchored this on
+    // the exit button, which is itself inside the controls group, so it moved
+    // out of the grid and no further; verified by walking the ancestry in the
+    // live embed.)
+    +   '<span class="tk-dbg-note" data-el="note"></span>'
     + '</span>';
 
   function mount() {
@@ -552,8 +562,11 @@
       + '<p>Click the grey margin left of a line number. A red marker'
       + ' <span class="dot"></span> appears, and the two circled arrows jump'
       + ' to it \u2014 forwards or back.</p>'
-      + '<p>Nothing pauses: the program has already run. A breakpoint is just a'
-      + ' place to jump to, so add and remove them as you go.</p>';
+      + '<p><b>Auto mode stops there.</b> Press play and the recording runs from'
+      + ' the first line of your program, then pauses when it reaches the line'
+      + ' you marked. Press play again to carry on to the next one.</p>'
+      + '<p>Stepping by hand ignores breakpoints \u2014 it already stops on every'
+      + ' line. Add and remove them as you go; you do not need to record again.</p>';
     $dock.appendChild($help);
     $vars = document.createElement('div');
     $vars.className = 'tk-dbg-vars';
@@ -640,6 +653,17 @@
     paintPlay();
   }
 
+  // debug-panel.js is an optional plugin and can be served against a pyodide.js
+  // that predates actions.autoStep. A throw inside setInterval is silent, so
+  // fall back to the old body rather than stopping dead with no explanation.
+  function legacyTick() {
+    var st = {};
+    try { st = ctx.getState() || {}; } catch (e) { return 'end'; }
+    if (!st.replaying || st.idx >= st.total) return 'end';
+    try { ctx.actions.step(1); } catch (e) { return 'end'; }
+    return 'moved';
+  }
+
   function startPlay(act) {
     if (!ctx || !ctx.actions) return;
     var t = TRANSPORT[act];
@@ -654,13 +678,29 @@
     if (s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
     playAct = act;
     playTimer = setInterval(function() {
-      var st = {};
-      try { st = ctx.getState() || {}; } catch (e) { stopPlay(); return; }
+      // One primitive, and pyodide.js decides why we stopped: 'moved', 'end' or
+      // 'breakpoint'. Auto mode no longer owns the end-of-recording test, and
+      // it never sees the breakpoint table.
+      //
       // Stops at whichever end it reaches rather than wrapping: at five lines a
       // second a 5,000-step recording still takes sixteen minutes, so auto mode
       // is for watching a loop turn, not traversing a program.
-      if (!st.replaying || st.idx >= st.total) { stopPlay(); return; }
-      try { ctx.actions.step(1); } catch (e) { stopPlay(); }
+      var r = 'end';
+      try {
+        r = ctx.actions.autoStep ? ctx.actions.autoStep() : legacyTick();
+      } catch (e) { stopPlay(); return; }
+      if (r === 'moved') return;
+      stopPlay();
+      if (r === 'breakpoint') {
+        // Landing on a breakpoint hands control back, so the highlight belongs
+        // to step mode now -- the student's next press is almost always a step.
+        mode = 'step';
+        var s = {};
+        try { s = ctx.getState() || {}; } catch (e) {}
+        note(s.line ? 'paused at the breakpoint on line ' + s.line
+                    : 'paused at a breakpoint');
+        paintMode();
+      }
     }, (1 / t.rate) * 1000);
     paintPlay();
   }
