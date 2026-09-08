@@ -200,6 +200,11 @@
     '.tk-dbg-btn:active:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69!important}',
     '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e!important}',
+    // Chevrons read lighter and narrower than the filled triangles they
+    // replace, so they get a size bump and tighter padding to hold the same
+    // weight in the row.
+    '.tk-dbg-btn.chev{font-size:17px;padding:2px 2px}',
+    '.tk-dbg-btn.chev .fa{font-weight:700}',
     // A toggle that is ON says so with the accent, never a filled chip -- and
     // for play/pause the glyph swaps too, which is the real signal.
     '.tk-dbg-btn[aria-pressed="true"]{color:#0969da!important}',
@@ -360,13 +365,13 @@
     +       '</span>'
     +       '<span class="tk-dbg-grp auto"><span class="tk-dbg-cap">Auto mode</span>'
     +         '<span class="tk-dbg-box">'
-    +           btn('rw5', 'fa-angle-double-left', 'Rewind at 5 lines per second')
-    +           btn('rw2', 'fa-backward', 'Rewind at 2 lines per second')
+    +           btn('rw5', 'fa-angle-double-left', 'Rewind at 5 lines per second', 'chev')
+    +           btn('rw2', 'fa-angle-left', 'Rewind at 2 lines per second', 'chev')
     +           '<button type="button" class="tk-dbg-btn" data-act="play" aria-pressed="false"'
     +             ' title="Play at 1 line per second" aria-label="Play or pause">'
     +             '<i class="fa fa-play" data-el="playicon" aria-hidden="true"></i></button>'
-    +           btn('ff2', 'fa-forward', 'Play at 2 lines per second')
-    +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second')
+    +           btn('ff2', 'fa-angle-right', 'Play at 2 lines per second', 'chev')
+    +           btn('ff5', 'fa-angle-double-right', 'Play at 5 lines per second', 'chev')
     +         '</span>'
     +       '</span>'
     +       btn('exit', 'fa-times', 'Exit step-through')
