@@ -2140,6 +2140,56 @@ function renderDebugStep() {
   }
 }
 
+// Which names the STUDENT introduced, in the order they came into existence.
+//
+// The snapshot filter already drops dunders, modules and injected names, and
+// the recorder's snapshots carry no functions or classes -- but that is not
+// enough. `from math import *` binds pi, e, tau, inf and nan as plain floats,
+// and `from sympy import *` binds a great many more; all of them arrive as
+// ordinary values and bury the two variables the student actually wrote.
+//
+// So attribute each name to the line that bound it. A `line` trace event fires
+// BEFORE its line runs, so a name first visible at step k was bound by the line
+// of step k-1; if that line is an import statement, the name is library
+// furniture rather than the student's. This needs no blocklist and handles
+// `import x`, `from x import y` and `from x import *` alike.
+var debugVarModel = null;   // cached per recording; cleared on enter/exit
+
+var DEBUG_IMPORT_RE = /^\s*(?:import\s|from\s+[.\w]+\s+import\b)/;
+
+function debugBuildVarModel() {
+  if (!debugRec) return null;
+  if (debugVarModel) return debugVarModel;
+
+  var files = {};
+  try { files = editor.getAllFiles() || {}; } catch (e) { files = {}; }
+  var lineCache = {};
+  function sourceLine(file, line) {
+    var key = file || mainFile;
+    if (!(key in lineCache)) {
+      lineCache[key] = files[key] == null ? null : String(files[key]).split('\n');
+    }
+    var arr = lineCache[key];
+    return arr && line > 0 && line <= arr.length ? arr[line - 1] : null;
+  }
+
+  var order = [], firstStep = {}, fromImport = {};
+  for (var k = 0; k < debugRec.snaps.length; k++) {
+    var snap = debugRec.snaps[k] || [];
+    for (var j = 0; j < snap.length; j++) {
+      var nm = snap[j].name;
+      if (nm in firstStep) continue;
+      firstStep[nm] = k;
+      order.push(nm);
+      var prev = k > 0 ? debugRec.steps[k - 1] : null;
+      var src = prev && prev.line ? sourceLine(prev.file, prev.line) : null;
+      if (src && DEBUG_IMPORT_RE.test(src)) fromImport[nm] = true;
+    }
+  }
+  debugVarModel = { order: order, firstStep: firstStep, fromImport: fromImport };
+  return debugVarModel;
+}
+
 function debugStepTo(idx) {
   if (!debugRec) return;
   debugIdx = Math.max(0, Math.min(idx, debugRec.steps.length - 1));
@@ -2148,6 +2198,7 @@ function debugStepTo(idx) {
 
 function enterReplay(rec) {
   debugRec = rec;
+  debugVarModel = null;
   debugIdx = 0;
   debugLastOut = -1;
   debugErrShown = false;
@@ -2181,6 +2232,7 @@ function exitReplay(quiet) {
   if (!debugRec) return;
   var rec = debugRec;
   debugRec = null;
+  debugVarModel = null;
   debugLastOut = -1;
   debugErrShown = false;
   debugShownFile = null;
@@ -3801,6 +3853,12 @@ window.TrinketAPI = {
                 , busy           : running || replEvaluating
                                      || !!(workerClient && workerClient.isRunning())
               };
+            }
+            // The panel builds its own list from these; presentation stays out
+            // here, the data stays in there.
+          , getVarModel : debugBuildVarModel
+          , getVars : function(i) {
+              return debugRec && debugRec.snaps ? (debugRec.snaps[i] || []) : [];
             }
           , actions : {
                 start  : runStepThrough

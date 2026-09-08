@@ -32,6 +32,10 @@
   var $layer  = null;
   var $pill   = null;
   var $help   = null;
+  var $vars   = null;
+  var $dock   = null;
+  var dropped = {};     // names the student has dismissed with the red x
+  var lifted  = [];     // names promoted with the green arrow, most recent first
   var mounted = false;
   var placed  = false;  // true once the student has dragged it; stop auto-placing
   var placeTries = 0;   // bounded retries while the layout is still settling
@@ -86,8 +90,18 @@
     // Foundation 5 ships `button { margin-bottom: 1.25rem }`, which lands on
     // every control in here and shoves each flex child 20px off the pill's
     // midline. Reset it, or nothing inside will ever centre.
-    '.tk-dbg button,.tk-dbg input{margin:0}',
-    '.tk-dbg{position:absolute;display:flex;align-items:center;pointer-events:auto;',
+    // Foundation 5 ships `button { margin-bottom: 1.25rem }` plus background
+    // colours on button, button:hover and button:focus. `button:hover` (0,1,1)
+    // outranks a plain class rule (0,1,0), which is why the grip kept its blue
+    // wash however many times its own background was set to none. Blanket it,
+    // once, for every control in here and any added later.
+    '.tk-dbg button,.tk-dbg input,.tk-dbg-vars button{margin:0}',
+    '.tk-dbg button,.tk-dbg button:hover,.tk-dbg button:focus,.tk-dbg button:active,',
+      '.tk-dbg-vars button,.tk-dbg-vars button:hover,.tk-dbg-vars button:focus',
+      '{background:none!important;background-color:transparent!important;box-shadow:none}',
+    '.tk-dbg-dock{position:absolute;pointer-events:none;display:inline-block;max-width:calc(100% - 12px)}',
+    '.tk-dbg-dock > *{pointer-events:auto}',
+    '.tk-dbg{position:relative;display:flex;align-items:center;pointer-events:auto;',
       'background:#ffffff;border:0;border-radius:999px;',
       // The "outline" is the shadow's own hairline ring, not a border: a 1px
       // border plus a shadow reads as two edges at this radius.
@@ -97,7 +111,7 @@
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
-    '.tk-dbg.open{width:352px;height:92px;max-width:calc(100% - 16px)}',
+    '.tk-dbg.open{width:352px;height:92px}',
     '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
@@ -107,7 +121,9 @@
       'cursor:grab;border-radius:999px 0 0 999px;flex:0 0 auto;background:none;border:0}',
     '.tk-dbg.dragging .tk-dbg-grip{cursor:grabbing}',
     '.tk-dbg-grip span{display:flex;flex-direction:column;gap:2px}',
-    '.tk-dbg-grip i{width:3px;height:3px;border-radius:50%;background:#59636e;display:block}',
+    '.tk-dbg-grip i{width:3px;height:3px;border-radius:50%;background:#8794a1;display:block;',
+      'transition:background 90ms ease}',
+    '.tk-dbg-grip:hover i{background:#0969da}',
     // Fills the pill's height rather than sitting in a box inside it: the
     // label takes only the space its 8px caps need, and the glyph gets the
     // rest via flex:1. Backgrounds stay transparent in every state except a
@@ -176,7 +192,7 @@
     '.tk-dbg-recording{font-size:11px;color:#59636e;white-space:nowrap}',
     '.tk-dbg-sep{width:1px;align-self:stretch;background:#c3d9ef;margin:5px 3px;flex:0 0 auto}',
     '.tk-dbg :focus-visible{outline:2px solid #0969da;outline-offset:1px}',
-    '.tk-dbg-help{position:absolute;pointer-events:auto;width:236px;background:#fff;',
+    '.tk-dbg-help{position:absolute;top:calc(100% + 6px);right:0;width:236px;background:#fff;',
       'border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.45;color:#1f2328;',
       'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.2);',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
@@ -186,6 +202,26 @@
       'background:#cf222e;vertical-align:-1px;margin:0 2px}',
     '.tk-dbg-help p{margin:0 0 7px;font-size:11.5px;line-height:1.45;color:#1f2328}',
     '.tk-dbg-help p:last-child{margin:0;color:#59636e}',
+    '.tk-dbg-vars{position:absolute;top:calc(100% + 6px);left:0;width:100%;background:#fff;border-radius:8px;',
+      'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 6px 20px rgba(31,35,40,.18);',
+      'padding:5px 6px;max-height:168px;overflow-y:auto;overflow-x:hidden;',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
+    '.tk-dbg-vars[hidden]{display:none}',
+    '.tk-dbg-vrow{display:grid;grid-template-columns:16px 1fr auto 16px;gap:0 7px;',
+      'align-items:center;padding:2px 1px;border-top:1px solid #f1f4f7}',
+    '.tk-dbg-vrow:first-child{border-top:0}',
+    '.tk-dbg-vn{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#1a7f37;',
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.tk-dbg-vv{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#1f2328;',
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;',
+      'font-variant-numeric:tabular-nums;justify-self:end}',
+    '.tk-dbg-vrow.changed .tk-dbg-vv{color:#0550ae;font-weight:600}',
+    // Same no-fill rule as the pill: muted at rest, colour on hover.
+    '.tk-dbg-vbtn{border:0;background:none!important;cursor:pointer;padding:1px;line-height:1;',
+      'color:#c3cbd3;font-size:11px;transition:color 90ms ease}',
+    '.tk-dbg-vbtn.rm:hover{color:#cf222e}',
+    '.tk-dbg-vbtn.up:hover{color:#1a7f37}',
+    '.tk-dbg-vars .empty{font-size:11px;color:#8794a1;padding:3px 2px;white-space:nowrap}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
 
@@ -266,13 +302,15 @@
     injectCss();
     $layer = document.createElement('div');
     $layer.className = 'tk-dbg-layer';
+    $dock = document.createElement('div');
+    $dock.className = 'tk-dbg-dock';
     $pill = document.createElement('div');
     $pill.className = 'tk-dbg';
     $pill.setAttribute('role', 'group');
     $pill.setAttribute('aria-label', 'Step-through debugger');
     $pill.innerHTML = MARKUP;
     $pill.hidden = true;
-    $layer.appendChild($pill);
+    $dock.appendChild($pill);
     $help = document.createElement('div');
     $help.className = 'tk-dbg-help';
     $help.setAttribute('role', 'dialog');
@@ -285,7 +323,28 @@
       + ' to it \u2014 forwards or back.</p>'
       + '<p>Nothing pauses: the program has already run. A breakpoint is just a'
       + ' place to jump to, so add and remove them as you go.</p>';
-    $layer.appendChild($help);
+    $dock.appendChild($help);
+    $vars = document.createElement('div');
+    $vars.className = 'tk-dbg-vars';
+    $vars.setAttribute('aria-label', 'Variables so far');
+    $vars.hidden = true;
+    $dock.appendChild($vars);
+    $layer.appendChild($dock);
+    $vars.addEventListener('click', function(e) {
+      var b = e.target.closest('[data-vact]');
+      if (!b) return;
+      var nm = b.getAttribute('data-var');
+      if (b.getAttribute('data-vact') === 'rm') {
+        dropped[nm] = true;
+        var at = lifted.indexOf(nm);
+        if (at >= 0) lifted.splice(at, 1);
+      } else {
+        var was = lifted.indexOf(nm);
+        if (was >= 0) lifted.splice(was, 1);
+        lifted.unshift(nm);
+      }
+      paintVars();
+    });
     layerHost().appendChild($layer);
     wire();
     mounted = true;
@@ -344,12 +403,13 @@
   // flight: re-expanding mid-replay must not throw the recording away, and
   // re-expanding after a deliberate exit leaves the launch button to click.
   function setExpanded(on, alsoRecord) {
-    if (!on) hideHelp();
+    if (!on) { hideHelp(); if ($vars) $vars.hidden = true; }
     expanded = on;
     $pill.classList.toggle('open', on);
     var t = $pill.querySelector('[data-act="toggle"]');
     if (t) t.setAttribute('aria-expanded', String(on));
     place();
+    paintVars();   // collapse hides it; re-expanding must bring it straight back
     if (!on || !alsoRecord || !ctx || !ctx.actions) return;
     // Deferred one tick so the expand animation and the (blocking, main-thread)
     // recording do not fight over the same frame. setTimeout, not
@@ -376,17 +436,89 @@
     sync();
   }
 
-  function hideHelp() { if ($help) $help.hidden = true; }
+  function hideHelp() {
+    if (!$help || $help.hidden) return;
+    $help.hidden = true;
+    paintVars();                       // bring the list back
+  }
 
   function toggleHelp() {
     if (!$help) return;
     if (!$help.hidden) { $help.hidden = true; return; }
     $help.hidden = false;
-    var pr = $pill.getBoundingClientRect(), hr = $layer.getBoundingClientRect();
-    var left = pr.left - hr.left + pr.width - $help.offsetWidth;
-    $help.style.left = Math.max(4, Math.min(left, hr.width - $help.offsetWidth - 4)) + 'px';
-    $help.style.top = (pr.bottom - hr.top + 6) + 'px';
+    if ($vars) $vars.hidden = true;   // they would sit on top of each other
   }
+
+  var RM = '<svg width="9" height="9" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor"'
+         + ' d="M13 4.2L11.8 3 8 6.8 4.2 3 3 4.2 6.8 8 3 11.8 4.2 13 8 9.2 11.8 13 13 11.8 9.2 8z"/></svg>';
+  var UP = '<svg width="9" height="9" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor"'
+         + ' d="M8 1l6 7H9.5v7h-3V8H2z"/></svg>';
+
+  // Opt-OUT, not opt-in: every variable the student defines appears here by
+  // itself, in the order it came into existence, and grows as they step. A
+  // list you have to go and build is a list nobody builds.
+  function paintVars() {
+    if (!mounted || !ctx || !ctx.getVarModel) return;
+    var s = {};
+    try { s = ctx.getState() || {}; } catch (e) { s = {}; }
+    if (!s.replaying || !expanded) { $vars.hidden = true; return; }
+
+    var model = null, now = [], prev = [];
+    try {
+      model = ctx.getVarModel();
+      now   = ctx.getVars(s.idx) || [];
+      prev  = s.idx > 0 ? (ctx.getVars(s.idx - 1) || []) : [];
+    } catch (e) { $vars.hidden = true; return; }
+    if (!model) { $vars.hidden = true; return; }
+
+    var vals = Object.create(null), was = Object.create(null), i;
+    for (i = 0; i < now.length; i++) vals[now[i].name] = now[i].repr;
+    for (i = 0; i < prev.length; i++) was[prev[i].name] = prev[i].repr;
+
+    var names = [];
+    for (i = 0; i < model.order.length; i++) {
+      var nm = model.order[i];
+      if (model.fromImport[nm]) continue;          // library furniture
+      if (dropped[nm]) continue;                   // dismissed by the student
+      if (model.firstStep[nm] > s.idx) continue;   // not defined yet at this step
+      names.push(nm);
+    }
+    // Promoted names float to the top, most recently promoted first.
+    names.sort(function (a, b) {
+      var la = lifted.indexOf(a), lb = lifted.indexOf(b);
+      if (la === lb) return 0;
+      if (la < 0) return 1;
+      if (lb < 0) return -1;
+      return la - lb;
+    });
+
+    if (!names.length) { $vars.hidden = true; return; }
+
+    var html = '';
+    {
+      for (i = 0; i < names.length; i++) {
+        var n2 = names[i];
+        var v = n2 in vals ? vals[n2] : null;
+        var changed = v !== null && was[n2] !== undefined && was[n2] !== v;
+        html += '<div class="tk-dbg-vrow' + (changed ? ' changed' : '') + '">'
+          + '<button type="button" class="tk-dbg-vbtn rm" data-vact="rm" data-var="' + escAttr(n2)
+          + '" title="Remove ' + escAttr(n2) + ' from this list" aria-label="Remove ' + escAttr(n2) + '">' + RM + '</button>'
+          + '<span class="tk-dbg-vn" title="' + escAttr(n2) + '">' + escHtml(n2) + '</span>'
+          + '<span class="tk-dbg-vv" title="' + escAttr(v === null ? 'not defined at this step' : v) + '">'
+          + (v === null ? '&mdash;' : escHtml(v)) + '</span>'
+          + '<button type="button" class="tk-dbg-vbtn up" data-vact="up" data-var="' + escAttr(n2)
+          + '" title="Move ' + escAttr(n2) + ' to the top" aria-label="Move ' + escAttr(n2) + ' to the top">' + UP + '</button>'
+          + '</div>';
+      }
+    }
+    $vars.innerHTML = html;
+    $vars.hidden = false;
+  }
+
+  function escHtml(t) {
+    return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function escAttr(t) { return escHtml(t).replace(/"/g, '&quot;'); }
 
   function el(name) { return $pill.querySelector('[data-el="' + name + '"]'); }
   function grp(name) { return $pill.querySelector('[data-grp="' + name + '"]'); }
@@ -433,11 +565,11 @@
     var rightBound = (or_ && or_.width ? or_.left : editor.getBoundingClientRect().right) - 8;
 
     var left = anchor - host.left + (underRun ? 0 : 10);
-    var maxLeft = rightBound - host.left - $pill.offsetWidth;
+    var maxLeft = rightBound - host.left - $dock.offsetWidth;
     var x = Math.max(6, Math.min(left, maxLeft));
     var y = Math.max(2, nr.top - host.top + 2);
-    $pill.style.left = x + 'px';
-    $pill.style.top = y + 'px';
+    $dock.style.left = x + 'px';
+    $dock.style.top = y + 'px';
 
     // Keep recomputing until two consecutive passes agree. The first call
     // happens inside initialize(), while the toolbar and the off-canvas column
@@ -467,7 +599,7 @@
     var avail = false;
     try { avail = !!ctx.isAvailable(); } catch (e) { avail = false; }
     $pill.hidden = !avail;
-    if (!avail) { hideHelp(); return; }
+    if (!avail) { hideHelp(); if ($vars) $vars.hidden = true; return; }
 
     var s;
     try { s = ctx.getState() || {}; } catch (e) { return; }
@@ -497,6 +629,7 @@
       $pill.querySelector('[data-act="nextbp"]').disabled = noBp;
     }
     place();
+    paintVars();
   }
 
   // ---------------------------------------------------------------------
@@ -575,15 +708,15 @@
     function bounds() { return $layer.getBoundingClientRect(); }
     function put(left, top) {
       var b = bounds();
-      $pill.style.left = Math.max(4, Math.min(left, b.width - $pill.offsetWidth - 4)) + 'px';
-      $pill.style.top  = Math.max(4, Math.min(top,  b.height - $pill.offsetHeight - 4)) + 'px';
+      $dock.style.left = Math.max(4, Math.min(left, b.width - $pill.offsetWidth - 4)) + 'px';
+      $dock.style.top  = Math.max(4, Math.min(top,  b.height - $pill.offsetHeight - 4)) + 'px';
       if (draggedSinceDown) placed = true;
     }
 
     grip.addEventListener('pointerdown', function(e) {
       e.preventDefault();
       draggedSinceDown = false;
-      var pr = $pill.getBoundingClientRect(), b = bounds();
+      var pr = $dock.getBoundingClientRect(), b = bounds();
       down = { dx: e.clientX - pr.left, dy: e.clientY - pr.top, bx: b.left, by: b.top,
                sx: e.clientX, sy: e.clientY };
       try { grip.setPointerCapture(e.pointerId); } catch (err) {}
@@ -608,7 +741,7 @@
       if (!d) return;
       e.preventDefault();
       e.stopPropagation();
-      put((parseFloat($pill.style.left) || 0) + d[0], (parseFloat($pill.style.top) || 0) + d[1]);
+      put((parseFloat($dock.style.left) || 0) + d[0], (parseFloat($dock.style.top) || 0) + d[1]);
     });
   }
 
