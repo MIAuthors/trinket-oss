@@ -216,7 +216,9 @@
     '.tk-dbg-btn:hover:not(:disabled){color:#0969da!important}',
     '.tk-dbg-btn:active:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn:disabled{opacity:.32;cursor:default;color:#4a5b69!important}',
-    '.tk-dbg-btn.bp:hover:not(:disabled){color:#cf222e!important}',
+    // Navigation, so it hovers like every other navigation control. Red on
+    // this pill is reserved for the one button that ends the session.
+    '.tk-dbg-btn.bp:hover:not(:disabled){color:#0969da!important}',
     // The circle glyphs read small against the chevrons next door.
     '.tk-dbg-btn.bp,.tk-dbg-btn[data-act="bphelp"]{font-size:15px;padding:3px 4px}',
     // Chevrons read lighter and narrower than the filled triangles they
@@ -230,10 +232,8 @@
     // THE DEFAULT ACTION. Everything else in the row is a small muted glyph;
     // this one is labelled, larger and accent-coloured from rest, so what to
     // click to advance one line is not a guess. Still no background.
-    '.tk-dbg-btn.primary{color:#0969da!important;font-size:12.5px;font-weight:600;',
-      'display:flex;align-items:center;gap:4px;padding:3px 7px 3px 5px;',
-      'letter-spacing:.01em}',
-    '.tk-dbg-btn.primary .fa{font-size:14px}',
+    '.tk-dbg-btn.primary{color:#0969da!important;padding:3px 6px}',
+    '.tk-dbg-btn.primary .fa{font-size:17px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
     '.tk-dbg-slidewrap{flex:0 0 70px;min-width:0;height:25px;display:flex;',
@@ -330,6 +330,10 @@
     // rather than only while the pointer is on it.
     '.tk-dbg-vbtn.up.on{color:#1a7f37!important}',
     '.tk-dbg-vars .empty{font-size:11px;color:#8794a1;padding:3px 2px;white-space:nowrap}',
+    '.tk-dbg-showall{display:block;width:100%;text-align:left;border:0;cursor:pointer;',
+      'font-size:10.5px;color:#0969da!important;padding:3px 2px 1px 24px;',
+      'border-top:1px solid #f1f4f7;margin-top:2px}',
+    '.tk-dbg-showall:hover{color:#0550ae!important;text-decoration:underline}',
     '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
   ].join('');
 
@@ -384,7 +388,7 @@
     +         '<span class="tk-dbg-box">'
     +           btn('first', 'fa-fast-backward', 'Back to the first step')
     +           btn('back', 'fa-step-backward', 'Back one line')
-    +           btn('fwd', 'fa-step-forward', 'Run the next line')
+    +           btn('fwd', 'fa-step-forward', 'Run the next line', 'primary')
     +           btn('last', 'fa-fast-forward', 'Forward to the last step')
     +         '</span>'
     +       '</span>'
@@ -472,6 +476,11 @@
       var b = e.target.closest('[data-vact]');
       if (!b) return;
       var nm = b.getAttribute('data-var');
+      if (b.getAttribute('data-vact') === 'showall') {
+        dropped = {};
+        paintVars();
+        return;
+      }
       if (b.getAttribute('data-vact') === 'rm') {
         dropped[nm] = true;
         var at = lifted.indexOf(nm);
@@ -620,6 +629,9 @@
       return;
     }
     armWaiting = false;
+    // A new recording is a fresh start: anything hidden belonged to the old one.
+    dropped = {};
+    lifted = [];
     try { ctx.actions.start(); } catch (e) {}
     sync();
   }
@@ -684,11 +696,16 @@
     }
     for (i = 0; i < prev.length; i++) was[prev[i].name] = prev[i].repr;
 
+    // Count what the student has hidden, so it can be offered back. Dismissing
+    // a variable used to be irreversible for the whole page session: no reset,
+    // no message, no way back -- and silently losing the variable you are
+    // debugging is the worst failure this panel could have.
+    var hidden = 0;
     var names = [];
     for (i = 0; i < model.order.length; i++) {
       var nm = model.order[i];
       if (model.fromImport[nm]) continue;          // library furniture
-      if (dropped[nm]) continue;                   // dismissed by the student
+      if (dropped[nm]) { hidden++; continue; }     // dismissed by the student
       if (model.firstStep[nm] > s.idx) continue;   // not defined yet at this step
       names.push(nm);
     }
@@ -701,7 +718,7 @@
       return la - lb;
     });
 
-    if (!names.length) { $vars.hidden = true; return; }
+    if (!names.length && !hidden) { $vars.hidden = true; return; }
 
     var html = '';
     {
@@ -733,6 +750,10 @@
           + stmt + '</span>'
           + '</div>';
       }
+    }
+    if (hidden) {
+      html += '<button type="button" class="tk-dbg-showall" data-vact="showall">'
+            + hidden + ' hidden \u2014 show all</button>';
     }
     $vars.innerHTML = VGRIP + html;
     $vars.hidden = false;
