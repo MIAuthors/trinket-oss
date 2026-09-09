@@ -376,6 +376,15 @@
   <p class="eyebrow">Trinket &middot; wish 3 &middot; interaction specimen</p>
   <h1>The DEBUG panel, operable</h1>
   <p class="standfirst">A working mock of the proposed floating debugger: drag it by the grip, scrub the slider, and watch the projectile plot redraw one frame per loop iteration. The chrome around it is a facsimile of the Pyodide embed; the panel is the actual proposal.</p>
+  <p class="provenance" style="border:1px solid #b06000;border-left-width:4px;padding:10px 12px;color:#7a4400;background:#fff8ef">
+    <b>SUPERSEDED 2026-09-08 &mdash; this is the pre-build proposal, not the shipped panel.</b>
+    Slice&nbsp;1 is built on <code>feature/debug-panel</code> behind <code>features.debugPanel</code>, and it diverges from this specimen in three ways that matter:
+    (1) the transport is a <b>2&times;2 grid of three captioned boxes</b> (STEP MODE / AUTO MODE / BREAKPOINTS), not the single row shown here;
+    (2) AUTO MODE is a <b>forward-only ladder of five fixed rates</b> &mdash; 1/5, 1/2, play, 2, 5 lines per second, the slow two drawn as stacked fractions &mdash; and <b>backwards autoplay was deleted</b>;
+    (3) <b>autoplay stops at breakpoints</b> (<code>debugAutoStep</code> advances one step, then tests where it landed), which the autoplay demonstrated below deliberately ignores.
+    Also shipped and not shown here: no message of any kind renders inside the pill &mdash; they all go to the top of the floating variables window.
+    Keep this file for the interaction argument it makes; do not read geometry or behaviour off it.
+  </p>
   <p class="provenance">
     <b>Specimen only &mdash; no Trinket file was changed to build this.</b> Geometry and colour are read out of <code>main</code> at <code>7706618</code>: <code>.tab-nav</code> is 2.275&nbsp;rem tall with <code>overflow: hidden</code> (<code>_code_editor.scss:332</code>), which is why the panel floats on an overlay rather than living in the bar; <code>#2b6c9e</code> / <code>#14435f</code> / <code>#a94442</code> are <code>.debug-btn</code>, its hover, and <code>.debug-bp-btn</code>.<br>
     Panel idiom lifted from plotpolish&rsquo;s <code>.pill.float</code> / <code>.pill.collapsed</code> / <code>.popover</code>. Icons are hand-drawn stand-ins &mdash; the embed uses Font&nbsp;Awesome&nbsp;4, which cannot load here.
