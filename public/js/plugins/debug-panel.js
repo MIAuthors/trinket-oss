@@ -1179,13 +1179,11 @@
     // fires, whatever the index. It is a separate slot in getState for exactly
     // that reason.
     if (s.flash) msgs.push(s.flash);
-    if (s.idx === 0) {
-      if (note) msgs.push(note);
-    } else if (s.line != null && s.lineVisit) {
-      msgs.push('About to execute line ' + s.line
-        + (s.lineVisit > 1 ? ' for the ' + ordinal(s.lineVisit) + ' time.'
-                           : ' for the first time.'));
-    }
+    // The explainer wins on arrival, but only if there IS one: an ordinary
+    // recording has nothing to explain, and leaving the area blank on the step
+    // the student lands on wastes the one line they are guaranteed to read.
+    if (s.idx === 0 && note) msgs.push(note);
+    else if (aboutToRun(s)) msgs.push(aboutToRun(s));
     if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
@@ -1337,6 +1335,16 @@
     $vars.classList.remove('attached');
     $vars.style.left = Math.round(vr.left - b.left) + 'px';
     $vars.style.top = Math.round(vr.top - b.top) + 'px';
+  }
+
+  // "About to execute line 8 for the 43rd time." -- or just "About to execute
+  // line 8." until the program has actually repeated a line. Composed in ONE
+  // place because it renders on two surfaces (the variables window and the
+  // slider's tooltip) and they must not drift apart.
+  function aboutToRun(s) {
+    if (s.line == null || !s.lineVisit) return '';
+    return 'About to execute line ' + s.line
+         + (s.visitOrdinals ? ' for the ' + ordinal(s.lineVisit) + ' time.' : '.');
   }
 
   // 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st, 43rd. The teens are the
@@ -1505,7 +1513,7 @@
     // been closed by an edit, because by then the student is not discovering
     // the feature -- they are getting back to where they were.
     var ll = el('launchlabel');
-    if (ll) ll.textContent = editExited ? 'Restart Debugger' : 'step through';
+    if (ll) ll.textContent = editExited ? 'Restart Debugger' : 'Step through';
 
     var waiting = !s.recording && !s.replaying && s.busy && expanded && armWaiting;
     grp('launch').hidden     = s.recording || s.replaying || waiting;
@@ -1541,10 +1549,7 @@
           // The visit count makes a loop legible -- the same line at step 40
           // and step 900 is the difference between the 8th pass and the 180th,
           // and nothing else on the pill says which.
-          + (s.line != null && s.lineVisit
-               ? '\n\nAbout to execute line ' + s.line
-                 + (s.lineVisit > 1 ? ' for the ' + ordinal(s.lineVisit) + ' time' : ' for the first time')
-               : '');
+          + (aboutToRun(s) ? '\n\n' + aboutToRun(s) : '');
       var atStart = s.idx <= 0, atEnd = s.idx >= s.total;
       $pill.querySelector('[data-act="first"]').disabled = atStart;
       $pill.querySelector('[data-act="back"]').disabled = atStart;
