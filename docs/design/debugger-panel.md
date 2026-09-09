@@ -1,8 +1,32 @@
 # Floating DEBUG panel — scoping for Wish 3
 
-Status: **scoping. Nothing implemented, nothing decided.** Follow-up to
-`pyodide-debugger-mvp.md`, whose Phases 1-3 are in `main` behind
-`features.stepDebugger`.
+Status: **slice 1 is BUILT** (2026-09-08, branch `feature/debug-panel`, behind
+`features.debugPanel`, which defaults to false and requires `stepDebugger`).
+The rest of this document is the scoping that preceded it and is preserved as
+the argument, not as a description of the code — where the two disagree, the
+code wins. Follow-up to `pyodide-debugger-mvp.md`, whose Phases 1-3 are in
+`main` behind `features.stepDebugger`.
+
+**What slice 1 actually shipped, 2026-09-08** — read this before believing
+anything below it:
+
+- One new plugin file, `public/js/plugins/debug-panel.js`, plus hooks in
+  `pyodide.js`. The panel is a strict **view**: it reads
+  `getState()`/`getVarModel()`/`getVars()` and calls back into the existing
+  replay functions, so the in-tab controls keep working with the flag off.
+- **The panel renders its own variables list** — it is not §5's "variant A"
+  (reuse the in-tab table). Every variable the student binds appears under the
+  pill in first-appearance order; imported names are excluded by the recorder,
+  not by a JS filter.
+- **Deferred recording is gone** (removed the same day). The recording always
+  starts at the program's first line; `bpHit`/`truncated` replaced
+  `armed`/`skipped`; auto mode stops at breakpoints via `debugAutoStep`.
+- **No message ever renders inside the pill.** Everything the panel says —
+  error banner, end-of-recording, the recorder's note, transient notes — is
+  composed by `saysHtml()` at the top of the floating variables window.
+- Still to do: slice 2 (show the pill only after a Run, ≥2 non-import lines,
+  never VPython), slice 3 (adjudicate ←/→ between the panel and Ace),
+  slice 4 (matplotlib frame capture — gated on a collaborator notice).
 
 The ask (Larry, 2026-09-08): take the step-through debugger out of the
 Variables tab and give it its own floating affordance in the editor's file-tab
@@ -23,7 +47,9 @@ plots redrawn once per loop iteration with only the newest one shown.
 - Recorder + replay live in `public/js/embed/pyodide.js:1712-2290`
   (`RECORD_HELPER`, `runStepThrough`, `debugStepTo`, `paintReplaySnap`,
   `exitReplay`). Caps: 5 000 steps, 50 vars/step, 120-char reprs, **2 MB total
-  JSON** (`DEBUG_MAX_BYTES`), 200 000 dormant line events.
+  JSON** (`DEBUG_MAX_BYTES`), frame depth 20. (The 200 000 dormant-line-event
+  cap named here originally went away with deferred recording on 2026-09-08 —
+  every line event is now recorded under the 5 000-step / 2 MB bound.)
 - Markup is nested **inside** `#variables-wrap` in
   `lib/views/embed/pyodide.html:439-478`, which is why
   `features.stepDebugger` requires `features.variableExplorer`.
@@ -33,8 +59,12 @@ plots redrawn once per loop iteration with only the newest one shown.
   because "the launcher itself lives in the Variables panel, which a student
   has to know to open first". So discoverability is a known, already-patched-at
   problem — this proposal replaces the patch rather than inventing the concern.
-- Breakpoints exist (Ace gutter, `debugBreakpoints`, next/prev navigation, plus
-  deferred recording that arms the tracer at the first breakpoint).
+- Breakpoints exist (Ace gutter, `debugBreakpoints`, next/prev navigation).
+  **Superseded 2026-09-08:** this bullet used to end "plus deferred recording
+  that arms the tracer at the first breakpoint". That was removed. The
+  recording now always starts at the program's first line; the recorder reports
+  `bpHit` (did any marked line run), and the panel's auto mode stops when it
+  steps onto a marked line.
 - **VPython is refused**, but only after the click:
   `pyodide.js:2219` shows "Step through is not available for VPython programs".
 - matplotlib in a debug run: figures appear at the **end**, as in a normal run.
@@ -237,7 +267,7 @@ flag.
 | # | Slice | Est. | Notes |
 |---|---|---|---|
 | 0 | Prototype (artifact + in-situ shot) | 0.5-1 d | zero repo diff |
-| 1 | Panel shell, variant A (controls float, variables stay) | 1-1.5 d | one plugin file + flag + hooks |
+| 1 | Panel shell, variant A (controls float, variables stay) | 1-1.5 d | **BUILT 2026-09-08, but as variant B**: the panel renders its own variables window. Slice 5 below is therefore done too. |
 | 2 | Trigger heuristic; no pill for VPython | 0.25 d | |
 | 3 | Focus / arrow-key adjudication | 0.25 d | |
 | 4 | matplotlib frame capture + replay in `#graphic` | 1.5-2.5 d | after wish item 01 |
@@ -251,16 +281,25 @@ built, not for this.
 
 ## 6. Open questions for Larry
 
-1. Variant A now and B later, or hold out for B?
-2. Should the pill *replace* both existing entry points (`#debug-start` in the
-   Variables toolbar and `#debug-start-alt` in the console), or sit alongside
-   them during a transition?
-3. Does the panel remember where it was dragged to — per session, or per
-   trinket? plotpolish's popover "stays put across tab switches once dragged"
-   but does not persist across reloads.
-4. On the fresh-namespace wart: is re-running on Step-through acceptable, or
-   should the pill only appear when the program is namespace-clean?
-5. matplotlib frames: `gcf()` only, or every open figure?
+**Answered 2026-09-08 while slice 1 was built** — 1 to 4 are settled; only 5 is
+still open.
+
+1. Variant A now and B later, or hold out for B? — **B, immediately.** The
+   panel renders its own variables list, opt-out rather than opt-in: every name
+   the student binds appears under the pill in first-appearance order. The
+   paperclip/pinning design of §11 was dropped in its favour.
+2. Should the pill *replace* both existing entry points? — **Alongside.** The
+   panel is a view; `#debug-start`, `#debug-start-alt` and the in-tab transport
+   are untouched and still work with `features.debugPanel` off.
+3. Does the panel remember where it was dragged to? — **Per page session
+   only.** The dragged position is module state in `debug-panel.js`; a reload
+   re-docks it under Run. Not persisted, and nobody has asked for it to be.
+4. On the fresh-namespace wart: is re-running on Step-through acceptable? —
+   **Yes, and no extra run happens.** One click on the collapsed pill expands
+   it *and* starts the recording; step-through already runs the program itself.
+   If the runner is busy the panel waits (200 ms poll, ~30 s cap).
+5. matplotlib frames: `gcf()` only, or every open figure? — **still open**, and
+   it belongs to slice 4, which is gated on a collaborator notice.
 
 ## 7. Calibration against plotpolish (the one estimate we can now audit)
 
@@ -419,7 +458,7 @@ library. Two moves get the optionality and the groundwork at near-zero cost:
 
 - **Document and version the trace format** as an artifact in Trinket's
   `docs/design/` — the JSON a recording produces, with its caps and its
-  `armed`/`skipped`/`truncated` semantics. That is the portable thing. If a
+  `bpHit`/`truncated` semantics. That is the portable thing. If a
   second host ever wants it, extraction becomes mechanical; if none does,
   nothing was spent.
 - **The citable artifact is a writeup**, not a package — the trace format plus
