@@ -37,6 +37,10 @@
   var $dock   = null;
   var armWaiting = false;  // queued a recording, waiting for the runner to idle
   var armCancelled = false;  // a cancel pressed while the recording was only QUEUED
+  // Set by the "record from the breakpoint instead" button so the deferred
+  // recording goes through armRecording like every other launch -- getting the
+  // busy-wait and the fresh-start reset that a bare actions.* call lacks.
+  var armDefer = false;
   // Replay ended because the student started typing, rather than because they
   // pressed the exit. The panel stays OPEN in that case and the variables
   // window carries the reason -- see paintVars().
@@ -455,6 +459,27 @@
     // rather than only while the pointer is on it.
     '.tk-dbg-vbtn.up.on{color:#1a7f37!important}',
     '.tk-dbg-vars .empty{font-size:11px;color:#8794a1;padding:3px 2px;white-space:nowrap}',
+    // The deferred-recording offer. The question is deliberately plain text
+    // at note weight -- it is a sentence, not a heading -- and the button is
+    // the only filled control anywhere in this panel. That is on purpose: it
+    // is the one place the panel asks the student to commit to re-running
+    // their program, and an accent glyph among accent glyphs would not read
+    // as a commitment. It sits in the variables window, which is where the
+    // message it answers already is.
+    //
+    // Every colour carries !important. Foundation's `button:hover,
+    // button:focus{color:#fff}` is (0,1,1) and would paint the label white on
+    // blue-white, and the .tk-dbg-vars button reset above it strips
+    // backgrounds with !important -- so the background needs one too, or this
+    // button renders transparent with white text on white.
+    '.tk-dbg-vask{font-size:11.5px;line-height:1.4;color:#1f2328;',
+      'padding:4px 3px 3px;max-width:200px}',
+    '.tk-dbg-vgo{display:block;margin:0 3px 5px!important;padding:3px 9px;',
+      'border:0;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;',
+      'font-family:inherit;background:#0969da!important;color:#fff!important;',
+      'transition:background 90ms ease}',
+    '.tk-dbg-vgo:hover,.tk-dbg-vgo:focus{background:#0550ae!important;color:#fff!important}',
+    '.tk-dbg-vgo:active{background:#033d8a!important;color:#fff!important}',
     '.tk-dbg-showall{display:block;width:100%;text-align:left;border:0;cursor:pointer;',
       'font-size:10.5px;color:#0969da!important;padding:3px 2px 1px 24px;',
       'border-top:1px solid #f1f4f7;margin-top:2px}',
@@ -672,6 +697,24 @@
 
     $vars.addEventListener('click', function(e) {
       if (e.target.closest('[data-vgrip]')) return;   // that is the drag handle
+      // The deferred-recording button. It lives in the variables window
+      // rather than the pill because that is where the message it answers is,
+      // and because the pill is full by design.
+      var go = e.target.closest('[data-act="deferstart"]');
+      if (go) {
+        armDefer = true;
+        stopPlay();
+        // LEAVE REPLAY FIRST. The offer is shown from inside a replay, and
+        // armRecording refuses outright while s.replaying is true -- so the
+        // button did nothing at all, silently, with no console error to show
+        // for it. runStepThrough would have exited replay itself, but the
+        // panel's own guard fires before it ever gets there. Found by pressing
+        // the button, not by reading it.
+        try { ctx.actions.exit(); } catch (e) {}
+        note('recording again, from your breakpoint\u2026');
+        armRecording(0);
+        return;
+      }
       var b = e.target.closest('[data-vact]');
       if (!b) return;
       var nm = b.getAttribute('data-var');
@@ -931,7 +974,11 @@
     lifted = [];
     mode = 'step';
     editExited = false;   // the message has been answered by re-recording
-    try { ctx.actions.start(); } catch (e) {}
+    try {
+      if (armDefer && ctx.actions.startDeferred) ctx.actions.startDeferred();
+      else ctx.actions.start();
+    } catch (e) {}
+    armDefer = false;   // one press, one deferred recording
     sync();
   }
 
@@ -1056,6 +1103,25 @@
     if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
+    }
+    // THE OFFER. The recording ran out of budget before it reached the line
+    // the student marked, so the one thing they wanted to look at is the one
+    // thing they cannot. Offer the re-record rather than leaving them to work
+    // out that a shorter loop would have helped.
+    //
+    // A question and then a button, in that order, because the button commits
+    // them to a second run of their program and the question is what makes
+    // that a choice rather than a surprise. getState() only sets canDefer on
+    // the evidence -- truncated, marked line never reached, and not already a
+    // deferred attempt -- so this cannot nag.
+    if (s.canDefer) {
+      out += '<div class="tk-dbg-vask">'
+           + (s.deferLine
+                ? 'Record from line ' + s.deferLine + ' instead?'
+                : 'Record from your breakpoint instead?')
+           + '</div>'
+           + '<button type="button" class="tk-dbg-vgo" data-act="deferstart">'
+           + 'Start recording there</button>';
     }
     return out;
   }
@@ -1308,6 +1374,14 @@
     // whichever mode box happened to be lit. Same shape as the editExited
     // line above it, deliberately.
     if (s.recording && !wasRecording) { dropped = {}; lifted = []; mode = 'step'; }
+    // ...and on the FALLING edge, drop whatever the panel was saying about the
+    // recording in flight ("recording again, from your breakpoint..."). By now
+    // it has either opened a replay or the host has posted its own answer, and
+    // the in-flight message sitting beside that answer reads as a contradiction.
+    // The replay case is covered by the s.replaying edge below, but a recording
+    // that ends WITHOUT a replay -- a deferred attempt whose line never ran --
+    // has no falling replay edge to ride.
+    if (wasRecording && !s.recording) { transientNote = ''; noteIdx = null; }
     wasRecording = !!s.recording;
 
     // Every transient note the panel writes during a replay is about THAT
