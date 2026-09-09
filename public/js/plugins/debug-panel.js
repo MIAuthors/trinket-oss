@@ -1163,10 +1163,9 @@
     // red banner. When the banner IS above, drop the clause rather than say it
     // twice -- and drop the separator with it, so an error-only note does not
     // leave a stray middle dot.
+    // No string surgery on s.note any more: the host keeps the "ends with an
+    // error" clause in its own slot, which the panel simply never reads.
     var note = s.note || '';
-    if (note && s.hasError) {
-      note = note.replace('This run ends with an error.', '').trim();
-    }
     // ARRIVAL EXPLAINERS vs THE LIVE POSITION. The truncation explainer, the
     // deferred-playback note and the breakpoint status all answer "what IS
     // this recording", which is a question you have on arrival and never
@@ -1179,11 +1178,24 @@
     // fires, whatever the index. It is a separate slot in getState for exactly
     // that reason.
     if (s.flash) msgs.push(s.flash);
-    // The explainer wins on arrival, but only if there IS one: an ordinary
-    // recording has nothing to explain, and leaving the area blank on the step
-    // the student lands on wastes the one line they are guaranteed to read.
-    if (s.idx === 0 && note) msgs.push(note);
-    else if (aboutToRun(s)) msgs.push(aboutToRun(s));
+    // Three clauses, and each one exists because the fallback was empty in
+    // some state:
+    //
+    //  1. ON ARRIVAL the explainer wins. `!s.replaying` is in the test as well
+    //     as `idx === 0` because the condition means "there is no position to
+    //     report yet", and OUTSIDE a replay there is no position at all --
+    //     which is the state every bail message is delivered in.
+    //  2. Otherwise the live position, which is what stepping wants.
+    //  3. Otherwise the explainer again, because at the synthetic <end> step
+    //     there is no line to report AND "Reached the end and stopped." is
+    //     suppressed on a truncated run -- so a student who pressed
+    //     jump-to-last on a recording that stopped 1,167 iterations short saw
+    //     nothing at all telling them why. Arrival at the end is a second
+    //     thing that needs explaining, not a position.
+    var pos = aboutToRun(s);
+    if ((!s.replaying || s.idx === 0) && note) msgs.push(note);
+    else if (pos) msgs.push(pos);
+    else if (note) msgs.push(note);
     if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
