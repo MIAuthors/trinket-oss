@@ -33,6 +33,7 @@
   var $pill   = null;
   var $help   = null;
   var $vars   = null;
+  var $vgrip  = null;  // the persistent drag handle inside $vars
   var $dock   = null;
   var armWaiting = false;  // queued a recording, waiting for the runner to idle
   var armCancelled = false;  // a cancel pressed while the recording was only QUEUED
@@ -642,43 +643,32 @@
     // dock's position, and the point is to move it independently.
     $layer.appendChild($dock);
     $layer.appendChild($vars);
-    // Delegated, because paintVars() rewrites innerHTML and replaces the grip.
-    $vars.addEventListener('pointerdown', function (e) {
-      if (!e.target.closest('[data-vgrip]')) return;
-      draggable($vars, '[data-vgrip]', $vars, detachVars);
-      var g = $vars.querySelector('[data-vgrip]');
-      if (g && !g.__wired) {
-        g.__wired = true;
-        g.dispatchEvent(new PointerEvent('pointerdown', {
-          pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY, bubbles: false
-        }));
-      }
-    }, true);
+    // THE GRIP IS BUILT ONCE AND NEVER REBUILT, and that is the whole reason
+    // this window can be dragged while auto mode is running.
+    //
+    // It used to be part of the string paintVars() wrote into
+    // $vars.innerHTML, so every repaint destroyed and recreated it. A drag is
+    // a gesture that spans repaints: press down, and the grip node carrying
+    // the pointer capture, the pointermove listener and the drag's `down`
+    // state was thrown away by the next paint. Stepping by hand hid it,
+    // because a single press repaints once and the gesture is over before it
+    // matters -- but autoplay repaints once per step, so the drag died within
+    // a tick, every time. The pill's grip is static markup and never had the
+    // problem, which is exactly why one dragged and the other did not.
+    //
+    // Wiring it here also lets draggable() be called ONCE rather than on
+    // every pointerdown, which had been stacking a fresh set of listeners on
+    // the node each press, and gives the grip its keyboard for free.
+    $vars.innerHTML = VGRIP;
+    $vgrip = $vars.querySelector('[data-vgrip]');
+    draggable($vars, '[data-vgrip]', $vars, detachVars);
 
-    // SLICE 3, the arrow-key adjudication, variables-window half. Delegated
-    // for the same reason the pointerdown above is: paintVars() rewrites
-    // $vars.innerHTML on every paint, so a listener bound to the grip NODE
-    // dies on the next repaint -- and draggable() only ever ran after a mouse
-    // drag, so before one the grip had no keyboard at all. Focusing it and
-    // pressing an arrow therefore fell through to pyodide.js's document
-    // handler and STEPPED THE RECORDING, which is the one thing a
-    // window-moving control must not do. stopPropagation is what settles the
-    // claim: while this grip has focus, the arrows are the window's.
-    $vars.addEventListener('keydown', function (e) {
-      if (!e.target.closest('[data-vgrip]')) return;
-      var map = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] };
-      var d = map[e.key];
-      if (!d) return;
-      e.preventDefault();
-      e.stopPropagation();
-      detachVars();   // moving it by hand is what takes it off the dock
-      var b = $layer.getBoundingClientRect();
-      var vr = $vars.getBoundingClientRect();
-      var left = (parseFloat($vars.style.left) || (vr.left - b.left)) + d[0];
-      var top  = (parseFloat($vars.style.top)  || (vr.top  - b.top))  + d[1];
-      $vars.style.left = Math.max(4, Math.min(left, b.width  - $vars.offsetWidth  - 4)) + 'px';
-      $vars.style.top  = Math.max(4, Math.min(top,  b.height - $vars.offsetHeight - 4)) + 'px';
-    });
+    // SLICE 3, the arrow-key adjudication, variables-window half: the grip's
+    // keyboard now comes from draggable() above, wired once with the grip
+    // itself. It calls stopPropagation, which is what settles the claim --
+    // while this grip has focus the arrows move the window and never reach
+    // pyodide.js's stepping handler. This used to need its own delegated
+    // listener because the grip node did not survive a repaint.
 
     $vars.addEventListener('click', function(e) {
       if (e.target.closest('[data-vgrip]')) return;   // that is the drag handle
@@ -1003,7 +993,12 @@
     // The popover stays authoritative until hideHelp(), which repaints.
     if ($help && !$help.hidden) { $vars.hidden = true; return; }
     if (!inner) { $vars.hidden = true; return; }
-    $vars.innerHTML = VGRIP + inner;
+    // Everything AFTER the grip, leaving the grip node itself in place. Not a
+    // wrapper div around the content: the rows are siblings of the grip today,
+    // and `.tk-dbg-vrow:first-child{border-top:0}` would start matching if
+    // they were nested, quietly dropping the first row's top border.
+    while ($vgrip.nextSibling) $vars.removeChild($vgrip.nextSibling);
+    $vgrip.insertAdjacentHTML('afterend', inner);
     $vars.hidden = false;
     placeVars();
   }
