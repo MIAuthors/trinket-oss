@@ -2149,21 +2149,47 @@ function debugErrorLine() {
       return steps[i].line;
     }
   }
-  var re = /line (\d+)/g, m = null, x;
-  while ((x = re.exec(debugRec.error)) !== null) m = x;
+  // No steps: a SyntaxError, which never ran, so the only record of the line
+  // is the traceback text. ANCHORED on the `File "<debug>", line N` header,
+  // and taking the FIRST match rather than the last.
+  //
+  // This used to scan for the last /line (\d+)/ anywhere in the string, with a
+  // comment about reporting the innermost frame of a multi-frame traceback --
+  // but the payload is format_exception_only (see RECORD_HELPER), which
+  // contains no frames at all, so there was never an innermost one to find.
+  // What the last match actually picked up was whatever came later in the
+  // text, and on CPython 3.13 (pinned via pyodide 0.28.1) that is the
+  // message's own suffix: "IndentationError: expected an indented block after
+  // 'for' statement on line 1" made the banner say line 1 for an error on
+  // line 2 -- on the single most common beginner mistake. It also let the
+  // student's own source set the number, because the offending line is echoed
+  // into the payload: `print('see line 99')` produced "Error on line 99".
+  var m = /^\s*File "[^"]*", line (\d+)/.exec(debugRec.error);
   return m ? parseInt(m[1], 10) : null;
 }
 
 // The one line of a traceback worth putting in front of a student: the
 // trailing `SomeError: what went wrong`. The frames above it are noise when the
 // program is eight lines long, and the whole traceback is still in the console.
-// Last non-blank line, because a SyntaxError's final line is the message while
-// the two above it are the offending source and a caret.
+// Anchored on the LAST `SomeError:` header and joined from there, rather than
+// simply taking the last non-blank line. The old rule was right about the
+// common shape -- a SyntaxError's final line is the message, and the two above
+// it are the offending source and a caret -- but wrong whenever the message
+// itself spans lines: `raise ValueError('line one\nline two')` showed only
+// "line two", losing both the error type and half of what the student wrote.
+// Falls back to the old behaviour when there is no header to anchor on.
 function debugErrorMessage() {
   if (!debugRec || !debugRec.error) return null;
   var lines = String(debugRec.error).replace(/\s+$/, '').split('\n');
-  for (var i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].trim()) return lines[i].trim();
+  var head = -1;
+  for (var i = 0; i < lines.length; i++) {
+    if (/^\w[\w.]*(Error|Exception|Warning|Exit|Interrupt|StopIteration)?\s*:/.test(lines[i])) head = i;
+  }
+  if (head >= 0) {
+    return lines.slice(head).join(' ').replace(/\s+/g, ' ').trim();
+  }
+  for (var j = lines.length - 1; j >= 0; j--) {
+    if (lines[j].trim()) return lines[j].trim();
   }
   return null;
 }
@@ -2517,13 +2543,18 @@ function enterReplay(rec) {
                 + (rec.truncated ? ' before it stopped' : '');
   }
   if (rec.truncated) notes.push('recording stopped after ' + (rec.steps.length - 1) + ' steps');
-  // Only when the floating panel is absent. With the panel on, the error gets
-  // a bold red banner at the TOP of the variables window instead -- "ends with
-  // an error" at the foot of the pill said nothing actionable, and the actual
-  // traceback lives in the console, which sits in an output pane the student
-  // is not looking at while they step. Without the panel this note is the only
-  // channel there is, so it stays.
-  if (rec.error && !debugPanelEnabled()) notes.push('ends with an error');
+  // Unconditional. This used to be gated on !debugPanelEnabled(), on the
+  // reasoning that the panel shows a bold red banner instead -- but
+  // debugPanelEnabled() is a pure CONFIG read and says nothing about whether
+  // the panel is rendering anything right now. The banner lives past the
+  // panel's `if (!expanded) return` guard, and a collapsed pill mid-replay is
+  // reachable: the in-tab controls are still emitted with the flag on
+  // (pyodide.html gates them on stepDebugger alone), so a student can start
+  // step-through from the Variables tab with the pill shut. In that state the
+  // note was suppressed, the banner was unreachable, and showVariables() had
+  // hidden the console -- so nothing anywhere said the run ends badly.
+  // The panel drops this clause itself when its red banner IS showing.
+  if (rec.error) notes.push('ends with an error');
   debugBaseNote = notes.join(' · ');
   $('#debug-note').text(debugNoteText());
   // Without the floating panel the controls only exist inside the Variables
