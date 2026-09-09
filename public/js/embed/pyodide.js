@@ -1748,6 +1748,21 @@ var DEBUG_MAX_VARS = 50;
 var DEBUG_MAX_REPR = 120;
 var DEBUG_MAX_DEPTH = 20;
 var DEBUG_MAX_BYTES = 2 * 1024 * 1024;
+// OPT-IN deferred recording (see debugRunDeferred). Only reachable from the
+// button the panel offers after a recording truncated before reaching the
+// student's breakpoint -- never automatic, which is the whole difference from
+// the version deleted in 21488d9.
+//
+// DEBUG_MAX_DORMANT bounds the coast: without it a `while True:` ABOVE the
+// breakpoint spins forever, because nothing accumulates in _steps to trip the
+// step cap. Restored at its original value.
+var DEBUG_MAX_DORMANT = 200000;
+// How many steps before the breakpoint the coast keeps, so replay opens with
+// context rather than cold on the marked line. A ring buffer, so the cost is
+// bounded no matter how long the coast is; fewer than this simply keeps what
+// exists. 100 is ~14 turns of a six-line loop body -- enough to see the
+// rhythm and the variable trend leading in.
+var DEBUG_LOOKBACK_STEPS = 100;
 
 // The user program is compiled with filename '<debug>' and exec'd in a fresh
 // namespace: user frames are exactly the '<debug>' frames (functions defined in
@@ -1757,7 +1772,7 @@ var DEBUG_MAX_BYTES = 2 * 1024 * 1024;
 // step (full output, final globals) is appended so students can step past the
 // last line to the terminal state.
 var RECORD_HELPER = [
-  'import sys, json, types, io, traceback, reprlib',
+  'import sys, json, types, io, traceback, reprlib, collections',
   // KEEP IN SYNC with VARS_HELPER's _SKIP + filters (the live explorer): both
   // must hide the same runner-injected names. They live in separate helper
   // strings/namespaces, so a shared definition would add more machinery than
@@ -1768,6 +1783,14 @@ var RECORD_HELPER = [
   '_snaps = []',
   '_size = [0]',
   '_truncated = [False]',
+  // Deferred-recording state. _ring holds up to _lookback (step, snap, cost)
+  // triples while coasting; _coasted counts every coasted line event; _kept
+  // and _skipped are what the ring retained and dropped when the breakpoint
+  // finally fired, so the UI can say both numbers honestly.
+  '_ring = collections.deque()',
+  '_coasted = [0]',
+  '_kept = [0]',
+  '_skipped = [0]',
   '_buf = io.StringIO()',
   '_last_out = [0]',
   // Names a library put in the namespace, tracked as execution goes so that
@@ -1916,23 +1939,62 @@ var RECORD_HELPER = [
   // is recorded now, so every byte of stdout lands in the accounting.
   '    _size[0] += _buf.tell() - _last_out[0]',
   '    _last_out[0] = _buf.tell()',
-  // No early return here: every line event falls through into the recording
-  // path below, breakpoints set or not.
+  // Import attribution and the depth are needed by BOTH paths below, so they
+  // run before either. _note_new only updates _seen/_imported, so running it
+  // once more on an event that then aborts is harmless.
+  '    _d = _depth_of(_frame)',
+  '    if _d == 0:',
+  '        _note_new(_frame.f_locals)',
+  // Has a marked line executed yet? On the event where it first does, the
+  // deferred run ARMS: the lookback window is flushed into the recording and
+  // this same event then falls through and is recorded normally. So replay
+  // opens _lookback steps BEFORE the marked line, not on it.
   '    if not _hit[0]:',
   "        _lbl = _file_label(_frame.f_code.co_filename) or '<main>'",
-  '        if (_lbl, _frame.f_lineno) in _bp_set: _hit[0] = True',
+  '        if (_lbl, _frame.f_lineno) in _bp_set:',
+  '            _hit[0] = True',
+  '            _kept[0] = len(_ring)',
+  '            _skipped[0] = _coasted[0] - _kept[0]',
+  '            while _ring:',
+  '                _e = _ring.popleft()',
+  '                _steps.append(_e[0])',
+  '                _snaps.append(_e[1])',
+  // THE COAST. Only ever entered when the student asked for it by pressing
+  // the panel's "record from the breakpoint instead" button; _defer is false
+  // for every ordinary recording, so this whole branch is dead weight on the
+  // normal path (one boolean test).
+  //
+  // The window is a ring, so the work is bounded: build the step and its
+  // snapshot as usual, then drop the oldest once the window is full. The byte
+  // cap MUST be credited back on eviction -- charge without crediting and a
+  // long coast trips the 2 MB cap before the breakpoint ever fires, which is
+  // precisely the failure this feature exists to prevent. _cost is exactly
+  // what this step added to _size, and stdout growth is charged above _pre so
+  // it is never credited back: the output is kept whole either way.
+  '    if _defer and not _hit[0]:',
+  '        _pre = _size[0]',
+  '        _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
+  "        _st = {'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff}",
+  '        _sn = _snap_ns(_frame.f_locals)',
+  '        _size[0] += 40',
+  '        _ring.append((_st, _sn, _size[0] - _pre))',
+  '        while len(_ring) > _lookback:',
+  '            _size[0] -= _ring.popleft()[2]',
+  '        _coasted[0] += 1',
+  '        _prev_line[0] = _frame.f_lineno if _d == 0 else _prev_line[0]',
+  // Give up rather than coast forever. Reaching either bound leaves _hit
+  // false, which the host reports as "that line never ran".
+  '        if _coasted[0] > _max_dormant or _size[0] > _max_bytes:',
+  '            _truncated[0] = True',
+  '            raise _TrinketStopRecording()',
+  '        return _tracer',
   // Per-step dict overhead joins the accounting.
   '    _size[0] += 40',
   '    if len(_steps) >= _max_steps or _size[0] > _max_bytes:',
   '        _truncated[0] = True',
   '        raise _TrinketStopRecording()',
-  '    _d = _depth_of(_frame)',
   '    _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
   "    _steps.append({'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff})",
-  // Only the module frame: imports bind into globals, and the len() guard
-  // keeps this to one comparison per line that actually added a name.
-  '    if _d == 0:',
-  '        _note_new(_frame.f_locals)',
   '    _snaps.append(_snap_ns(_frame.f_locals))',
   '    _prev_line[0] = _frame.f_lineno if _d == 0 else _prev_line[0]',
   '    return _tracer',
@@ -1957,13 +2019,14 @@ var RECORD_HELPER = [
   "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",
   '_note_new(_g)',
   '_snaps.append(_snap_ns(_g))',
-  "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
+  "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'deferred': bool(_defer), 'kept': _kept[0], 'skipped': _skipped[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
 ].join('\n');
 
 var debugRec = null;       // active recording ({error, truncated, output, steps, snaps}) or null
 var debugIdx = 0;          // current step index into debugRec.steps
 var debugRecording = false;
 var debugCancelled = false;
+var debugDeferring = false;  // this recording was asked to start at a breakpoint
 var debugMarkerId = null;      // ace marker id for the current-line highlight
 var debugMarkerSession = null; // ace session the marker was added to
 
@@ -2566,6 +2629,23 @@ function enterReplay(rec) {
   // The truncated case gets its own sentence because it has a remedy the
   // student can act on -- shorten the loop -- and because "not reached" and
   // "never ran" are different claims.
+  // A deferred recording is not a recording of the program -- it is a window
+  // around the student's breakpoint -- so say so first, before the caps and
+  // the breakpoint status. Both numbers are real: `kept` is what the ring
+  // actually held (fewer than the full window if the breakpoint came early),
+  // and `skipped` is what it dropped to get there.
+  if (rec.deferred && rec.bpHit) {
+    var kept = rec.kept || 0, skipped = rec.skipped || 0;
+    var bl0 = debugBreakpointList();
+    var where = bl0.length === 1 ? 'your breakpoint on line ' + bl0[0].line
+                                 : 'your breakpoint';
+    notes.push(kept
+      ? 'playback starts ' + kept + (kept === 1 ? ' step' : ' steps') + ' before ' + where
+      : 'playback starts at ' + where);
+    if (skipped) {
+      notes.push(skipped + ' earlier lines were not recorded');
+    }
+  }
   debugBpNote = '';
   var bps = debugBreakpointList();
   // bps can be empty here even with bpHit false, if every dot was cleared
@@ -2639,11 +2719,18 @@ function exitReplay(quiet) {
 // Run the program under the recorder, then enter replay. Mirrors startRun's
 // pre-steps (FS sync, package auto-load, matplotlib target) but execs in a
 // fresh namespace under trace. Normal Run is untouched.
-function runStepThrough() {
+// `defer` is the OPT-IN deferred recording: coast without recording until a
+// marked line executes, keeping only the last DEBUG_LOOKBACK_STEPS steps
+// before it. Every pre-existing caller passes nothing, so it is false and the
+// recorder behaves exactly as before. The only thing that passes true is the
+// panel's "record from the breakpoint instead" button, which is only offered
+// after a recording truncated before reaching the student's breakpoint.
+function runStepThrough(defer) {
   if (running || debugRecording) return;
   if (debugRec) exitReplay();
 
   debugRecording = true;
+  debugDeferring = !!defer;
   debugCancelled = false;
   $('#debug-launch').addClass('hide');
   $('#debug-recording').removeClass('hide');
@@ -2656,6 +2743,7 @@ function runStepThrough() {
   // trinket that flipped the panel from "no backend" onto THIS thread's
   // Pyodide, which never ran the program and holds no figure.
   function recordingDone(ran) {
+    debugDeferring = false;   // never inherited by the next recording
     debugRecording = false;
     $('#debug-recording').addClass('hide');
     if (!debugRec) $('#debug-launch').removeClass('hide');
@@ -2714,9 +2802,14 @@ function runStepThrough() {
             // there are user code the tracer should step through (Phase 2).
             _user_prefix: '/home/pyodide/',
             // Breakpoints are passed in so the recorder can report whether one
-            // was ever REACHED (_hit). They no longer gate recording: see the
-            // tracer's comment on why deferred recording was removed.
+            // was ever REACHED (_hit). They do not gate recording unless
+            // _defer is set, which only the panel's explicit "record from the
+            // breakpoint instead" button does.
             _bp: debugBreakpointPayload(),
+            // Opt-in only; see runStepThrough's `defer`.
+            _defer: debugDeferring,
+            _lookback: DEBUG_LOOKBACK_STEPS,
+            _max_dormant: DEBUG_MAX_DORMANT,
             _max_steps: DEBUG_MAX_STEPS,
             _max_vars: DEBUG_MAX_VARS,
             _max_repr: DEBUG_MAX_REPR,
@@ -2734,6 +2827,20 @@ function runStepThrough() {
   }).then(function(rec) {
     recordingDone(!!rec && !debugCancelled);
     if (rec && !debugCancelled) {
+      // A deferred recording that never armed holds nothing but the synthetic
+      // <end> step: the marked line did not execute at all, so there was
+      // nothing to start from. Report it instead of opening a replay of one
+      // empty step -- and report it plainly, because this run ANSWERS the
+      // question the ordinary one could not. A truncated recording cannot
+      // tell "that line is unreachable" from "that line is past the cap";
+      // this one just did, and the answer is unreachable.
+      if (rec.deferred && rec.bpHit === false) {
+        var bl = debugBreakpointList();
+        setDebugNote(bl.length === 1
+          ? 'line ' + bl[0].line + ' never ran, so there was nothing to record from it'
+          : 'none of the lines you marked ran, so there was nothing to record from');
+        return;
+      }
       initConsoleOutput();
       enterReplay(rec);
     }
@@ -4323,6 +4430,20 @@ window.TrinketAPI = {
                   // accurate "recording stopped after N steps" -- two claims
                   // that cannot both be true, one of them ours.
                 , truncated      : !!(debugRec && debugRec.truncated)
+                  // Offer to re-record from the breakpoint only when the
+                  // evidence is in: the recording ran out of budget AND the
+                  // marked line never came up. Never on a recording that was
+                  // itself deferred -- one attempt answers the question, and
+                  // re-offering it would loop the student round a re-run that
+                  // has already told them what they needed to know.
+                , canDefer       : !!(debugRec && debugRec.truncated
+                                      && debugRec.bpHit === false
+                                      && !debugRec.deferred
+                                      && debugHasBreakpoints())
+                , deferLine      : (function() {
+                    var bl = debugBreakpointList();
+                    return bl.length === 1 ? bl[0].line : null;
+                  })()
                   // Both host note slots, composed. debugBaseNote alone left
                   // the breakpoint clause frozen at record time.
                 , note           : debugNoteText()
@@ -4358,6 +4479,8 @@ window.TrinketAPI = {
             }
           , actions : {
                 start  : runStepThrough
+                // Opt-in deferred recording; see runStepThrough's `defer`.
+              , startDeferred : function() { runStepThrough(true); }
               , cancel : function() { debugCancelled = true; }
               , stepTo : debugStepTo
               , step   : function(d) { debugStepTo(debugIdx + d); }
