@@ -2407,6 +2407,15 @@ function ensureGutterBreakpointHandlers() {
 var debugBaseNote = '';
 var debugBpNote = '';
 var debugFlashNote = '';
+// The "ends with an error" clause, kept OUT of the panel's note channel. It
+// used to ride in debugBaseNote, and the panel stripped it with a literal
+// string match on a sentence defined here -- so rewording this file's copy
+// would have broken the panel silently and in two ways: the error stated
+// twice, once in the red banner and once beneath it, AND the note staying
+// truthy, which displaced "About to execute line 1." on the one step the
+// student is guaranteed to read. The panel now drops it by not reading a
+// field, which cannot rot.
+var debugErrorNote = '';
 var debugNoteTimer = null;
 // Order: the answer to what you just pressed, then what the recording did,
 // then what that meant for your breakpoints -- cause before consequence, so a
@@ -2416,6 +2425,9 @@ function debugNoteText() {
   var parts = [];
   if (debugFlashNote) parts.push(debugFlashNote);
   if (debugPersistentNote()) parts.push(debugPersistentNote());
+  // The in-tab span has no red banner of its own, so it keeps the error
+  // clause; the panel's channel below does not.
+  if (debugErrorNote) parts.push(debugErrorNote);
   return parts.join(' ');
 }
 // The persistent half only. The panel needs these two apart, because they now
@@ -2710,6 +2722,24 @@ function debugLoopIterations(rec) {
   // recursion without a loop. Claiming "iterations of your loop" here would be
   // a plain falsehood, so say nothing about loops.
   if (max < 3) return null;
+  // ONE LOOP, OR DECLINE. The within-2 rule assumes a single loop, where the
+  // header fires at most one more time than the body. Under NESTING the counts
+  // differ multiplicatively: measured on `for i in range(2000)` around
+  // `for j in range(2)`, the inner header fired 2,500 times, the inner body
+  // 1,666 and the outer header 834 -- so the filter admitted only the inner
+  // header and reported 2,500 as "iterations of your loop", 50% above the
+  // inner count and 3x the outer. Stating a wrong number as fact is worse
+  // than not naming one.
+  //
+  // The discriminator is the gap to the next DISTINCT count: ~1.00 for a
+  // single loop (875 vs 874), 1.50 for the nested case above. Past 1.25 the
+  // shape is not a simple loop and the caller falls back to a sentence that is
+  // true of any program. This also declines on recursion deep enough to
+  // truncate, which `max < 3` does not catch.
+  var distinct = [];
+  for (k in counts) if (distinct.indexOf(counts[k]) === -1) distinct.push(counts[k]);
+  distinct.sort(function(a, b) { return b - a; });
+  if (distinct.length > 1 && max / distinct[1] > 1.25) return null;
   var min = max;
   for (k in counts) {
     if (counts[k] >= max - 2 && counts[k] < min) min = counts[k];
@@ -2807,7 +2837,7 @@ function enterReplay(rec) {
   // note was suppressed, the banner was unreachable, and showVariables() had
   // hidden the console -- so nothing anywhere said the run ends badly.
   // The panel drops this clause itself when its red banner IS showing.
-  if (rec.error) notes.push('This run ends with an error.');
+  debugErrorNote = rec.error ? 'This run ends with an error.' : '';
   // A SPACE, not ' · '. Every note is now a full sentence starting with a
   // capital and ending with a period, so a middle dot between them read as
   // punctuation inside one sentence -- "...while debugging. · Your breakpoint
@@ -2851,6 +2881,15 @@ function exitReplay(why) {
   if (!debugRec) return;
   var rec = debugRec;
   debugRec = null;
+  // THE PLAYHEAD RESETS TOO. Everything else about the recording was cleared
+  // here and debugIdx was not, so getState() went on reporting idx: 5 next to
+  // replaying: false -- and the panel gates the recorder's note on
+  // `s.idx === 0` meaning "just arrived at a recording". Read in a state with
+  // no recording, that test sent every bail message (VPython, console input,
+  // "The recording failed.", and both deferred give-ups) into a branch that
+  // renders nothing, so they landed nowhere at all. The in-tab span still got
+  // them, which is exactly the pane the panel path never opens.
+  debugIdx = 0;
   debugVisits = null;
   debugRepeatFrom = null;
   debugVarModel = null;
@@ -2862,6 +2901,7 @@ function exitReplay(why) {
   debugBaseNote = '';
   debugBpNote = '';
   debugFlashNote = '';
+  debugErrorNote = '';
   if (debugNoteTimer) { clearTimeout(debugNoteTimer); debugNoteTimer = null; }
   $('#debug-note').text('');
   $('#debug-launch').removeClass('hide');
