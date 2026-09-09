@@ -53,11 +53,27 @@
   // Held as state and painted by paintVars rather than written to a node, so
   // there is no element in the pill for a message to land in even by mistake.
   var transientNote = '';
-  function note(msg) {
+  // The step the note was true OF, or null for notes that are not about a step
+  // (the ~30 s arm give-up). "paused at the breakpoint on line 3" describes a
+  // position, so the moment the student leaves that position -- a scrub, a
+  // step, a jump -- it is describing somewhere they are no longer standing.
+  // Confirmed live: scrubbing five steps past a pause left the pause message
+  // sitting above the new step's variables until its 6 s timer ran out.
+  // Stamping the index beats clearing it at every mover, because there are
+  // eight of them and the next one added would forget.
+  var noteIdx = null;
+  var wasReplaying = false;   // for the falling edge in sync()
+  function note(msg, forIdx) {
     transientNote = msg || '';
+    noteIdx = (forIdx === undefined) ? null : forIdx;
     if (noteTimer) clearTimeout(noteTimer);
-    noteTimer = setTimeout(function () { transientNote = ''; paintVars(); }, 6000);
+    noteTimer = setTimeout(function () { transientNote = ''; noteIdx = null; paintVars(); }, 6000);
     paintVars();
+  }
+  // Is the transient note still about where we are? Cheap enough to ask on
+  // every paint, and it cannot go stale the way a cleared flag can.
+  function noteStillTrue(s) {
+    return !transientNote ? false : (noteIdx === null || noteIdx === s.idx);
   }
 
   var varsPlaced = false;  // true once the window has been dragged off the pill
@@ -682,7 +698,24 @@
     // Parked at the end: restart from the top, so the press does something
     // rather than nothing -- the same thing a player's play button does once
     // the video has finished.
-    if (s0.idx >= s0.total) { try { ctx.actions.first(); } catch (e) {} }
+    if (s0.idx >= s0.total) {
+      try { ctx.actions.first(); } catch (e) {}
+      try { s0 = ctx.getState() || s0; } catch (e) {}   // idx moved; re-read
+    }
+    // Auto mode advances one step and THEN tests where it landed, so it can
+    // never pause on the step it departs from. That is deliberate -- it is
+    // what stops play being a dead button on the breakpoint the student is
+    // parked on. But it means a breakpoint whose only recorded execution IS
+    // that step (line 1 of the program, most often, since replay opens at step
+    // 0) stops nothing at all: the recording plays to the end, in silence,
+    // while the help popover two inches away promises "Auto mode stops there".
+    //
+    // Play anyway -- running to the end is what was asked for -- but say so.
+    if (s0.hasBreakpoints && s0.atBreakpoint && !s0.bpAhead) {
+      note(s0.line
+        ? 'playing past the breakpoint on line ' + s0.line + ' — that line does not run again'
+        : 'playing past this breakpoint — it does not come round again');
+    }
     playAct = act;
     playTimer = setInterval(function() {
       // One primitive, and pyodide.js decides why we stopped: 'moved', 'end' or
@@ -705,7 +738,7 @@
         var s = {};
         try { s = ctx.getState() || {}; } catch (e) {}
         note(s.line ? 'paused at the breakpoint on line ' + s.line
-                    : 'paused at a breakpoint');
+                    : 'paused at a breakpoint', s.idx);
         paintMode();
       }
     }, (1 / t.rate) * 1000);
@@ -882,7 +915,15 @@
     //
     // Suppressed when the recording carries an error: it did not reach the end
     // SUCCESSFULLY, and the red banner above is the fact that matters.
-    if (s.atEnd && !s.hasError) {
+    //
+    // Suppressed on a TRUNCATED recording for the same reason, and this one is
+    // a lie rather than an omission: truncation leaves no error behind (the
+    // tracer raises _TrinketStopRecording, which the exec wrapper swallows
+    // ahead of the BaseException catch), so the last step is a perfectly
+    // ordinary <end> and this line claimed the program "reached the end &
+    // stopped" directly above the recorder's own "recording stopped after
+    // 5000 steps". The student's loop did not finish; the recorder gave up.
+    if (s.atEnd && !s.hasError && !s.truncated) {
       out += '<div class="tk-dbg-vnote">Reached the end &amp; stopped</div>';
     }
     // s.note is the recorder's own persistent note (truncation, "your
@@ -890,7 +931,7 @@
     // two are different sentences about different things, so both can show.
     var msgs = [];
     if (s.note) msgs.push(s.note);
-    if (transientNote) msgs.push(transientNote);
+    if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
     }
@@ -1131,6 +1172,17 @@
     // can edit the code", which is not what they did.
     if (s.recording || s.replaying) editExited = false;
 
+    // Every transient note the panel writes during a replay is about THAT
+    // replay -- "paused at the breakpoint on line 4", "playing past the
+    // breakpoint on line 4". The moment the replay ends, by the exit button or
+    // by an edit or by a fresh Run, they are about a recording that no longer
+    // exists, and the 6 s timer is far too long to cover it: the edit-exit
+    // message appeared with the old pause note still sitting on top of it.
+    // Cleared on the falling edge here rather than in each of the routes out,
+    // because there are several and a new one would forget.
+    if (wasReplaying && !s.replaying) { transientNote = ''; noteIdx = null; }
+    wasReplaying = !!s.replaying;
+
     var live = el('live');
     if (live) live.hidden = !(s.replaying && !expanded);
 
@@ -1217,7 +1269,23 @@
       if (act === 'prevbp' || act === 'nextbp') {
         var st = {};
         try { st = ctx.getState() || {}; } catch (e) { st = {}; }
-        if (!st.hasBreakpoints) { showHelp(); return; }
+        if (!st.hasBreakpoints) {
+          // This return jumps the whole rest of the handler, including the
+          // stopPlay() below -- so the student who pressed a breakpoint arrow
+          // to find out what breakpoints ARE got the help popover while the
+          // autoplay timer kept stepping the recording underneath it. Stop
+          // first, then explain.
+          //
+          // `mode` is deliberately NOT touched, for the reason the slider
+          // handler gives below: nothing moved the playhead, so lighting STEP
+          // would claim a step that did not happen. `mode` is a paint value
+          // only (paintMode toggles one class), so leaving it is cosmetic;
+          // stopPlay() repaints the transport glyphs, which is the part the
+          // student can actually see is wrong.
+          stopPlay();
+          showHelp();
+          return;
+        }
       }
       hideHelp();
       // Any transport button: pressing the one already driving pauses; pressing

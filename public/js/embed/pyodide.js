@@ -2004,10 +2004,17 @@ var debugBreakpoints = {}; // file name -> { line(1-based): true }
 function debugToggleBreakpoint(file, line) {
   var bp = debugBreakpoints[file] || (debugBreakpoints[file] = {});
   if (bp[line]) delete bp[line]; else bp[line] = true;
-  // The panel paints hasBreakpoints/atBreakpoint from this table, so it has to
-  // be told when it changes. Harmless while breakpoints only fed the jump
-  // buttons; wrong the moment any of it is rendered.
-  debugPanelSync();
+  // "your breakpoint was not reached" describes the table AS IT WAS when the
+  // recording ran. The student has just changed it, so drop the claim rather
+  // than leave it contradicting the pause the very next play press produces.
+  // Cleared on any toggle, not only on the marked line: the sentence names no
+  // line, so any edit to the table makes it a statement about a table that no
+  // longer exists.
+  debugBpNote = '';
+  // debugRepaintNote() ends in debugPanelSync(), which is also what tells the
+  // panel that hasBreakpoints/atBreakpoint changed. Harmless while breakpoints
+  // only fed the jump buttons; wrong the moment any of it is rendered.
+  debugRepaintNote();
   return !!bp[line];
 }
 
@@ -2020,6 +2027,25 @@ function debugIsBpStep(i) {
   if (!st || st.line == null) return false;
   var f = st.file || mainFile;
   return !!(debugBreakpoints[f] && debugBreakpoints[f][st.line]);
+}
+
+// Is any step strictly AFTER i on a marked line? Auto mode advances before it
+// tests, so the step the playhead departs from can never stop it -- that
+// asymmetry is the deadlock defence, and it is right. Its cost is that a
+// breakpoint whose ONLY recorded execution is the current step stops nothing,
+// while the panel's help promises it will: the student presses play, watches it
+// run to the end, and concludes breakpoints are broken. The panel asks this
+// once per play press so it can say what is happening instead of going quiet.
+//
+// A linear scan on purpose. It is bounded by DEBUG_MAX_STEPS (5 000) and runs
+// once per press, and an index of marked steps would have to be invalidated on
+// every gutter click -- the live read is what makes breakpoints dynamic.
+function debugBpAhead(i) {
+  if (!debugRec) return false;
+  for (var k = (i | 0) + 1; k < debugRec.steps.length; k++) {
+    if (debugIsBpStep(k)) return true;
+  }
+  return false;
 }
 
 // Auto mode's single primitive: advance one step, then report why it stopped.
@@ -2084,6 +2110,20 @@ function debugHasBreakpoints() {
   return false;
 }
 
+// Every marked line, as { file, line }. Used to NAME the line in "your
+// breakpoint on line 7 was not reached" -- a student with one dot set should
+// not have to work out which sentence is about which line, and with several
+// set the sentence stays plural rather than guessing.
+function debugBreakpointList() {
+  var out = [];
+  for (var f in debugBreakpoints) {
+    for (var l in debugBreakpoints[f]) {
+      if (debugBreakpoints[f][l]) out.push({ file: f, line: parseInt(l, 10) });
+    }
+  }
+  return out;
+}
+
 // Breakpoint payload for the recorder: file label -> [lines]. The main file is
 // keyed '<main>' (its frames carry no file label).
 function debugBreakpointPayload() {
@@ -2124,16 +2164,71 @@ function ensureGutterBreakpointHandlers() {
   } catch (e) { /* breakpoints are best-effort */ }
 }
 
-// The persistent replay note (truncated/error/deferred-start) that transient
-// flashes must restore rather than clobber.
+// Everything the HOST has to say sits in two slots. Both are painted into the
+// in-tab #debug-note and both are handed to the floating panel through
+// getState().note, which renders them at the top of its variables window.
+//
+//   debugFlashNote the answer to a press that did nothing ("no breakpoint
+//                  ahead"). Lives 2.5 s.
+//   debugBpNote    what the recorder observed about the BREAKPOINTS. This is a
+//                  record-time snapshot of a table the student can edit
+//                  mid-replay, so it stops being true the moment they touch a
+//                  gutter dot.
+//   debugBaseNote  facts about the RECORDING (truncation, "ends with an
+//                  error"). True for as long as that recording is loaded.
+//
+// Three slots rather than one string because they go stale for different
+// reasons, and composing them here means the panel needs no new inlet: it
+// already renders getState().note. Two bugs came out of not doing this.
+// Keeping the breakpoint clause inside debugBaseNote left nothing to clear it
+// on a toggle, so "your breakpoint was not reached" could sit directly above
+// the panel's own "paused at the breakpoint on line N". And flashDebugNote
+// used to write straight to the DOM without syncing, so with the panel on the
+// two circled breakpoint arrows answered a press that could not move the
+// playhead with complete silence -- verified live, not deduced.
 var debugBaseNote = '';
+var debugBpNote = '';
+var debugFlashNote = '';
 var debugNoteTimer = null;
+// Order: the answer to what you just pressed, then what the recording did,
+// then what that meant for your breakpoints -- cause before consequence, so a
+// truncated run reads "recording stopped after 2873 steps · your breakpoint on
+// line 11 was not reached before it stopped".
+function debugNoteText() {
+  var parts = [];
+  if (debugFlashNote) parts.push(debugFlashNote);
+  if (debugBaseNote) parts.push(debugBaseNote);
+  if (debugBpNote) parts.push(debugBpNote);
+  return parts.join(' · ');
+}
+// Paint both channels: the in-tab span, and the panel via getState().note.
+function debugRepaintNote() {
+  $('#debug-note').text(debugNoteText());
+  debugPanelSync();
+}
+// Say something on BOTH channels at once, and this is the only correct way to
+// say anything outside replay. #debug-note lives inside #variables-wrap, which
+// the panel path deliberately never opens (the student is stepping precisely
+// so they can watch the Result pane), so a bare $('#debug-note').text(...) is
+// invisible for the whole life of the feature whenever features.debugPanel is
+// on. Anything a student needs to read goes through here.
+function setDebugNote(msg) {
+  debugBaseNote = msg || '';
+  debugRepaintNote();
+}
+// Retract a message only if it is still the one showing -- a bail's timer must
+// not wipe the note of a recording the student started in the meantime.
+function clearDebugNoteIf(msg) {
+  if (debugBaseNote === msg) setDebugNote('');
+}
 function flashDebugNote(msg) {
-  $('#debug-note').text(msg);
+  debugFlashNote = msg || '';
+  debugRepaintNote();
   if (debugNoteTimer) clearTimeout(debugNoteTimer);
   debugNoteTimer = setTimeout(function() {
     debugNoteTimer = null;
-    $('#debug-note').text(debugBaseNote);
+    debugFlashNote = '';
+    debugRepaintNote();
   }, 2500);
 }
 
@@ -2307,6 +2402,17 @@ function debugBuildVarModel() {
 
 function debugStepTo(idx) {
   if (!debugRec) return;
+  // A flash answers a press that could NOT move the playhead ("no breakpoint
+  // ahead"). The moment one does move, that answer is about a step the student
+  // has left, so retract it rather than let it ride out its 2.5 s above the
+  // new step's variables. Caught live: three jumps in a row all showed the
+  // first one's answer, which only became visible once flashes reached the
+  // panel at all.
+  if (debugFlashNote) {
+    debugFlashNote = '';
+    if (debugNoteTimer) { clearTimeout(debugNoteTimer); debugNoteTimer = null; }
+    $('#debug-note').text(debugNoteText());   // sync comes with renderDebugStep
+  }
   debugIdx = Math.max(0, Math.min(idx, debugRec.steps.length - 1));
   renderDebugStep();
 }
@@ -2321,12 +2427,29 @@ function enterReplay(rec) {
   $('#debug-launch').addClass('hide');
   $('#debug-controls').removeClass('hide');
   var notes = [];
-  // bpHit is false only when breakpoints were set and none of them ever ran --
-  // a dot on a dead branch, an uncalled def, a blank line, or a file that has
-  // since been renamed. That used to produce an EMPTY recording; now the whole
-  // program is recorded and steppable, and this note says why nothing paused.
-  if (rec.bpHit === false) {
-    notes.push('your breakpoint was not reached — that line never ran');
+  // bpHit is false whenever breakpoints were set and the recorder never saw
+  // one execute. Say only that, because that is all the flag carries. It used
+  // to say "that line never ran", which asserts knowledge the recorder does
+  // not have: the flag is equally false when the recording simply STOPPED
+  // first (5 000 steps / 2 MB), when the line lives deeper than
+  // DEBUG_MAX_DEPTH frames, and when the dot belongs to a file the student has
+  // since renamed or deleted. A student told "that line never ran" about a
+  // line that ran 40 000 times will believe the debugger over their own
+  // program, and go looking for a bug that is not there.
+  //
+  // The truncated case gets its own sentence because it has a remedy the
+  // student can act on -- shorten the loop -- and because "not reached" and
+  // "never ran" are different claims.
+  debugBpNote = '';
+  var bps = debugBreakpointList();
+  // bps can be empty here even with bpHit false, if every dot was cleared
+  // between the run and the replay -- then there is nothing to report.
+  if (rec.bpHit === false && bps.length) {
+    var one   = bps.length === 1;
+    var which = one ? 'your breakpoint on line ' + bps[0].line : 'your breakpoints';
+    var verb  = one ? 'was' : 'were';
+    debugBpNote = which + ' ' + verb + ' not reached'
+                + (rec.truncated ? ' before it stopped' : '');
   }
   if (rec.truncated) notes.push('recording stopped after ' + (rec.steps.length - 1) + ' steps');
   // Only when the floating panel is absent. With the panel on, the error gets
@@ -2337,7 +2460,7 @@ function enterReplay(rec) {
   // channel there is, so it stays.
   if (rec.error && !debugPanelEnabled()) notes.push('ends with an error');
   debugBaseNote = notes.join(' · ');
-  $('#debug-note').text(debugBaseNote);
+  $('#debug-note').text(debugNoteText());
   // Without the floating panel the controls only exist inside the Variables
   // tab, so entering replay has to open it. With the panel, opening it would
   // defeat the point of the feature: the student is stepping precisely so they
@@ -2363,6 +2486,8 @@ function exitReplay(quiet) {
   debugHighlightLine(null);
   $('#debug-controls').addClass('hide');
   debugBaseNote = '';
+  debugBpNote = '';
+  debugFlashNote = '';
   if (debugNoteTimer) { clearTimeout(debugNoteTimer); debugNoteTimer = null; }
   $('#debug-note').text('');
   $('#debug-launch').removeClass('hide');
@@ -2419,8 +2544,13 @@ function runStepThrough() {
     // docs/superpowers/plans/2026-09-04-sympy-math-output.md.
     var prog = syncFilesToFS(editor.getAllFiles(), mainFile);
     if (usesVPython(prog)) {
-      $('#debug-note').text('Step through is not available for VPython programs');
-      setTimeout(function() { $('#debug-note').text(''); }, 4000);
+      // setDebugNote, not $('#debug-note').text: with features.debugPanel on
+      // the in-tab note lives in a pane the panel never opens, so writing
+      // there alone means the pill flashes "Recording..." and returns to
+      // "step through" with no explanation anywhere on screen.
+      var vpyMsg = 'Step through is not available for VPython programs';
+      setDebugNote(vpyMsg);
+      setTimeout(function() { clearDebugNoteIf(vpyMsg); }, 4000);
       return null;
     }
     if (usesConsole(prog) && !userShadowsConsole()) {
@@ -2430,8 +2560,9 @@ function runStepThrough() {
       // (a silently-wrong coroutine, and the input field would never open).
       // Bail with the same mechanism/style as the VPython guard above rather
       // than teaching the recorder about the transform.
-      $('#debug-note').text('Step through is not available for programs that read console input');
-      setTimeout(function() { $('#debug-note').text(''); }, 4000);
+      var inputMsg = 'Step through is not available for programs that read console input';
+      setDebugNote(inputMsg);
+      setTimeout(function() { clearDebugNoteIf(inputMsg); }, 4000);
       return null;
     }
     return pyodide.loadPackagesFromImports(prog).then(function() {
@@ -2477,8 +2608,8 @@ function runStepThrough() {
     }
   }).catch(function(err) {
     recordingDone(false);
-    $('#debug-note').text('recording failed');
-    setTimeout(function() { $('#debug-note').text(''); }, 4000);
+    setDebugNote('recording failed');
+    setTimeout(function() { clearDebugNoteIf('recording failed'); }, 4000);
   });
 }
 
@@ -3988,7 +4119,16 @@ window.TrinketAPI = {
                 , idx            : debugIdx
                 , total          : debugRec ? debugRec.steps.length - 1 : 0
                 , atEnd          : !!(st && st.func === '<end>')
-                , note           : debugBaseNote
+                  // Whether the recorder ran out of budget. The panel needs it
+                  // to keep quiet about reaching "the end": on a truncated run
+                  // the <end> step carries no error, so the panel printed
+                  // "Reached the end & stopped" directly above the recorder's
+                  // accurate "recording stopped after N steps" -- two claims
+                  // that cannot both be true, one of them ours.
+                , truncated      : !!(debugRec && debugRec.truncated)
+                  // Both host note slots, composed. debugBaseNote alone left
+                  // the breakpoint clause frozen at record time.
+                , note           : debugNoteText()
                 , hasBreakpoints : debugHasBreakpoints()
                   // For painting only. The pause itself is actions.autoStep, so
                   // that a paint value never becomes a control value.
@@ -3997,6 +4137,9 @@ window.TrinketAPI = {
                     return st ? st.line : null;
                   })()
                 , atBreakpoint   : debugIsBpStep(debugIdx)
+                  // Whether pressing play can still stop at anything. Read
+                  // once per play press, not painted.
+                , bpAhead        : debugBpAhead(debugIdx)
                   // The panel is a VIEW, so parsing a traceback is this side's
                   // job, not its own.
                 , hasError       : !!(debugRec && debugRec.error)
