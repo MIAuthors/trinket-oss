@@ -1757,7 +1757,7 @@ var DEBUG_MAX_BYTES = 2 * 1024 * 1024;
 // step (full output, final globals) is appended so students can step past the
 // last line to the terminal state.
 var RECORD_HELPER = [
-  'import sys, json, types, io, traceback',
+  'import sys, json, types, io, traceback, reprlib',
   // KEEP IN SYNC with VARS_HELPER's _SKIP + filters (the live explorer): both
   // must hide the same runner-injected names. They live in separate helper
   // strings/namespaces, so a shared definition would add more machinery than
@@ -1798,6 +1798,40 @@ var RECORD_HELPER = [
   '    if _new:',
   '        if _is_import_line(_prev_line[0]): _imported.update(_new)',
   '        _seen.update(_new)',
+  // A PRECONFIGURED reprlib.Repr for the containers it specialises, and the
+  // builtin repr() for everything else. This is the single biggest cost in the
+  // recorder, because it runs for every variable on every line event.
+  //
+  // builtins.repr() builds the ENTIRE string and the clamp below then throws
+  // all but 120 characters away -- so a list the student appends to in a loop
+  // costs more on every iteration and per-event cost climbs without bound.
+  // reprlib recurses into at most maxlist elements, so cost is FLAT. Measured
+  // in this embed on one list:
+  //        500 elements   builtin  175 us   reprlib  43 us
+  //      5 000 elements   builtin 1375 us   reprlib  35 us
+  //     20 000 elements   builtin 4305 us   reprlib  24 us
+  // and 14x end to end over 2000 appends of a growing list.
+  //
+  // maxlist 30 is chosen so nothing that used to fit in 120 characters stops
+  // fitting: ~30 short ints is the most that ever did. Verified against the
+  // old output on a 30-tuple, a 25-int list, 12 floats and a string list --
+  // byte-identical. Where it does differ it is BETTER: it closes the bracket
+  // instead of cutting a float in half, and it keeps a string's closing quote.
+  //
+  // GATED ON TYPE, and that matters. reprlib's repr_instance fallback calls
+  // builtins.repr() anyway, so it buys no speed off the container types -- and
+  // it elides the MIDDLE of the result, which mangles a repr that already
+  // summarises itself. numpy is the case: it self-summarises above
+  // threshold=1000, so it was never the expensive one, and routing it through
+  // reprlib turned a clean array([...]) into 'array([0.0, 2.0e-04, ......e-01'
+  // and cut across its row breaks. With the gate, numpy output is unchanged.
+  "_RL_TYPES = (list, tuple, dict, set, frozenset, str)",
+  '_rl = reprlib.Repr()',
+  '_rl.maxlevel = 4',
+  '_rl.maxlist = _rl.maxtuple = _rl.maxset = _rl.maxfrozenset = _rl.maxdeque = 30',
+  '_rl.maxdict = 8',
+  '_rl.maxstring = _max_repr',
+  '_rl.maxother = _max_repr',
   'def _snap_ns(_ns):',
   '    _out = []',
   '    for _name, _val in list(_ns.items()):',
@@ -1808,7 +1842,7 @@ var RECORD_HELPER = [
   '        if isinstance(_val, (types.FunctionType, types.BuiltinFunctionType, types.LambdaType)): continue',
   '        if isinstance(_val, type): continue',
   '        try:',
-  '            _r = repr(_val)',
+  '            _r = _rl.repr(_val) if isinstance(_val, _RL_TYPES) else repr(_val)',
   '        except Exception:',
   "            _r = '<unrepresentable>'",
   "        if len(_r) > _max_repr: _r = _r[:_max_repr] + '...'",
