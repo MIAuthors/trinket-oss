@@ -614,6 +614,31 @@
       }
     }, true);
 
+    // SLICE 3, the arrow-key adjudication, variables-window half. Delegated
+    // for the same reason the pointerdown above is: paintVars() rewrites
+    // $vars.innerHTML on every paint, so a listener bound to the grip NODE
+    // dies on the next repaint -- and draggable() only ever ran after a mouse
+    // drag, so before one the grip had no keyboard at all. Focusing it and
+    // pressing an arrow therefore fell through to pyodide.js's document
+    // handler and STEPPED THE RECORDING, which is the one thing a
+    // window-moving control must not do. stopPropagation is what settles the
+    // claim: while this grip has focus, the arrows are the window's.
+    $vars.addEventListener('keydown', function (e) {
+      if (!e.target.closest('[data-vgrip]')) return;
+      var map = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] };
+      var d = map[e.key];
+      if (!d) return;
+      e.preventDefault();
+      e.stopPropagation();
+      detachVars();   // moving it by hand is what takes it off the dock
+      var b = $layer.getBoundingClientRect();
+      var vr = $vars.getBoundingClientRect();
+      var left = (parseFloat($vars.style.left) || (vr.left - b.left)) + d[0];
+      var top  = (parseFloat($vars.style.top)  || (vr.top  - b.top))  + d[1];
+      $vars.style.left = Math.max(4, Math.min(left, b.width  - $vars.offsetWidth  - 4)) + 'px';
+      $vars.style.top  = Math.max(4, Math.min(top,  b.height - $vars.offsetHeight - 4)) + 'px';
+    });
+
     $vars.addEventListener('click', function(e) {
       if (e.target.closest('[data-vgrip]')) return;   // that is the drag handle
       var b = e.target.closest('[data-vact]');

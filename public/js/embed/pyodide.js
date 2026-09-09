@@ -4023,8 +4023,31 @@ window.TrinketAPI = {
         $('#debug-prev-bp').on('click keydown', debugActivate(function() { debugJumpBreakpoint(-1); }));
         $('#debug-next-bp').on('click keydown', debugActivate(function() { debugJumpBreakpoint(1); }));
 
-        // Arrow-key stepping while replaying (ignored while typing in the
-        // editor or any input, so it never hijacks code editing).
+        // ARROW KEYS: who gets them during a replay. Three claimants, and the
+        // rule is FOCUS DECIDES -- settled 2026-09-08 when the floating panel
+        // started overlapping the editor, which is what made it a question.
+        //
+        //   1. Focus inside Ace, or in any input/textarea -> the TEXT gets
+        //      them. Bailing here rather than anywhere else is deliberate:
+        //      replay does not stop a student reading around their code, and
+        //      silently turning ArrowRight into "step" while the caret is
+        //      visibly blinking in the editor would be indefensible. Note that
+        //      replay's own tab switches pass noFocus=true precisely so they
+        //      cannot drop focus into Ace and take the arrows away.
+        //   2. Focus on a drag grip -- the pill's or the variables window's --
+        //      -> that WINDOW gets them, 8px per press. Both grips call
+        //      stopPropagation, so this handler never sees those events. The
+        //      variables grip was the broken one: its listener was bound to a
+        //      node that paintVars() replaces, so before the window had been
+        //      dragged with a mouse the arrows fell through to here and
+        //      stepped the recording.
+        //   3. Anywhere else -> the RECORDING gets them, one step per press,
+        //      which is where focus sits after any panel button is pressed.
+        //
+        // Stepping by arrow also stops the panel's autoplay: it goes through
+        // debugStepTo like every other control, and the panel's timer notices
+        // an index it did not produce. So the keys never fight the timer.
+        //
         // Shift+arrow jumps to the previous/next breakpoint (Phase 3).
         $(document).on('keydown.stepDebugger', function(e) {
           if (!debugRec) return;
