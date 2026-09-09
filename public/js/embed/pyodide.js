@@ -2415,9 +2415,19 @@ var debugNoteTimer = null;
 function debugNoteText() {
   var parts = [];
   if (debugFlashNote) parts.push(debugFlashNote);
+  if (debugPersistentNote()) parts.push(debugPersistentNote());
+  return parts.join(' ');
+}
+// The persistent half only. The panel needs these two apart, because they now
+// appear at different times: the persistent notes explain the recording and
+// are wanted on arrival, while a flash answers a press and has to show
+// whenever it fires. The in-tab #debug-note span has no such distinction and
+// keeps taking everything.
+function debugPersistentNote() {
+  var parts = [];
   if (debugBaseNote) parts.push(debugBaseNote);
   if (debugBpNote) parts.push(debugBpNote);
-  return parts.join(' · ');
+  return parts.join(' ');
 }
 // Paint both channels: the in-tab span, and the panel via getState().note.
 function debugRepaintNote() {
@@ -2455,13 +2465,14 @@ function flashDebugNote(msg) {
 function debugJumpBreakpoint(dir) {
   if (!debugRec) return;
   if (!debugHasBreakpoints()) {
-    flashDebugNote('no breakpoints — click left of a line number to add one');
+    flashDebugNote('No breakpoints are set. Click the grey margin left of a line number to add one.');
     return;
   }
   for (var i = debugIdx + dir; i >= 0 && i < debugRec.steps.length; i += dir) {
     if (debugIsBpStep(i)) { debugStepTo(i); return; }
   }
-  flashDebugNote(dir > 0 ? 'no breakpoint ahead' : 'no breakpoint behind');
+  flashDebugNote(dir > 0 ? 'There is no breakpoint ahead of here.'
+                         : 'There is no breakpoint behind here.');
 }
 
 // Render the variables table for a recorded step (flat, no expansion — the
@@ -2635,6 +2646,13 @@ function debugStepTo(idx) {
   renderDebugStep();
 }
 
+// 49906 -> "49,906". Deliberately not toLocaleString: its separator is
+// locale-dependent, and a de-DE reader would get "49.906" -- a period in the
+// middle of a sentence, in a panel whose messages are all sentences now.
+function debugThousands(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 // Per-step "how many times has THIS line run by now", precomputed once so the
 // slider's tooltip can say "about to execute line 8 for the 43rd time". One
 // pass over at most DEBUG_MAX_STEPS entries; recomputing it per hover would be
@@ -2719,10 +2737,13 @@ function enterReplay(rec) {
     var where = bl0.length === 1 ? 'your breakpoint on line ' + bl0[0].line
                                  : 'your breakpoint';
     notes.push(kept
-      ? 'playback starts ' + kept + (kept === 1 ? ' step' : ' steps') + ' before ' + where
-      : 'playback starts at ' + where);
+      ? 'Playback starts ' + debugThousands(kept) + (kept === 1 ? ' step' : ' steps') + ' before ' + where + '.'
+      : 'Playback starts at ' + where + '.');
     if (skipped) {
-      notes.push(skipped + ' earlier lines were not recorded');
+      // "The 49,906 lines before that..." rather than "49906 earlier lines..."
+      // -- a sentence should not open with a digit.
+      notes.push('The ' + debugThousands(skipped)
+        + ' lines before that were not recorded.');
     }
   }
   debugBpNote = '';
@@ -2733,8 +2754,11 @@ function enterReplay(rec) {
     var one   = bps.length === 1;
     var which = one ? 'your breakpoint on line ' + bps[0].line : 'your breakpoints';
     var verb  = one ? 'was' : 'were';
-    debugBpNote = which + ' ' + verb + ' not reached'
-                + (rec.truncated ? ' before it stopped' : '');
+    // Capitalised here rather than at the join, because this clause can also
+    // stand alone as the only note.
+    debugBpNote = which.charAt(0).toUpperCase() + which.slice(1)
+                + ' ' + verb + ' not reached'
+                + (rec.truncated ? ' before the recording stopped.' : '.');
   }
   // Says what you HAVE, and what to do to see more. The old text --
   // "recording stopped after 4371 steps" -- read as a failure report for what
@@ -2751,11 +2775,11 @@ function enterReplay(rec) {
   if (rec.truncated) {
     var iters = debugLoopIterations(rec);
     notes.push(iters
-      ? 'The first ' + iters + ' iterations of your loop are stored to play in'
-        + ' the debugger. If you want to see the whole program, loop through'
-        + ' fewer iterations while debugging.'
-      : 'The first ' + (rec.steps.length - 1) + ' lines your program ran are'
-        + ' stored to play in the debugger.');
+      ? 'The first ' + debugThousands(iters) + ' iterations of your loop are'
+        + ' stored to play in the debugger. If you want to see the whole'
+        + ' program, loop through fewer iterations while debugging.'
+      : 'The first ' + debugThousands(rec.steps.length - 1) + ' lines your'
+        + ' program ran are stored to play in the debugger.');
   }
   // Unconditional. This used to be gated on !debugPanelEnabled(), on the
   // reasoning that the panel shows a bold red banner instead -- but
@@ -2768,8 +2792,12 @@ function enterReplay(rec) {
   // note was suppressed, the banner was unreachable, and showVariables() had
   // hidden the console -- so nothing anywhere said the run ends badly.
   // The panel drops this clause itself when its red banner IS showing.
-  if (rec.error) notes.push('ends with an error');
-  debugBaseNote = notes.join(' · ');
+  if (rec.error) notes.push('This run ends with an error.');
+  // A SPACE, not ' · '. Every note is now a full sentence starting with a
+  // capital and ending with a period, so a middle dot between them read as
+  // punctuation inside one sentence -- "...while debugging. · Your breakpoint
+  // on line 11..." Ordinary prose spacing is what sentences want.
+  debugBaseNote = notes.join(' ');
   $('#debug-note').text(debugNoteText());
   // Without the floating panel the controls only exist inside the Variables
   // tab, so entering replay has to open it. With the panel, opening it would
@@ -2900,7 +2928,7 @@ function runStepThrough(defer) {
       // the in-tab note lives in a pane the panel never opens, so writing
       // there alone means the pill flashes "Recording..." and returns to
       // "step through" with no explanation anywhere on screen.
-      var vpyMsg = 'Step through is not available for VPython programs';
+      var vpyMsg = 'Step through is not available for VPython programs.';
       setDebugNote(vpyMsg);
       setTimeout(function() { clearDebugNoteIf(vpyMsg); }, 4000);
       return null;
@@ -2912,7 +2940,7 @@ function runStepThrough(defer) {
       // (a silently-wrong coroutine, and the input field would never open).
       // Bail with the same mechanism/style as the VPython guard above rather
       // than teaching the recorder about the transform.
-      var inputMsg = 'Step through is not available for programs that read console input';
+      var inputMsg = 'Step through is not available for programs that read console input.';
       setDebugNote(inputMsg);
       setTimeout(function() { clearDebugNoteIf(inputMsg); }, 4000);
       return null;
@@ -2978,12 +3006,13 @@ function runStepThrough(defer) {
         // CAN separate "unreachable" from "past the cap", so it has to.
         if (rec.truncated) {
           setDebugNote(one
-            ? 'gave up before reaching line ' + bl[0].line + ' \u2014 the program runs too long above it'
-            : 'gave up before reaching any of the lines you marked');
+            ? 'Gave up before reaching line ' + bl[0].line
+              + '. The program runs too long above it.'
+            : 'Gave up before reaching any of the lines you marked.');
         } else {
           setDebugNote(one
-            ? 'line ' + bl[0].line + ' never ran, so there was nothing to record from it'
-            : 'none of the lines you marked ran, so there was nothing to record from');
+            ? 'Line ' + bl[0].line + ' never ran, so there was nothing to record from it.'
+            : 'None of the lines you marked ran, so there was nothing to record from.');
         }
         return;
       }
@@ -2992,8 +3021,8 @@ function runStepThrough(defer) {
     }
   }).catch(function(err) {
     recordingDone(false);
-    setDebugNote('recording failed');
-    setTimeout(function() { clearDebugNoteIf('recording failed'); }, 4000);
+    setDebugNote('The recording failed.');
+    setTimeout(function() { clearDebugNoteIf('The recording failed.'); }, 4000);
   });
 }
 
@@ -4512,7 +4541,7 @@ window.TrinketAPI = {
       // so replay ended with the controls simply vanishing. Say it here
       // instead. After exitReplay(), which clears the note slots.
       if (wasReplaying && !debugPanelEnabled()) {
-        setDebugNote('step-through closed because you edited the code');
+        setDebugNote('Step-through closed because you edited the code.');
       }
       // Guarded like the afterRun hooks: editor.change is single-owner, so a
       // throw from the optional plugin would take the change pipeline with it.
@@ -4590,9 +4619,10 @@ window.TrinketAPI = {
                     var bl = debugBreakpointList();
                     return bl.length === 1 ? bl[0].line : null;
                   })()
-                  // Both host note slots, composed. debugBaseNote alone left
-                  // the breakpoint clause frozen at record time.
-                , note           : debugNoteText()
+                  // The persistent notes only; the flash rides its own field
+                  // because the panel shows the two at different times.
+                , note           : debugPersistentNote()
+                , flash          : debugFlashNote
                 , hasBreakpoints : debugHasBreakpoints()
                   // For painting only. The pause itself is actions.autoStep, so
                   // that a paint value never becomes a control value.
