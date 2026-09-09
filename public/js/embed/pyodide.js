@@ -1857,7 +1857,7 @@ var RECORD_HELPER = [
   // Losing the dormant cap loses no protection: it bounded a hazard the
   // dormant branch itself created (a loop spinning while no steps accumulate,
   // so the step cap could never trip). With every line event recorded, the
-  // armed-path check below is reached from the first event of every run, and
+  // cap check below is reached from the first event of every run, and
   // the bound is strictly tighter than before -- 5000 steps or 2 MB, rather
   // than 200,000 dormant events PLUS 5000 recorded ones.
   '_bp_set = set()',
@@ -1878,8 +1878,8 @@ var RECORD_HELPER = [
   '        return _tracer',
   // The byte cap must bound the WHOLE payload, not just snapshot reprs: count
   // stdout growth since the last event (a single huge print would otherwise
-  // sail past the cap into a multi-MB JSON). Counted in the dormant phase too —
-  // pre-breakpoint prints still ship in the recording's output.
+  // sail past the cap into a multi-MB JSON). Unconditional: every line event
+  // is recorded now, so every byte of stdout lands in the accounting.
   '    _size[0] += _buf.tell() - _last_out[0]',
   '    _last_out[0] = _buf.tell()',
   // No early return here: every line event falls through into the recording
@@ -1887,7 +1887,7 @@ var RECORD_HELPER = [
   '    if not _hit[0]:',
   "        _lbl = _file_label(_frame.f_code.co_filename) or '<main>'",
   '        if (_lbl, _frame.f_lineno) in _bp_set: _hit[0] = True',
-  // Armed path: per-step dict overhead joins the accounting.
+  // Per-step dict overhead joins the accounting.
   '    _size[0] += 40',
   '    if len(_steps) >= _max_steps or _size[0] > _max_bytes:',
   '        _truncated[0] = True',
@@ -2017,8 +2017,9 @@ function debugToggleBreakpoint(file, line) {
   // longer exists.
   debugBpNote = '';
   // debugRepaintNote() ends in debugPanelSync(), which is also what tells the
-  // panel that hasBreakpoints/atBreakpoint changed. Harmless while breakpoints
-  // only fed the jump buttons; wrong the moment any of it is rendered.
+  // panel that the table changed. The panel reads hasBreakpoints live at click
+  // time and asks for bpAhead once per play press, so nothing here is painted
+  // from a cached value -- but the sync also repaints the note above, which is.
   debugRepaintNote();
   return !!bp[line];
 }
