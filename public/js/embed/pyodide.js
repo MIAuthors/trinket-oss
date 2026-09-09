@@ -1962,6 +1962,7 @@ function debugHighlightLine(line) {
 // actually open, and only when the file changes — repeated selectFile calls
 // per step would flash/refocus the tab bar.
 var debugShownFile = null; // file whose tab replay last selected
+var debugSelectingFile = false; // true only while replay is switching the tab
 function debugShowLine(st) {
   if (!st || st.line == null) {
     debugHighlightLine(null);
@@ -1982,7 +1983,11 @@ function debugShowLine(st) {
       // noFocus=true: switching tabs must not move keyboard focus into Ace —
       // that killed arrow-key stepping (arrows would start moving the editor
       // cursor instead of the replay).
-      editor.selectFile(file, true); // safe: only called for files that exist
+      // The flag tells the tabChanged listener below that this switch is ours,
+      // so it does not treat it as the student navigating away.
+      debugSelectingFile = true;
+      try { editor.selectFile(file, true); }  // safe: only called for files that exist
+      finally { debugSelectingFile = false; }
       debugShownFile = file;
     }
   } catch (e) { /* tab switching is best-effort */ }
@@ -3987,6 +3992,34 @@ window.TrinketAPI = {
         // later get wired when their tab is first selected.
         ensureGutterBreakpointHandlers();
         $('#editor').on('codeeditor.tabChanged', ensureGutterBreakpointHandlers);
+        // The STUDENT switched tabs mid-replay. debugShownFile still names the
+        // file replay last selected, so the next step would skip selectFile and
+        // debugHighlightLine would mark whichever session is now active -- the
+        // highlight landing in the wrong file, on a line number that means
+        // something else there. Forget it and let the next step re-select.
+        $('#editor').on('codeeditor.tabChanged', function() {
+          if (!debugSelectingFile) debugShownFile = null;
+        });
+        // debugBreakpoints is keyed by file NAME and outlives the file. A dot
+        // left behind by a deleted or renamed file can never be hit, so every
+        // later recording reports bpHit false and the panel says a breakpoint
+        // was not reached -- naming a line in a file that is no longer there.
+        // (Before this branch it was worse: the tracer stayed dormant waiting
+        // for that breakpoint, so every recording came back EMPTY for the rest
+        // of the page session.) Follow the file instead of orphaning the key.
+        $('#editor').on('codeeditor.fileRemoved', function(e) {
+          if (e.fileName && debugBreakpoints[e.fileName]) {
+            delete debugBreakpoints[e.fileName];
+            debugPanelSync();
+          }
+        });
+        $('#editor').on('codeeditor.fileRenamed', function(e) {
+          if (e.oldFileName && debugBreakpoints[e.oldFileName]) {
+            if (e.newFileName) debugBreakpoints[e.newFileName] = debugBreakpoints[e.oldFileName];
+            delete debugBreakpoints[e.oldFileName];
+            debugPanelSync();
+          }
+        });
         $('#debug-prev-bp').on('click keydown', debugActivate(function() { debugJumpBreakpoint(-1); }));
         $('#debug-next-bp').on('click keydown', debugActivate(function() { debugJumpBreakpoint(1); }));
 
@@ -4061,6 +4094,21 @@ window.TrinketAPI = {
       // exit already does, so nothing left behind becomes a lie either.
       var wasReplaying = !!debugRec;
       if (wasReplaying) exitReplay();
+      // The same rule, one state earlier. A recording in flight is also a
+      // snapshot of source that no longer exists -- runStepThrough captured
+      // `prog` before an await, so an edit during the async window (package
+      // loading, matplotlib setup, the traced exec itself) produced a replay
+      // of code the student can no longer see, with nothing saying so. That is
+      // the exact silent failure this handler was added to prevent; it just
+      // did not cover the window before enterReplay. debugCancelled is already
+      // read by every stage of the chain.
+      if (debugRecording) debugCancelled = true;
+      // With the floating panel off, the panel's explanation does not exist,
+      // so replay ended with the controls simply vanishing. Say it here
+      // instead. After exitReplay(), which clears the note slots.
+      if (wasReplaying && !debugPanelEnabled()) {
+        setDebugNote('step-through closed because you edited the code');
+      }
       // Guarded like the afterRun hooks: editor.change is single-owner, so a
       // throw from the optional plugin would take the change pipeline with it.
       if (window.trinketPlotpolish) {

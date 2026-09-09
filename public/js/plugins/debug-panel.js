@@ -35,6 +35,7 @@
   var $vars   = null;
   var $dock   = null;
   var armWaiting = false;  // queued a recording, waiting for the runner to idle
+  var armCancelled = false;  // a cancel pressed while the recording was only QUEUED
   // Replay ended because the student started typing, rather than because they
   // pressed the exit. The panel stays OPEN in that case and the variables
   // window carries the reason -- see paintVars().
@@ -665,6 +666,15 @@
   var mode = 'step';       // 'step' or 'auto' -- whichever was last driven
   var playAct = null;      // which transport button is driving, or null
   var playTimer = null;
+  // The index the timer last produced, and a re-entrancy flag for the sync()
+  // the timer's own step triggers. Together they let sync() tell "the playhead
+  // moved because I moved it" from "something else moved it" -- the in-tab
+  // fwd/back/first/last buttons, the in-tab slider and the arrow keys all go
+  // straight to debugStepTo and know nothing about this timer, so without this
+  // the two fought over the index and the student's press was undone a
+  // fraction of a second later.
+  var playLastIdx = null;
+  var inTick = false;
 
   function playing() { return playTimer !== null; }
 
@@ -673,6 +683,7 @@
     clearInterval(playTimer);
     playTimer = null;
     playAct = null;
+    playLastIdx = null;
     paintPlay();
   }
 
@@ -695,6 +706,13 @@
     var s0 = {};
     try { s0 = ctx.getState() || {}; } catch (e) { return; }
     if (!s0.replaying) return;
+    // Nowhere to go. A recording of a single line (or of a program that died
+    // on its first statement) has total 0, and arming the timer anyway made
+    // every AUTO MODE button light up, swap the centre glyph to pause and hold
+    // that state for a whole interval -- five seconds on the slowest rate --
+    // before the first tick discovered there was nothing to step and stopped.
+    // A play state that plays nothing is worse than a dead button.
+    if (!(s0.total > 0)) return;
     // Parked at the end: restart from the top, so the press does something
     // rather than nothing -- the same thing a player's play button does once
     // the video has finished.
@@ -717,6 +735,7 @@
         : 'playing past this breakpoint — it does not come round again');
     }
     playAct = act;
+    playLastIdx = (typeof s0.idx === 'number') ? s0.idx : null;
     playTimer = setInterval(function() {
       // One primitive, and pyodide.js decides why we stopped: 'moved', 'end' or
       // 'breakpoint'. Auto mode no longer owns the end-of-recording test, and
@@ -726,9 +745,12 @@
       // second a 5,000-step recording still takes sixteen minutes, so auto mode
       // is for watching a loop turn, not traversing a program.
       var r = 'end';
+      inTick = true;
       try {
         r = ctx.actions.autoStep ? ctx.actions.autoStep() : legacyTick();
-      } catch (e) { stopPlay(); return; }
+      } catch (e) { inTick = false; stopPlay(); return; }
+      inTick = false;
+      try { playLastIdx = (ctx.getState() || {}).idx; } catch (e) { playLastIdx = null; }
       if (r === 'moved') return;
       stopPlay();
       if (r === 'breakpoint') {
@@ -788,6 +810,11 @@
       hideHelp();
       varsPlaced = false;
       editExited = false;   // collapsing dismisses the message
+      // Collapsing pauses. The autoplay timer used to keep stepping behind a
+      // collapsed pill, with no pause control reachable anywhere -- the only
+      // way to stop it was to expand again and find the button. Covers all
+      // three routes in: the grip tap, the DEBUG toggle and the exit button.
+      stopPlay();
       if ($vars) $vars.hidden = true;
     }
     expanded = on;
@@ -796,6 +823,12 @@
     if (t) t.setAttribute('aria-expanded', String(on));
     place();
     paintVars();   // collapse hides it; re-expanding must bring it straight back
+    // Repaint from live state as well, because expansion changes what some of
+    // it MEANS: the small accent dot that says "still in a replay" is painted
+    // on `s.replaying && !expanded`, so collapsing a paused replay left the
+    // dot off and the pill looked finished. sync() cannot recurse here -- it
+    // calls place() and paintVars(), never setExpanded().
+    if (ctx && mounted) sync();
     if (!on || !alsoRecord || !ctx || !ctx.actions) return;
     // Deferred one tick so the expand animation and the (blocking, main-thread)
     // recording do not fight over the same frame. setTimeout, not
@@ -810,10 +843,19 @@
   // pill and nothing else. Wait for the runner to go quiet instead, then
   // record -- and give up if they close the pill or start something else.
   function armRecording(tries) {
+    // A press is a fresh request, so it outranks a cancel from the last one.
+    if (!tries) armCancelled = false;
+    // The student pressed cancel while this was queued. Nothing is recording
+    // yet, so there is nothing for actions.cancel() to flag -- the only way to
+    // stop it is to refuse to re-arm here.
+    if (armCancelled) { armCancelled = false; armWaiting = false; sync(); return; }
     if (!expanded || !ctx || !ctx.actions) { armWaiting = false; return; }
     var s = {};
-    try { s = ctx.getState() || {}; } catch (e) { return; }
-    if (s.recording || s.replaying) return;
+    try { s = ctx.getState() || {}; } catch (e) { armWaiting = false; return; }
+    // Something else got there first. Clearing the flag matters: left true
+    // with no timer pending, the next ordinary Run made the pill claim it was
+    // waiting to record, and offered a cancel button for a queue of nothing.
+    if (s.recording || s.replaying) { armWaiting = false; return; }
     if (s.busy) {
       if (tries < 150) {
         armWaiting = true;
@@ -1152,10 +1194,16 @@
   function sync() {
     if (!ctx || !mounted) return;
     // If the debugger left replay by any route, the timer has nothing to step.
+    // And if the playhead moved without the timer moving it, something else is
+    // driving -- an in-tab transport button, the in-tab slider, an arrow key --
+    // so hand over rather than fight: two things stepping the same index means
+    // the student's press is silently undone on the next tick.
     if (playing()) {
       var q = {};
       try { q = ctx.getState() || {}; } catch (e) { q = {}; }
       if (!q.replaying) stopPlay();
+      else if (!inTick && playLastIdx !== null
+               && typeof q.idx === 'number' && q.idx !== playLastIdx) stopPlay();
     }
     var avail = false;
     try { avail = !!ctx.isAvailable(); } catch (e) { avail = false; }
@@ -1322,7 +1370,18 @@
           // silently and looks like a dead button), plus the fresh-start reset
           // of dismissed and promoted variables from the previous recording.
           case 'start':  armRecording(0);  break;
-          case 'cancel': a.cancel();     break;
+          // Two different cancels, because the pill shows this button in two
+          // different states. While it reads "Waiting for the run..." nothing
+          // is recording yet, so actions.cancel() only sets a flag that the
+          // recording will read when it starts -- and it DOES start, up to 30 s
+          // later, because armRecording's pending setTimeout is still queued.
+          // The button advertised a cancellation it could not perform.
+          case 'cancel':
+            var cs = {};
+            try { cs = ctx.getState() || {}; } catch (e) {}
+            if (armWaiting && !cs.recording) { armCancelled = true; armWaiting = false; }
+            else a.cancel();
+            break;
           case 'first':  a.first();      break;
           case 'back':   a.step(-1);     break;
           case 'fwd':    a.step(1);      break;

@@ -445,8 +445,13 @@
           <div class="variables-toolbar-row" id="variables-toolbar-steps">
           <span id="debug-launch">
             <span id="debug-start" class="debug-btn debug-start" role="button" tabindex="0" title="Records your program running from scratch (as a standalone script — nothing carries over from earlier runs), then lets you step through it"><i class="fa fa-step-forward"></i> Step through</span>
-            <span id="debug-recording" class="hide">recording&hellip; <span id="debug-cancel" class="debug-btn" role="button" tabindex="0" title="Cancel">cancel</span></span>
           </span>
+          <!-- A SIBLING of #debug-launch, not a child. runStepThrough hides
+               #debug-launch and shows #debug-recording in the same breath
+               (pyodide.js), so while this span lived inside it, Foundation's
+               .hide on the parent won and the whole strip went blank for the
+               length of the recording -- with cancel inside the blank. -->
+          <span id="debug-recording" class="hide">recording&hellip; <span id="debug-cancel" class="debug-btn" role="button" tabindex="0" title="Cancel">cancel</span></span>
           <span id="debug-controls" class="hide">
             <span id="debug-first" class="debug-btn" role="button" tabindex="0" title="First step"><i class="fa fa-fast-backward"></i></span>
             <span id="debug-back" class="debug-btn" role="button" tabindex="0" title="Previous step (←)"><i class="fa fa-step-backward"></i></span>
