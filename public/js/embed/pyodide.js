@@ -1778,7 +1778,17 @@ var RECORD_HELPER = [
   // strings/namespaces, so a shared definition would add more machinery than
   // it removes — this cross-reference is the guard.
   "_SKIP = {'__user_source__', '__trinket_echo_source__', '_plt', '_vpy', '_js_scene', '_wrapped_rate', 'transform_source'}",
-  'class _TrinketStopRecording(Exception): pass',
+  // BaseException, not Exception, and this is the guard that bounds a runaway
+  // program. A trace function's exception propagates into the frame being
+  // traced, so it meets that frame's own handlers -- and `try: ... except
+  // Exception:` inside a student's loop SWALLOWED the cap abort. Verified in a
+  // real interpreter: tracing then dies and the loop runs on untraced, so a
+  // `while True:` hangs the tab with no recording and nothing JS can interrupt,
+  // while _buf keeps growing with _size[0] frozen. The `except
+  // _TrinketStopRecording` clause below still precedes `except BaseException`,
+  // so nothing else changes. A bare `except:` still swallows it; there is no
+  // defence against that and it is much rarer student code.
+  'class _TrinketStopRecording(BaseException): pass',
   '_steps = []',
   '_snaps = []',
   '_size = [0]',
@@ -1848,11 +1858,30 @@ var RECORD_HELPER = [
   // threshold=1000, so it was never the expensive one, and routing it through
   // reprlib turned a clean array([...]) into 'array([0.0, 2.0e-04, ......e-01'
   // and cut across its row breaks. With the gate, numpy output is unchanged.
-  "_RL_TYPES = (list, tuple, dict, set, frozenset, str)",
+  // EXACT TYPE, not isinstance, and no dict. Two separate corrections.
+  //
+  // isinstance let SUBCLASSES through, but reprlib.repr1 dispatches on
+  // type(x).__name__ -- so a namedtuple ('State') or a defaultdict found no
+  // repr_State/repr_defaultdict and landed in repr_instance, which builds the
+  // whole repr anyway and then elides its MIDDLE. That is the same mid-token
+  // cut across a value's own structure that numpy is gated out to avoid, with
+  // none of the speed. `State = namedtuple('State', 'x y vx vy')` is ordinary
+  // code in this audience. type() in (...) sends every subclass back to plain
+  // repr() plus the head clamp, i.e. byte-identical to before.
+  //
+  // dict is out because reprlib.repr_dict SORTS the keys before slicing them,
+  // so display order flipped from insertion to alphabetical AND the survivors
+  // were the alphabetically-first maxdict rather than the first the student
+  // wrote. print() and the live variable explorer both still use plain repr,
+  // so the same dict would have read one way in the Variables tab and another
+  // while stepping. Dicts were never the case this was chasing either -- that
+  // was the bare accumulator list. (A dict NESTED inside a gated list still
+  // takes repr_dict via recursion; at that depth the 120-char clamp was
+  // already cutting it, so the difference is marginal.)
+  "_RL_TYPES = (list, tuple, set, frozenset, str)",
   '_rl = reprlib.Repr()',
   '_rl.maxlevel = 4',
   '_rl.maxlist = _rl.maxtuple = _rl.maxset = _rl.maxfrozenset = _rl.maxdeque = 30',
-  '_rl.maxdict = 8',
   '_rl.maxstring = _max_repr',
   '_rl.maxother = _max_repr',
   'def _snap_ns(_ns):',
@@ -1865,7 +1894,7 @@ var RECORD_HELPER = [
   '        if isinstance(_val, (types.FunctionType, types.BuiltinFunctionType, types.LambdaType)): continue',
   '        if isinstance(_val, type): continue',
   '        try:',
-  '            _r = _rl.repr(_val) if isinstance(_val, _RL_TYPES) else repr(_val)',
+  '            _r = _rl.repr(_val) if type(_val) in _RL_TYPES else repr(_val)',
   '        except Exception:',
   "            _r = '<unrepresentable>'",
   "        if len(_r) > _max_repr: _r = _r[:_max_repr] + '...'",
@@ -2634,7 +2663,7 @@ function enterReplay(rec) {
   // the breakpoint status. Both numbers are real: `kept` is what the ring
   // actually held (fewer than the full window if the breakpoint came early),
   // and `skipped` is what it dropped to get there.
-  if (rec.deferred && rec.bpHit) {
+  if (rec.deferred && rec.bpHit && debugBreakpointList().length) {
     var kept = rec.kept || 0, skipped = rec.skipped || 0;
     var bl0 = debugBreakpointList();
     var where = bl0.length === 1 ? 'your breakpoint on line ' + bl0[0].line
@@ -2836,9 +2865,22 @@ function runStepThrough(defer) {
       // this one just did, and the answer is unreachable.
       if (rec.deferred && rec.bpHit === false) {
         var bl = debugBreakpointList();
-        setDebugNote(bl.length === 1
-          ? 'line ' + bl[0].line + ' never ran, so there was nothing to record from it'
-          : 'none of the lines you marked ran, so there was nothing to record from');
+        var one = bl.length === 1;
+        // TWO different causes, and bpHit alone cannot tell them apart --
+        // rec.truncated can. Saying "never ran" on the give-up path would be
+        // the same lie this whole branch exists to stop telling: with dt one
+        // decade smaller the coast trips the 200,000-event cap and the line
+        // runs 10,000 times. The second run's whole justification is that it
+        // CAN separate "unreachable" from "past the cap", so it has to.
+        if (rec.truncated) {
+          setDebugNote(one
+            ? 'gave up before reaching line ' + bl[0].line + ' \u2014 the program runs too long above it'
+            : 'gave up before reaching any of the lines you marked');
+        } else {
+          setDebugNote(one
+            ? 'line ' + bl[0].line + ' never ran, so there was nothing to record from it'
+            : 'none of the lines you marked ran, so there was nothing to record from');
+        }
         return;
       }
       initConsoleOutput();
