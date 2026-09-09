@@ -1359,17 +1359,28 @@
          + (s.visitOrdinals ? ' for the ' + ordinal(s.lineVisit) + ' time.' : '.');
   }
 
-  // 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st, 43rd. The teens are the
-  // exception that catches naive implementations.
+  // 1,000 not 1000. The panel's own copy of the host's debugThousands: these
+  // numbers are read inside sentences, and a bare 2500 in prose is the same
+  // wart as a sentence opening with a digit. Deliberately NOT toLocaleString,
+  // whose separator is locale-dependent -- a de-DE reader would get "2.500th".
+  function commas(n) {
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  // 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st, 2,500th. The teens are
+  // the exception that catches naive implementations -- and the suffix is
+  // chosen from the RAW number before the commas go in, or 2,500 % 10 would be
+  // read off a string.
   function ordinal(n) {
-    var rem100 = n % 100;
-    if (rem100 >= 11 && rem100 <= 13) return n + 'th';
-    switch (n % 10) {
-      case 1: return n + 'st';
-      case 2: return n + 'nd';
-      case 3: return n + 'rd';
-      default: return n + 'th';
+    var rem100 = n % 100, suffix = 'th';
+    if (rem100 < 11 || rem100 > 13) {
+      switch (n % 10) {
+        case 1: suffix = 'st'; break;
+        case 2: suffix = 'nd'; break;
+        case 3: suffix = 'rd'; break;
+      }
     }
+    return commas(n) + suffix;
   }
 
   function escHtml(t) {
@@ -1557,7 +1568,7 @@
       // to put, not instructions for using a range input.
       slider.title = s.atEnd
         ? 'The end of the recording'
-        : 'Step ' + (s.idx + 1) + ' of ' + s.total
+        : 'Step ' + commas(s.idx + 1) + ' of ' + commas(s.total)
           // "about to", not "executing": a line event fires BEFORE its line
           // runs, which is also why the variables read as they do on entry.
           // The visit count makes a loop legible -- the same line at step 40
