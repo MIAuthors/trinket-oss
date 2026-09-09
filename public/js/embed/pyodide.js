@@ -2635,8 +2635,58 @@ function debugStepTo(idx) {
   renderDebugStep();
 }
 
+// Per-step "how many times has THIS line run by now", precomputed once so the
+// slider's tooltip can say "about to execute line 8 for the 43rd time". One
+// pass over at most DEBUG_MAX_STEPS entries; recomputing it per hover would be
+// the same work repeated on every sync during autoplay.
+var debugVisits = null;
+function debugBuildVisits(rec) {
+  var seen = Object.create(null), out = new Array(rec.steps.length), i, st, k;
+  for (i = 0; i < rec.steps.length; i++) {
+    st = rec.steps[i];
+    if (!st || st.line == null) { out[i] = 0; continue; }
+    k = (st.file || '<main>') + ':' + st.line;
+    seen[k] = (seen[k] || 0) + 1;
+    out[i] = seen[k];
+  }
+  return out;
+}
+
+// How many COMPLETE passes through the busiest loop the recording holds, or
+// null if there is no loop worth naming.
+//
+// The counting rule matters, because the obvious one is off by one. A `for`
+// header fires once per pass PLUS once more when the iterator is exhausted (or
+// when the recording is cut mid-body), so the maximum count belongs to the
+// header and overstates completed passes. Within one truncated final pass the
+// loop's own lines differ by at most one, so: take the lines whose count is
+// within 2 of the maximum -- that is the loop, header included -- and report
+// the MINIMUM of them, which is the last body line to have run. On the
+// dt=0.001 projectile that gives 873, matching the `i = 873` the variables
+// window shows at the final step. Taking the maximum would have said 875.
+function debugLoopIterations(rec) {
+  var counts = Object.create(null), i, st, k, max = 0;
+  for (i = 0; i < rec.steps.length; i++) {
+    st = rec.steps[i];
+    if (!st || st.line == null) continue;
+    k = (st.file || '<main>') + ':' + st.line;
+    counts[k] = (counts[k] || 0) + 1;
+    if (counts[k] > max) max = counts[k];
+  }
+  // Nothing ran more than a couple of times: a straight-line program, or
+  // recursion without a loop. Claiming "iterations of your loop" here would be
+  // a plain falsehood, so say nothing about loops.
+  if (max < 3) return null;
+  var min = max;
+  for (k in counts) {
+    if (counts[k] >= max - 2 && counts[k] < min) min = counts[k];
+  }
+  return min;
+}
+
 function enterReplay(rec) {
   debugRec = rec;
+  debugVisits = debugBuildVisits(rec);
   debugVarModel = null;
   debugIdx = 0;
   debugLastOut = -1;
@@ -2686,7 +2736,27 @@ function enterReplay(rec) {
     debugBpNote = which + ' ' + verb + ' not reached'
                 + (rec.truncated ? ' before it stopped' : '');
   }
-  if (rec.truncated) notes.push('recording stopped after ' + (rec.steps.length - 1) + ' steps');
+  // Says what you HAVE, and what to do to see more. The old text --
+  // "recording stopped after 4371 steps" -- read as a failure report for what
+  // is usually not a failure (4371 steps is more than anyone hand-steps), gave
+  // a number with no referent, and named no action. "steps" is the debugger's
+  // unit too; iterations are the student's.
+  //
+  // No code example on the end, deliberately. `range(50) instead of
+  // range(10000)` is only literally true of `for i in range(10000)`: it is
+  // misleading when the bound is a variable (there is no range(10000) in the
+  // file to find), wrong when the bound is computed, and meaningless for a
+  // `while` loop, which is the projectile idiom. The advice generalises;
+  // the example did not.
+  if (rec.truncated) {
+    var iters = debugLoopIterations(rec);
+    notes.push(iters
+      ? 'The first ' + iters + ' iterations of your loop are stored to play in'
+        + ' the debugger. If you want to see the whole program, loop through'
+        + ' fewer iterations while using the debugger.'
+      : 'The first ' + (rec.steps.length - 1) + ' lines your program ran are'
+        + ' stored to play in the debugger.');
+  }
   // Unconditional. This used to be gated on !debugPanelEnabled(), on the
   // reasoning that the panel shows a bold red banner instead -- but
   // debugPanelEnabled() is a pure CONFIG read and says nothing about whether
@@ -2715,10 +2785,30 @@ function enterReplay(rec) {
 // Reset Output button), where restoring the recording's output first would be
 // wasted or actively wrong. The ✕ button uses the default (restore), so
 // exiting by hand leaves the full recorded output visible.
-function exitReplay(quiet) {
+// `why` says what to do with the console, because the three exits want three
+// different things and a boolean could only express two:
+//
+//   undefined / 'restore'  the X button. A deliberate exit, so restore the
+//                          full recorded output AND its traceback -- nothing
+//                          about the program has changed.
+//   true / 'quiet'         a fresh run or a replaced program is about to
+//                          rewrite the console anyway; touching it here would
+//                          be wasted or actively wrong.
+//   'stale'                the student EDITED the code. The output still
+//                          belongs to a run that happened, but the traceback
+//                          describes source that no longer exists -- and
+//                          re-posting it at the moment they fix the error is
+//                          how the debugger came to announce a bug they had
+//                          just repaired. Larry found this by using it.
+//
+// `true` is still accepted so the two fresh-run callers read unchanged.
+function exitReplay(why) {
+  var quiet = (why === true || why === 'quiet');
+  var stale = (why === 'stale');
   if (!debugRec) return;
   var rec = debugRec;
   debugRec = null;
+  debugVisits = null;
   debugVarModel = null;
   debugLastOut = -1;
   debugErrShown = false;
@@ -2739,7 +2829,21 @@ function exitReplay(quiet) {
     jqconsole.Reset();
     jqconsole.Append(loadingHeader());
     consoleWrite(rec.output);
-    if (rec.error) consoleWrite('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
+    if (rec.error) {
+      if (stale) {
+        // PAST TENSE, and more than that: it names the edit that superseded
+        // the error, which is the fact the student can check, and it ends with
+        // something to do. Tense alone does not carry it -- a red traceback
+        // below has no tense and reads as current whatever sits above it --
+        // so the traceback is demoted out of the error class here too. The
+        // panel's own red banner is untouched; this is the console copy only.
+        consoleWrite('\nThis ran before your last edit \u2014 the error below may'
+          + ' already be fixed. Press Run to check.\n', 'jqconsole-output', false);
+        consoleWrite(escapeConsoleHtml(rec.error) + '\n', 'jqconsole-output', false);
+      } else {
+        consoleWrite('\n' + escapeConsoleHtml(rec.error) + '\n', 'jqconsole-error', false);
+      }
+    }
   }
   paintVariables();
   debugPanelSync();
@@ -4394,7 +4498,7 @@ window.TrinketAPI = {
       // Not quiet: the non-quiet path restores the console the way the panel's
       // exit already does, so nothing left behind becomes a lie either.
       var wasReplaying = !!debugRec;
-      if (wasReplaying) exitReplay();
+      if (wasReplaying) exitReplay('stale');
       // The same rule, one state earlier. A recording in flight is also a
       // snapshot of source that no longer exists -- runStepThrough captured
       // `prog` before an await, so an edit during the async window (package
@@ -4500,6 +4604,10 @@ window.TrinketAPI = {
                   // Whether pressing play can still stop at anything. Read
                   // once per play press, not painted.
                 , bpAhead        : debugBpAhead(debugIdx)
+                  // "about to execute line 8 for the 43rd time" -- a line
+                  // event fires BEFORE its line runs, which is why the
+                  // tooltip says "about to".
+                , lineVisit      : (debugVisits && debugVisits[debugIdx]) || 0
                   // The panel is a VIEW, so parsing a traceback is this side's
                   // job, not its own.
                 , hasError       : !!(debugRec && debugRec.error)

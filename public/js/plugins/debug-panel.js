@@ -266,6 +266,20 @@
     // Navigation, so it hovers like every other navigation control. Red on
     // this pill is reserved for the one button that ends the session.
     '.tk-dbg-btn.bp:hover:not(:disabled){color:#0969da!important}',
+    // ONCE A BREAKPOINT EXISTS the two jump arrows go red, matching the gutter
+    // marker itself (#c0392b, the rgba(192,57,43,.85) inset shadow in
+    // pyodide.html) rather than the panel's exit red. Larry's call, and it
+    // makes the exit no longer the only red control -- previously a deliberate
+    // rule, now deliberately relaxed.
+    //
+    // SPECIFICITY, not source order: `.tk-dbg-grp.tk-dbg-hasbp .tk-dbg-btn.bp` is
+    // (0,4,0) and the hover rule above is ALSO (0,4,0) -- :hover and
+    // :not(:disabled) both count in the class column -- so leaving it there
+    // would be a tie decided by which came last, which is exactly how the
+    // playing-speed accent was silently lost in this branch. The hover pair
+    // below is qualified to (0,6,0) so hover always wins.
+    '.tk-dbg-grp.tk-dbg-hasbp .tk-dbg-btn.bp{color:#c0392b!important}',
+    '.tk-dbg-grp.tk-dbg-hasbp .tk-dbg-btn.bp:hover:not(:disabled){color:#96281b!important}',
     // The circle glyphs read small against the numerals next door.
     '.tk-dbg-btn.bp,.tk-dbg-btn[data-act="bphelp"]{font-size:15px;padding:3px 4px}',
     // A toggle that is ON says so with the accent, never a filled chip -- and
@@ -278,13 +292,34 @@
     '.tk-dbg-btn.primary .fa{font-size:17px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
-    // The slider's width is column 2 of .tk-dbg-grid, sized by the AUTO MODE
-    // box above it -- roughly 91px, not a basis set here. `flex:0 0 70px` and
-    // `align-self:flex-end` were both inert (a grid item ignores flex-basis,
-    // and the grid's own align-items:end already does the second). min-width:0
-    // stays: automatic minimum size applies to grid items too, and the range
-    // input's min-content width is ~129px without it.
-    '.tk-dbg-slidewrap{min-width:0;height:25px;display:flex;align-items:center}',
+    // NAMESPACED, and it has to be. This modifier was called `progress` for
+    // about an hour, and Trinket's embed.css carries a bare `.progress` --
+    // Foundation 5's progress-bar component -- which gave the group
+    // background:#f6f6f6, height:25px, padding:2px and a 10px bottom margin.
+    // That was the grey block behind the caption AND the reason this group
+    // measured 25px tall where its neighbours measured 34.
+    //
+    // The panel's own selectors are all .tk-dbg-prefixed and its audit
+    // confirmed that; what it did not cover is a BARE MODIFIER class sitting
+    // on the element as a second name, where a global rule can reach it
+    // without any of our selectors being involved. I enumerated every bare
+    // modifier the panel uses against the embed's other stylesheets: only
+    // `.fa` (deliberate, Font Awesome) and this one matched anything, so the
+    // pre-existing `active`/`primary`/`rate`/`step`/`auto`/`bp` are clean and
+    // are left alone. The ones added today are prefixed.
+    //
+    // The slider now sits in a captioned box like the other three groups, so
+    // row 2 reads as two labelled controls instead of one control and a bare
+    // track. Its width is column 2 of .tk-dbg-grid, sized by the AUTO MODE box
+    // above it -- not a basis set here.
+    //
+    // min-width:0 on BOTH the group and the box: automatic minimum size
+    // applies to grid AND flex items, and a range input's min-content width is
+    // ~129px, so without it the slider would push column 2 wider and take the
+    // pill with it. This is the trap that cost an hour the first time -- the
+    // fix has to go on the WRAPPER, not the input.
+    '.tk-dbg-grp.tk-dbg-prog{min-width:0}',
+    '.tk-dbg-grp.tk-dbg-prog .tk-dbg-box{min-width:0;padding:0 5px;height:25px}',
     '.tk-dbg-slider{width:100%;min-width:0;flex:none;margin:0;accent-color:#0969da;',
       'height:14px}',
 
@@ -601,16 +636,18 @@
     +           rate('ff5', '5', 'Play at 5 lines per second')
     +         '</span>'
     +       '</span>'
-    +       '<span class="tk-dbg-grp"><span class="tk-dbg-cap">Breakpoints</span>'
+    +       '<span class="tk-dbg-grp tk-dbg-bpgrp"><span class="tk-dbg-cap">Breakpoints</span>'
     +         '<span class="tk-dbg-box">'
     +           btn('prevbp', 'fa-chevron-circle-left', 'Previous breakpoint', 'bp')
     +           btn('nextbp', 'fa-chevron-circle-right', 'Next breakpoint', 'bp')
     +           btn('bphelp', 'fa-question-circle-o', 'What is a breakpoint?')
     +         '</span>'
     +       '</span>'
-    +       '<span class="tk-dbg-slidewrap">'
-    +         '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
-    +           ' aria-label="Step position">'
+    +       '<span class="tk-dbg-grp tk-dbg-prog"><span class="tk-dbg-cap">Progress</span>'
+    +         '<span class="tk-dbg-box">'
+    +           '<input type="range" class="tk-dbg-slider" data-act="slider" min="0" max="0" value="0"'
+    +             ' aria-label="Step position">'
+    +         '</span>'
     +       '</span>'
     +     '</span>'
     +     '<button type="button" class="tk-dbg-btn exit" data-act="exit"'
@@ -1269,6 +1306,19 @@
     $vars.style.top = Math.round(vr.top - b.top) + 'px';
   }
 
+  // 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st, 43rd. The teens are the
+  // exception that catches naive implementations.
+  function ordinal(n) {
+    var rem100 = n % 100;
+    if (rem100 >= 11 && rem100 <= 13) return n + 'th';
+    switch (n % 10) {
+      case 1: return n + 'st';
+      case 2: return n + 'nd';
+      case 3: return n + 'rd';
+      default: return n + 'th';
+    }
+  }
+
   function escHtml(t) {
     return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -1439,9 +1489,21 @@
       var slider = $pill.querySelector('[data-act="slider"]');
       slider.max = s.total;
       slider.value = s.idx;
+      // No "drag to scrub" / "drag to go back". A slider already looks like a
+      // slider; the tooltip's job is the information the pill has nowhere else
+      // to put, not instructions for using a range input.
       slider.title = s.atEnd
-        ? 'The end of the recording \u2014 drag to go back'
-        : 'Step ' + (s.idx + 1) + ' of ' + s.total + ' \u2014 drag to scrub';
+        ? 'The end of the recording'
+        : 'Step ' + (s.idx + 1) + ' of ' + s.total
+          // "about to", not "executing": a line event fires BEFORE its line
+          // runs, which is also why the variables read as they do on entry.
+          // The visit count makes a loop legible -- the same line at step 40
+          // and step 900 is the difference between the 8th pass and the 180th,
+          // and nothing else on the pill says which.
+          + (s.line != null && s.lineVisit
+               ? '\n\nAbout to execute line ' + s.line
+                 + (s.lineVisit > 1 ? ' for the ' + ordinal(s.lineVisit) + ' time' : ' for the first time')
+               : '');
       var atStart = s.idx <= 0, atEnd = s.idx >= s.total;
       $pill.querySelector('[data-act="first"]').disabled = atStart;
       $pill.querySelector('[data-act="back"]').disabled = atStart;
@@ -1452,6 +1514,14 @@
       // what breakpoints are. The handler answers with the hint instead.
       $pill.querySelector('[data-act="prevbp"]').disabled = false;
       $pill.querySelector('[data-act="nextbp"]').disabled = false;
+      // The jump arrows go red once there is somewhere to jump to. Read live
+      // from state, so a gutter click recolours them immediately --
+      // debugToggleBreakpoint ends in debugPanelSync(), which lands here.
+      // Note this is the BREAKPOINTS group specifically: `.active` is the
+      // mode highlight and this box deliberately never takes it, so the two
+      // cannot be confused.
+      var bpGrp = $pill.querySelector('.tk-dbg-grp.tk-dbg-bpgrp');
+      if (bpGrp) bpGrp.classList.toggle('tk-dbg-hasbp', !!s.hasBreakpoints);
     }
     place();
     paintVars();
