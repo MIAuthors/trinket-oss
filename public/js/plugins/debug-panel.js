@@ -168,14 +168,20 @@
       'background:#ffffff;border:0;border-radius:999px;',
       // The "outline" is the shadow's own hairline ring, not a border: a 1px
       // border plus a shadow reads as two edges at this radius.
-      'box-shadow:0 0 0 1px rgba(31,35,40,.14), 0 3px 12px rgba(31,35,40,.18);',
+      // The ring and the drop both carry the accent hue rather than neutral
+      // grey, so the collapsed pill reads as an offer instead of a chip of
+      // chrome. Kept subtle on purpose: at .20/.22 alpha over white it is a
+      // tint, not a glow, and it does not compete with the accented primary
+      // action inside. Same hue as everything else that means "this is the
+      // debugger" (#0969da = rgb(9,105,218)).
+      'box-shadow:0 0 0 1px rgba(9,105,218,.20), 0 3px 12px rgba(9,105,218,.22);',
       'width:72px;height:32px;font-size:13px;',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;',
       'user-select:none;-webkit-user-select:none;',
       'transition:width 170ms cubic-bezier(.2,.7,.3,1),height 170ms cubic-bezier(.2,.7,.3,1),box-shadow 140ms ease}',
     // Only the two axes change on open; the ring must survive both states.
     '.tk-dbg.open{width:296px;height:84px}',
-    '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(31,35,40,.18), 0 10px 26px rgba(31,35,40,.3);transition:none}',
+    '.tk-dbg.dragging{box-shadow:0 0 0 1px rgba(9,105,218,.28), 0 10px 26px rgba(9,105,218,.34);transition:none}',
     '.tk-dbg:not(.open){cursor:pointer}',
     '.tk-dbg[hidden]{display:none!important}',
     // align-self:center rather than the pill's stretch, so the dots sit on the
