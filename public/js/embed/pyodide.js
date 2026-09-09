@@ -2753,7 +2753,7 @@ function enterReplay(rec) {
     notes.push(iters
       ? 'The first ' + iters + ' iterations of your loop are stored to play in'
         + ' the debugger. If you want to see the whole program, loop through'
-        + ' fewer iterations while using the debugger.'
+        + ' fewer iterations while debugging.'
       : 'The first ' + (rec.steps.length - 1) + ' lines your program ran are'
         + ' stored to play in the debugger.');
   }
