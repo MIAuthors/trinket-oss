@@ -37,10 +37,6 @@
   var $dock   = null;
   var armWaiting = false;  // queued a recording, waiting for the runner to idle
   var armCancelled = false;  // a cancel pressed while the recording was only QUEUED
-  // Set by the "record from the breakpoint instead" button so the deferred
-  // recording goes through armRecording like every other launch -- getting the
-  // busy-wait and the fresh-start reset that a bare actions.* call lacks.
-  var armDefer = false;
   // Replay ended because the student started typing, rather than because they
   // pressed the exit. The panel stays OPEN in that case and the variables
   // window carries the reason -- see paintVars().
@@ -426,7 +422,7 @@
     // of them is destructive, so they do not share an edge.
     '.tk-dbg-vrow{display:grid;grid-template-columns:14px 4px 14px 1fr;gap:0 2px;',
       'align-items:center;padding:2px 6px 2px 3px;border-top:1px solid #f1f4f7;border-radius:4px}',
-    '.tk-dbg-vrow:first-child{border-top:0}',
+
     '.tk-dbg-stmt{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;',
       'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:4px;',
       'cursor:default}',
@@ -474,12 +470,25 @@
     // button renders transparent with white text on white.
     '.tk-dbg-vask{font-size:11.5px;line-height:1.4;color:#1f2328;',
       'padding:4px 3px 3px;max-width:200px}',
-    '.tk-dbg-vgo{display:block;margin:0 3px 5px!important;padding:3px 9px;',
+    // DESCENDANT-QUALIFIED, and that is the whole point. !important only picks
+    // the cascade BUCKET; inside the bucket specificity still decides. The
+    // `.tk-dbg-vars button` reset above is (0,1,1) and a bare `.tk-dbg-vgo` is
+    // (0,1,0), so the reset's background:none!important won and this button
+    // rendered a white label on a transparent background over the window's
+    // white -- invisible at rest, on hover, on focus and while pressed. The
+    // colour won, which is what made it invisible rather than merely wrong.
+    //
+    // `.tk-dbg-vars .tk-dbg-vgo` is (0,2,0), which beats (0,1,1) on the class
+    // column; the hover pair at (0,3,0) beats the reset's (0,2,1) the same
+    // way. NOT `button.tk-dbg-vgo` -- that is (0,1,1), a TIE decided by source
+    // order, and ties are bugs in this file.
+    '.tk-dbg-vars .tk-dbg-vgo{display:block;margin:0 3px 5px!important;padding:3px 9px;',
       'border:0;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;',
       'font-family:inherit;background:#0969da!important;color:#fff!important;',
       'transition:background 90ms ease}',
-    '.tk-dbg-vgo:hover,.tk-dbg-vgo:focus{background:#0550ae!important;color:#fff!important}',
-    '.tk-dbg-vgo:active{background:#033d8a!important;color:#fff!important}',
+    '.tk-dbg-vars .tk-dbg-vgo:hover,.tk-dbg-vars .tk-dbg-vgo:focus',
+      '{background:#0550ae!important;color:#fff!important}',
+    '.tk-dbg-vars .tk-dbg-vgo:active{background:#033d8a!important;color:#fff!important}',
     '.tk-dbg-showall{display:block;width:100%;text-align:left;border:0;cursor:pointer;',
       'font-size:10.5px;color:#0969da!important;padding:3px 2px 1px 24px;',
       'border-top:1px solid #f1f4f7;margin-top:2px}',
@@ -702,7 +711,6 @@
       // and because the pill is full by design.
       var go = e.target.closest('[data-act="deferstart"]');
       if (go) {
-        armDefer = true;
         stopPlay();
         // LEAVE REPLAY FIRST. The offer is shown from inside a replay, and
         // armRecording refuses outright while s.replaying is true -- so the
@@ -712,7 +720,13 @@
         // the button, not by reading it.
         try { ctx.actions.exit(); } catch (e) {}
         note('recording again, from your breakpoint\u2026');
-        armRecording(0);
+        // Threaded as an ARGUMENT, never a module flag. As a flag it survived
+        // every exit armRecording has that is not "the recording started" --
+        // a cancel while queued, a collapsed pill, a getState throw, a
+        // recording already in flight, and the ~30 s give-up -- so a later
+        // ordinary launch silently became a deferred one. Worse, the
+        // already-in-flight guard made it self-perpetuating.
+        armRecording(0, true);
         return;
       }
       var b = e.target.closest('[data-vact]');
@@ -931,14 +945,14 @@
     // requestAnimationFrame: rAF is suspended while the tab is hidden or
     // occluded, so a trinket opened in a background tab would expand the pill
     // and then never record.
-    setTimeout(function() { armRecording(0); }, 0);
+    setTimeout(function() { armRecording(0, false); }, 0);
   }
 
   // runStepThrough() refuses outright while a normal Run, the REPL or a worker
   // run is in flight, so a student who clicks DEBUG mid-run would get an open
   // pill and nothing else. Wait for the runner to go quiet instead, then
   // record -- and give up if they close the pill or start something else.
-  function armRecording(tries) {
+  function armRecording(tries, defer) {
     // A press is a fresh request, so it outranks a cancel from the last one.
     if (!tries) armCancelled = false;
     // The student pressed cancel while this was queued. Nothing is recording
@@ -955,7 +969,7 @@
     if (s.busy) {
       if (tries < 150) {
         armWaiting = true;
-        setTimeout(function() { armRecording(tries + 1); }, 200);
+        setTimeout(function() { armRecording(tries + 1, defer); }, 200);
         sync();
       } else {
         // Gave up after ~30s. Say so rather than sitting there: the launch
@@ -975,10 +989,9 @@
     mode = 'step';
     editExited = false;   // the message has been answered by re-recording
     try {
-      if (armDefer && ctx.actions.startDeferred) ctx.actions.startDeferred();
+      if (defer && ctx.actions.startDeferred) ctx.actions.startDeferred();
       else ctx.actions.start();
     } catch (e) {}
-    armDefer = false;   // one press, one deferred recording
     sync();
   }
 
@@ -1041,9 +1054,12 @@
     if ($help && !$help.hidden) { $vars.hidden = true; return; }
     if (!inner) { $vars.hidden = true; return; }
     // Everything AFTER the grip, leaving the grip node itself in place. Not a
-    // wrapper div around the content: the rows are siblings of the grip today,
-    // and `.tk-dbg-vrow:first-child{border-top:0}` would start matching if
-    // they were nested, quietly dropping the first row's top border.
+    // wrapper div around the content: the rows are siblings of the grip, and
+    // nesting them would change which of them matches structural selectors.
+    // (There WAS a `.tk-dbg-vrow:first-child{border-top:0}` rule here that
+    // nesting would have activated -- but it had never matched anything,
+    // because the grip has always been the first child, so it is deleted
+    // rather than preserved by an argument about a rule that did nothing.)
     while ($vgrip.nextSibling) $vars.removeChild($vgrip.nextSibling);
     $vgrip.insertAdjacentHTML('afterend', inner);
     $vars.hidden = false;
@@ -1533,7 +1549,7 @@
           // 200ms wait while the runner is busy (a bare start() returns
           // silently and looks like a dead button), plus the fresh-start reset
           // of dismissed and promoted variables from the previous recording.
-          case 'start':  armRecording(0);  break;
+          case 'start':  armRecording(0, false);  break;
           // Two different cancels, because the pill shows this button in two
           // different states. While it reads "Waiting for the run..." nothing
           // is recording yet, so actions.cancel() only sets a flag that the
