@@ -537,7 +537,16 @@
     // The whole injected subtree, not just the pill: the variables window and
     // the help popover hang off $layer, not off .tk-dbg, so they kept all four
     // of their transitions under prefers-reduced-motion.
-    '@media (prefers-reduced-motion: reduce){.tk-dbg-layer,.tk-dbg-layer *{transition:none!important}}',
+    // The thinking dots.
+    '.tk-dbg-dots{display:inline-block;width:12px;text-align:left}',
+    '.tk-dbg-dots i{font-style:normal;opacity:.25;animation:tk-dbg-blink 1.2s infinite}',
+    '.tk-dbg-dots i:nth-child(2){animation-delay:.2s}',
+    '.tk-dbg-dots i:nth-child(3){animation-delay:.4s}',
+    '@keyframes tk-dbg-blink{0%,60%,100%{opacity:.25}30%{opacity:1}}',
+    // animation:none as well as transition:none -- a keyframe animation is not
+    // a transition and would keep running under prefers-reduced-motion.
+    '@media (prefers-reduced-motion: reduce){.tk-dbg-layer,.tk-dbg-layer *',
+      '{transition:none!important;animation:none!important}}',
     // All three surfaces carry their only edge in box-shadow, which
     // forced-colors zeroes -- so in Windows High Contrast the pill, the
     // variables window and the help popover lost their outline entirely and
@@ -762,7 +771,7 @@
         // panel's own guard fires before it ever gets there. Found by pressing
         // the button, not by reading it.
         try { ctx.actions.exit(); } catch (e) {}
-        note('recording again, from your breakpoint\u2026');
+        note('Recording again, starting from your breakpoint\u2026');
         // Threaded as an ARGUMENT, never a module flag. As a flag it survived
         // every exit armRecording has that is not "the recording started" --
         // a cancel while queued, a collapsed pill, a getState throw, a
@@ -876,8 +885,8 @@
     // Play anyway -- running to the end is what was asked for -- but say so.
     if (s0.hasBreakpoints && s0.atBreakpoint && !s0.bpAhead) {
       note(s0.line
-        ? 'playing past the breakpoint on line ' + s0.line + ' — that line does not run again'
-        : 'playing past this breakpoint — it does not come round again');
+        ? 'Playing past the breakpoint on line ' + s0.line + '. That line does not run again.'
+        : 'Playing past this breakpoint. It does not come round again.');
     }
     playAct = act;
     playLastIdx = (typeof s0.idx === 'number') ? s0.idx : null;
@@ -912,8 +921,8 @@
         mode = 'step';
         var s = {};
         try { s = ctx.getState() || {}; } catch (e) {}
-        note(s.line ? 'paused at the breakpoint on line ' + s.line
-                    : 'paused at a breakpoint', s.idx);
+        note(s.line ? 'Paused at the breakpoint on line ' + s.line + '.'
+                    : 'Paused at a breakpoint.', s.idx);
         paintMode();
       }
     }, (1 / t.rate) * 1000);
@@ -1018,7 +1027,7 @@
         // Gave up after ~30s. Say so rather than sitting there: the launch
         // button comes back and the student can try again.
         armWaiting = false;
-        note('the program is still running \u2014 press again when it stops');
+        note('The program is still running. Press again once it stops.');
         sync();
       }
       return;
@@ -1143,7 +1152,7 @@
     // stopped" directly above the recorder's own "recording stopped after
     // 5000 steps". The student's loop did not finish; the recorder gave up.
     if (s.atEnd && !s.hasError && !s.truncated) {
-      out += '<div class="tk-dbg-vnote">Reached the end &amp; stopped</div>';
+      out += '<div class="tk-dbg-vnote">Reached the end and stopped.</div>';
     }
     // s.note is the recorder's own persistent note (truncation, "your
     // breakpoint was not reached"); transientNote is the panel's own, and the
@@ -1156,9 +1165,27 @@
     // leave a stray middle dot.
     var note = s.note || '';
     if (note && s.hasError) {
-      note = note.split(' · ').filter(function (p) { return p !== 'ends with an error'; }).join(' · ');
+      note = note.replace('This run ends with an error.', '').trim();
     }
-    if (note) msgs.push(note);
+    // ARRIVAL EXPLAINERS vs THE LIVE POSITION. The truncation explainer, the
+    // deferred-playback note and the breakpoint status all answer "what IS
+    // this recording", which is a question you have on arrival and never
+    // again. Once the student is stepping they want to know where they are --
+    // so at step 0 the note area explains the recording, and from step 1 on it
+    // reads the position instead. Larry: "Once the debugging starts, this
+    // message is no longer needed."
+    //
+    // The flash is exempt: it answers a press and has to appear whenever it
+    // fires, whatever the index. It is a separate slot in getState for exactly
+    // that reason.
+    if (s.flash) msgs.push(s.flash);
+    if (s.idx === 0) {
+      if (note) msgs.push(note);
+    } else if (s.line != null && s.lineVisit) {
+      msgs.push('About to execute line ' + s.line
+        + (s.lineVisit > 1 ? ' for the ' + ordinal(s.lineVisit) + ' time.'
+                           : ' for the first time.'));
+    }
     if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
@@ -1197,7 +1224,7 @@
       // line, the ~30s "still running" give-up, a VPython or console bail.
       if (editExited) {
         err += '<div class="tk-dbg-vmsg">'
-             + 'Step-through debugger exited so you can edit the code.</div>';
+             + 'The step-through debugger closed so you can edit the code.</div>';
       }
       varsHtml(err);
       return;
@@ -1485,7 +1512,15 @@
     grp('recording').hidden  = !(s.recording || waiting);
     var busyEl = el('busy');
     if (busyEl) {
-      busyEl.innerHTML = s.recording ? 'Recording&hellip;' : 'Waiting for the run&hellip;';
+      // Three animated dots rather than a static ellipsis. A deferred
+      // re-record coasts the whole program before it records anything, which
+      // on a long loop is seconds of a pill that looks frozen -- Larry waited
+      // through one and asked for "some sort of thinking..." A CSS animation
+      // is right here because it is decoration: nothing about the recording
+      // depends on it ticking, so the hidden-tab rule that bans rAF for STATE
+      // does not apply. The reduced-motion block below stops it.
+      busyEl.innerHTML = (s.recording ? 'Recording' : 'Waiting for the run')
+        + '<span class="tk-dbg-dots"><i>.</i><i>.</i><i>.</i></span>';
     }
     grp('controls').hidden   = !s.replaying;
     if (!s.replaying) hideHelp();
