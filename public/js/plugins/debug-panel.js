@@ -1513,7 +1513,9 @@
     // been closed by an edit, because by then the student is not discovering
     // the feature -- they are getting back to where they were.
     var ll = el('launchlabel');
-    if (ll) ll.textContent = editExited ? 'Restart Debugger' : 'Step through';
+    // Title case on both, so the two states of one control agree with each
+    // other: "Step Through" / "Restart Debugger".
+    if (ll) ll.textContent = editExited ? 'Restart Debugger' : 'Step Through';
 
     var waiting = !s.recording && !s.replaying && s.busy && expanded && armWaiting;
     grp('launch').hidden     = s.recording || s.replaying || waiting;
