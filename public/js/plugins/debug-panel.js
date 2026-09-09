@@ -364,7 +364,7 @@
       'cursor:grab;border:0;background:none;width:100%}',
     '.tk-dbg-vgrip.dragging{cursor:grabbing}',
     '.tk-dbg-vgrip span{display:flex;flex-direction:column;gap:2px}',
-    '.tk-dbg-vgrip i{width:3px;height:3px;border-radius:50%;background:#c3cbd3;display:block;',
+    '.tk-dbg-vgrip i{width:3px;height:3px;border-radius:50%;background:#7d8790;display:block;',
       'transition:background 90ms ease}',
     '.tk-dbg-vgrip:hover i{background:#0969da}',
     // The error banner. Red is otherwise reserved on this panel for the one
@@ -425,8 +425,19 @@
     '.tk-dbg-vrow.changed .tk-dbg-vv{color:#0550ae;font-weight:600}',
     '.tk-dbg-vrow.changed .tk-dbg-vn{font-weight:600}',
     // Same no-fill rule as the pill: muted at rest, colour on hover.
+    // #7d8790, not the #c3cbd3 this and the grip dots above used to carry.
+    // These are CONTROLS, not decoration: rm/up are bare <svg> glyphs with
+    // border:0 and background:none, so the glyph is the only thing identifying
+    // them, and the grip is the drag handle for the whole window. #c3cbd3
+    // measures 1.64:1 on white and 1.45:1 on the changed-row tint #eaf3fd,
+    // against the 3:1 a UI component needs -- invisible until hovered, and
+    // hovering requires already knowing where it is. #7d8790 is 3.66:1 and
+    // 3.24:1, clearing both grounds. NOT #8794a1, which passes on white
+    // (3.10:1) but fails on the tinted rows (2.74:1) -- exactly the rows the
+    // student is looking at. The !important stays: it is what beats
+    // Foundation's button colour.
     '.tk-dbg-vbtn{border:0;background:none!important;cursor:pointer;padding:1px;line-height:1;',
-      'color:#c3cbd3!important;font-size:11px;transition:color 90ms ease}',
+      'color:#7d8790!important;font-size:11px;transition:color 90ms ease}',
     '.tk-dbg-vbtn.rm:hover{color:#cf222e!important}',
     '.tk-dbg-vbtn.up:hover{color:#1a7f37!important}',
     // Promotion is sticky, so the control that did it says so permanently
@@ -586,9 +597,20 @@
       + '<p>Click the grey margin left of a line number. A red marker'
       + ' <span class="dot"></span> appears, and the two circled arrows jump'
       + ' to it \u2014 forwards or back.</p>'
-      + '<p><b>Auto mode stops there.</b> Press play and the recording runs from'
-      + ' the first line of your program, then pauses when it reaches the line'
-      + ' you marked. Press play again to carry on to the next one.</p>'
+      // Says RESUME, not restart. startPlay rewinds in exactly one case --
+      // parked at the very end -- and debugAutoStep is strictly +1 forward, so
+      // a breakpoint BEHIND the playhead can never be reached. This popover
+      // auto-opens from the breakpoint arrows when no breakpoints are set,
+      // which is precisely the moment a student who has been stepping forward
+      // asks what they are; telling them play "runs from the first line" sends
+      // them to mark a line they have already passed, press play, and watch it
+      // run silently to the end.
+      + '<p><b>Auto mode stops there.</b> Press play and the recording carries'
+      + ' on from the line you are on, pausing when it reaches a line you'
+      + ' marked. Press play again to continue to the next one. A breakpoint'
+      + ' you have already gone past is not revisited — step back, or press'
+      + ' the jump-to-first button, to get behind it again. At the very end,'
+      + ' play starts over from the top.</p>'
       + '<p>Stepping by hand ignores breakpoints \u2014 it already stops on every'
       + ' line. Add and remove them as you go; you do not need to record again.</p>';
     $dock.appendChild($help);
@@ -915,7 +937,14 @@
 
   function toggleHelp() {
     if (!$help) return;
-    if (!$help.hidden) { $help.hidden = true; return; }
+    // hideHelp(), not a bare `$help.hidden = true`: hideHelp is the only
+    // routine that pairs the hide with the paintVars() that brings the
+    // variables window BACK. showHelp() hid it so the two would not overlap,
+    // and closing the popover with the same "?" button left it hidden -- no
+    // variables, no error banner, no notes, on the one surface every message
+    // in this panel renders on. This branch returns before the handler's own
+    // hideHelp() and before sync(), so nothing else rescued it.
+    if (!$help.hidden) { hideHelp(); return; }
     showHelp();
   }
 
@@ -951,6 +980,12 @@
   // records zero steps, so there is no model and no rows, and that is exactly
   // when the student most needs telling why.
   function varsHtml(inner) {
+    // The other half of the interlock showHelp() opens. Without it, ANY sync
+    // while the popover is up repaints the variables window over it -- and the
+    // most likely sync is the gutter click the popover is at that moment
+    // telling the student to make (debugToggleBreakpoint -> debugPanelSync).
+    // The popover stays authoritative until hideHelp(), which repaints.
+    if ($help && !$help.hidden) { $vars.hidden = true; return; }
     if (!inner) { $vars.hidden = true; return; }
     $vars.innerHTML = VGRIP + inner;
     $vars.hidden = false;
@@ -997,7 +1032,16 @@
     // breakpoint was not reached"); transientNote is the panel's own, and the
     // two are different sentences about different things, so both can show.
     var msgs = [];
-    if (s.note) msgs.push(s.note);
+    // The host now always includes 'ends with an error' in its note, because
+    // it cannot know whether this panel is expanded enough to be showing the
+    // red banner. When the banner IS above, drop the clause rather than say it
+    // twice -- and drop the separator with it, so an error-only note does not
+    // leave a stray middle dot.
+    var note = s.note || '';
+    if (note && s.hasError) {
+      note = note.split(' · ').filter(function (p) { return p !== 'ends with an error'; }).join(' · ');
+    }
+    if (note) msgs.push(note);
     if (noteStillTrue(s)) msgs.push(transientNote);
     for (var i = 0; i < msgs.length; i++) {
       out += '<div class="tk-dbg-vnote">' + escHtml(msgs[i]) + '</div>';
@@ -1489,6 +1533,28 @@
     });
   }
 
+  // Re-apply the dock clamp against the pill's CURRENT size. put() below
+  // clamps too, but against whatever the pill measures at drag time -- 72x32
+  // while collapsed -- and then latches `placed`, after which place() returns
+  // on its first line and every re-clamp route dies with it. So a drag to the
+  // right edge while collapsed, followed by an expand, put the pill's right
+  // edge about 220px past the embed: the transport row, both jumps, the slider
+  // and the exit all off-screen. Self-recoverable by dragging again, which is
+  // the only reason it is not worse than it is.
+  //
+  // The unplaced path never had this bug -- it reads live offsetWidth and
+  // re-runs on transitionend -- so this is the placed branch getting the
+  // equivalent it was missing.
+  function clampDock() {
+    if (!mounted || !$dock || !$pill) return;
+    var b = $layer.getBoundingClientRect();
+    if (!b.width || !b.height) return;      // occluded: nothing meaningful to clamp to
+    var left = parseFloat($dock.style.left), top = parseFloat($dock.style.top);
+    if (isNaN(left) || isNaN(top)) return;  // still auto-docked; place() owns it
+    $dock.style.left = Math.max(4, Math.min(left, b.width  - $pill.offsetWidth  - 4)) + 'px';
+    $dock.style.top  = Math.max(4, Math.min(top,  b.height - $pill.offsetHeight - 4)) + 'px';
+  }
+
   function dragging() {
     var grip = $pill.querySelector('[data-grip]');
     var down = null;
@@ -1565,7 +1631,8 @@
       // it has to be re-measured once the transition lands.
       $pill.addEventListener('transitionend', function (e) {
         if (e.propertyName === 'width' || e.propertyName === 'height') {
-          place();
+          place();       // no-ops once the student has dragged it
+          clampDock();   // ...which is exactly when this one is needed
           placeVars();
         }
       });
