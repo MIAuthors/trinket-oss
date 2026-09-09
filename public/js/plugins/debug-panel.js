@@ -64,6 +64,7 @@
   // eight of them and the next one added would forget.
   var noteIdx = null;
   var wasReplaying = false;   // for the falling edge in sync()
+  var wasRecording = false;   // for the rising edge in sync()
   function note(msg, forIdx) {
     transientNote = msg || '';
     noteIdx = (forIdx === undefined) ? null : forIdx;
@@ -155,7 +156,13 @@
       '{background:none!important;background-color:transparent!important;box-shadow:none;',
       'text-shadow:none}',
     '.tk-dbg-dock{position:absolute;pointer-events:none;display:inline-block;max-width:calc(100% - 12px)}',
-    '.tk-dbg-dock > *,.tk-dbg-layer > *{pointer-events:auto}',
+    // NOT `.tk-dbg-layer > *`: that is (0,1,0) exactly like `.tk-dbg-dock`'s
+    // own pointer-events:none above it, and being later it won the tie -- so
+    // the dock's transparent corners swallowed clicks meant for the Ace editor
+    // underneath. $vars is the only direct layer child besides the dock that
+    // needs them; $pill and $help are dock children and get them from the
+    // first fragment.
+    '.tk-dbg-dock > *,.tk-dbg-layer > .tk-dbg-vars{pointer-events:auto}',
     '.tk-dbg{position:relative;display:flex;align-items:center;pointer-events:auto;',
       'background:#ffffff;border:0;border-radius:999px;',
       // The "outline" is the shadow's own hairline ring, not a border: a 1px
@@ -258,13 +265,8 @@
     // Navigation, so it hovers like every other navigation control. Red on
     // this pill is reserved for the one button that ends the session.
     '.tk-dbg-btn.bp:hover:not(:disabled){color:#0969da!important}',
-    // The circle glyphs read small against the chevrons next door.
+    // The circle glyphs read small against the numerals next door.
     '.tk-dbg-btn.bp,.tk-dbg-btn[data-act="bphelp"]{font-size:15px;padding:3px 4px}',
-    // Chevrons read lighter and narrower than the filled triangles they
-    // replace, so they get a size bump and tighter padding to hold the same
-    // weight in the row.
-    '.tk-dbg-btn.chev{font-size:17px;padding:2px 2px}',
-    '.tk-dbg-btn.chev .fa{font-weight:700}',
     // A toggle that is ON says so with the accent, never a filled chip -- and
     // for play/pause the glyph swaps too, which is the real signal.
     '.tk-dbg-btn[aria-pressed="true"]{color:#0969da!important}',
@@ -275,8 +277,13 @@
     '.tk-dbg-btn.primary .fa{font-size:17px}',
     '.tk-dbg-btn.primary:hover:not(:disabled){color:#0550ae!important}',
     '.tk-dbg-btn.primary:disabled{color:#8794a1!important;opacity:.6}',
-    '.tk-dbg-slidewrap{flex:0 0 70px;min-width:0;height:25px;display:flex;',
-      'align-items:center;align-self:flex-end}',
+    // The slider's width is column 2 of .tk-dbg-grid, sized by the AUTO MODE
+    // box above it -- roughly 91px, not a basis set here. `flex:0 0 70px` and
+    // `align-self:flex-end` were both inert (a grid item ignores flex-basis,
+    // and the grid's own align-items:end already does the second). min-width:0
+    // stays: automatic minimum size applies to grid items too, and the range
+    // input's min-content width is ~129px without it.
+    '.tk-dbg-slidewrap{min-width:0;height:25px;display:flex;align-items:center}',
     '.tk-dbg-slider{width:100%;min-width:0;flex:none;margin:0;accent-color:#0969da;',
       'height:14px}',
 
@@ -311,7 +318,10 @@
     // different play buttons are unambiguous when one sits under STEP MODE and
     // the other under AUTO MODE, so neither needs a word inside it.
     '.tk-dbg-grp{display:flex;flex-direction:column;align-items:center;gap:1px;flex:0 0 auto}',
-    '.tk-dbg-cap{font-size:7.5px;font-weight:700;letter-spacing:.09em;color:#8794a1;',
+    // #59636e, the grey .tk-dbg-vnote already uses: 6.11:1 on white and
+    // 5.46:1 on the changed-row tint. #8794a1 was 3.10:1, under the 4.5:1 AA
+    // bar at 7.5px.
+    '.tk-dbg-cap{font-size:7.5px;font-weight:700;letter-spacing:.09em;color:#59636e;',
       'line-height:1;white-space:nowrap;text-transform:uppercase}',
     '.tk-dbg-box{display:flex;align-items:center;justify-content:center;gap:0;',
       'border:1px solid #dfe4ea;border-radius:999px;padding:0 3px;min-height:25px}',
@@ -417,7 +427,7 @@
       'cursor:default}',
     '.tk-dbg-vn{color:#1a7f37}',
     '.tk-dbg-vv{color:#1f2328;font-variant-numeric:tabular-nums}',
-    '.tk-dbg-vt{color:#8794a1}',
+    '.tk-dbg-vt{color:#59636e}',   // 6.11:1; #8794a1 was 3.10:1 at 11.5px
     // The variable this step just defined or changed. A row tint, not a
     // control fill -- this one is a table row and wants to be found at a
     // glance while stepping.
@@ -448,7 +458,16 @@
       'font-size:10.5px;color:#0969da!important;padding:3px 2px 1px 24px;',
       'border-top:1px solid #f1f4f7;margin-top:2px}',
     '.tk-dbg-showall:hover{color:#0550ae!important;text-decoration:underline}',
-    '@media (prefers-reduced-motion: reduce){.tk-dbg,.tk-dbg *{transition:none!important}}'
+    // The whole injected subtree, not just the pill: the variables window and
+    // the help popover hang off $layer, not off .tk-dbg, so they kept all four
+    // of their transitions under prefers-reduced-motion.
+    '@media (prefers-reduced-motion: reduce){.tk-dbg-layer,.tk-dbg-layer *{transition:none!important}}',
+    // All three surfaces carry their only edge in box-shadow, which
+    // forced-colors zeroes -- so in Windows High Contrast the pill, the
+    // variables window and the help popover lost their outline entirely and
+    // ran into the page. .tk-dbg-box already declares a real border, which
+    // forced-colors re-colours on its own.
+    '@media (forced-colors:active){.tk-dbg,.tk-dbg-vars,.tk-dbg-help{border:1px solid CanvasText}}'
   ].join('');
 
   function injectCss() {
@@ -734,17 +753,6 @@
     paintPlay();
   }
 
-  // debug-panel.js is an optional plugin and can be served against a pyodide.js
-  // that predates actions.autoStep. A throw inside setInterval is silent, so
-  // fall back to the old body rather than stopping dead with no explanation.
-  function legacyTick() {
-    var st = {};
-    try { st = ctx.getState() || {}; } catch (e) { return 'end'; }
-    if (!st.replaying || st.idx >= st.total) return 'end';
-    try { ctx.actions.step(1); } catch (e) { return 'end'; }
-    return 'moved';
-  }
-
   function startPlay(act) {
     if (!ctx || !ctx.actions) return;
     var t = TRANSPORT[act];
@@ -794,7 +802,15 @@
       var r = 'end';
       inTick = true;
       try {
-        r = ctx.actions.autoStep ? ctx.actions.autoStep() : legacyTick();
+        // No fallback. There used to be a legacyTick() here "for a pyodide.js
+        // that predates actions.autoStep" -- but this file is new in the same
+        // diff as the handover that provides it, so no such pyodide.js has
+        // ever existed. Worse, the fallback stepped without ever testing for a
+        // breakpoint, so if it HAD been reachable it would have silently run
+        // straight past every breakpoint: a fallback that hides the exact
+        // divergence it exists to survive. A missing action now throws into
+        // the catch below, which stops the timer visibly.
+        r = ctx.actions.autoStep();
       } catch (e) { inTick = false; stopPlay(); return; }
       inTick = false;
       try { playLastIdx = (ctx.getState() || {}).idx; } catch (e) { playLastIdx = null; }
@@ -1288,6 +1304,16 @@
     // takes the student out of replay and then tells them they left "so you
     // can edit the code", which is not what they did.
     if (s.recording || s.replaying) editExited = false;
+
+    // A new recording is a fresh start, and this is the rising edge every
+    // route reaches -- runStepThrough calls debugPanelSync() the moment it
+    // sets debugRecording. Doing it in armRecording only covered the panel's
+    // own launch click, so a recording started from the in-tab "Step through"
+    // inherited the previous run's dismissed variables, its pinned ones, and
+    // whichever mode box happened to be lit. Same shape as the editExited
+    // line above it, deliberately.
+    if (s.recording && !wasRecording) { dropped = {}; lifted = []; mode = 'step'; }
+    wasRecording = !!s.recording;
 
     // Every transient note the panel writes during a replay is about THAT
     // replay -- "paused at the breakpoint on line 4", "playing past the
