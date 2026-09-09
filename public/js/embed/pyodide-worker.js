@@ -363,6 +363,17 @@
       'except NameError:',
       '    pass',
       'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
+      // Figures belong to a RUN, and MPL_SETUP runs once per run (see the
+      // loadPackagesFromImports chain below), so this sits exactly where
+      // _plt.close('all') sits in the main thread's MATPLOTLIB_SETUP_CODE and
+      // gives the two runtimes the same figure lifetime: cleared when the next
+      // PLOTTING run starts, not at the end of the run that drew it, so the
+      // toolbar's Save still has a figure to deliver in between.
+      //
+      // Without it, pyplot keeps the previous run's figure while
+      // _trinket_managers below is reset -- so run two draws on top of run one
+      // and nothing can close it afterwards. #255.
+      "_plt.close('all')",
       'from matplotlib.backends import backend_webagg_core as _wac',
       '',
       '_trinket_managers = {}',
