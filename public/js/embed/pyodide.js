@@ -2034,6 +2034,66 @@ function debugIsBpStep(i) {
   return !!(debugBreakpoints[f] && debugBreakpoints[f][st.line]);
 }
 
+// --- Slice 2: when the pill is allowed to appear -------------------------------
+//
+// Not "whenever the debugger is enabled". An affordance that is always there
+// is furniture; one that appears when it becomes useful is an offer. Three
+// conditions, all from the scoping doc's trigger rule.
+var debugHasRunOnce = false;   // set by finishRun, cleared by nothing
+
+// "At least two lines worth stepping". A line-based heuristic on purpose: this
+// decides whether an affordance appears, not what the program means, and the
+// ast transform that could answer properly is not loaded when the question is
+// first asked. Covers the three cases the design called out -- parenthesized
+// multi-line imports, module docstrings, and `from __future__` -- and stops
+// counting at two, because nobody needs the exact number.
+function debugRunnableLineCount(src) {
+  var lines = String(src || '').split('\n');
+  var count = 0, fence = null, importParen = false;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i], t = line.trim();
+    if (fence) {                                   // inside a triple-quoted block
+      if (line.indexOf(fence) !== -1) fence = null;
+      continue;
+    }
+    if (!t || t.charAt(0) === '#') continue;
+    if (importParen) {                             // inside from x import ( ... )
+      if (t.indexOf(')') !== -1) importParen = false;
+      continue;
+    }
+    var q = t.match(/^[rubfRUBF]{0,2}("""|''')/);  // a bare string statement
+    if (q) {
+      if (t.slice(t.indexOf(q[1]) + 3).indexOf(q[1]) === -1) fence = q[1];
+      continue;                                    // module/section docstring
+    }
+    if (/^(import\s|from\s+\S+\s+import\b)/.test(t)) {
+      if (t.indexOf('(') !== -1 && t.indexOf(')') === -1) importParen = true;
+      continue;
+    }
+    if (++count >= 2) return count;
+  }
+  return count;
+}
+
+function debugPanelAvailable() {
+  if (!stepDebuggerEnabled()) return false;
+  // Never yank it away from a student who is using it. Whatever the source
+  // says now, a recording in flight or a replay on screen is the panel's
+  // whole reason to be there -- and an edit mid-replay would otherwise make
+  // the controls vanish rather than explain themselves.
+  if (debugRecording || debugRec) return true;
+  // "On first Run": before that there is no evidence the program even runs,
+  // and step-through re-runs it from scratch anyway.
+  if (!debugHasRunOnce) return false;
+  var prog = '';
+  try { prog = (editor.getAllFiles() || {})[mainFile] || ''; } catch (e) { return false; }
+  // Refusing before the click beats runStepThrough's refuse-after-the-click
+  // note: the recorder execs raw source under sys.settrace, and VPython needs
+  // the transform, so this is a permanent no rather than a not-yet.
+  if (usesVPython(prog)) return false;
+  return debugRunnableLineCount(prog) >= 2;
+}
+
 // Is any step strictly AFTER i on a marked line? Auto mode advances before it
 // tests, so the step the playhead departs from can never stop it -- that
 // asymmetry is the deadlock defence, and it is right. Its cost is that a
@@ -3564,6 +3624,9 @@ function finishRun(serializedCode, err) {
     try { trinketPlotpolish.afterRun(window.__trinketRuntime); } catch (e) {}
   }
 
+  // The panel's "is there anything to step?" answer can change with a run --
+  // and the FIRST run is half of the answer (slice 2's trigger rule).
+  debugHasRunOnce = true;
   // The panel's "is there anything to step?" answer can change with a run.
   if (window.trinketDebugPanel) {
     try { trinketDebugPanel.afterRun(window.__trinketRuntime); } catch (e) {}
@@ -4176,12 +4239,9 @@ window.TrinketAPI = {
     if (debugPanelEnabled() && window.trinketDebugPanel) {
       try {
         trinketDebugPanel.init({
-            isAvailable : function() {
-              // Slice 1: available whenever the debugger is. The "only after a
-              // Run, only with >= 2 non-import lines, never for VPython" rule
-              // is slice 2 and belongs here.
-              return stepDebuggerEnabled();
-            }
+            // Slice 2: only after a Run, only with >= 2 non-import lines,
+            // never for VPython. See debugPanelAvailable().
+            isAvailable : debugPanelAvailable
           , getState : function() {
               var st = debugRec ? debugRec.steps[debugIdx] : null;
               return {
