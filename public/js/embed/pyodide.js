@@ -2658,14 +2658,29 @@ function debugThousands(n) {
 // pass over at most DEBUG_MAX_STEPS entries; recomputing it per hover would be
 // the same work repeated on every sync during autoplay.
 var debugVisits = null;
+// The step at which the program first repeats a line -- i.e. the first moment
+// there is a loop to be in. Null if it never repeats one.
+//
+// Before it, "for the first time" is true of every line and therefore says
+// nothing: a straight-line program would carry the clause on every single step
+// and never once be informative. From it onwards the ordinal earns its place,
+// INCLUDING on a line's first visit -- a branch inside a loop that finally
+// fires on pass 40 saying "for the 1st time" is telling you something real.
+//
+// Keyed on the step INDEX, not on where the student has been, so the same step
+// always reads the same however they got there. A sticky flag would make one
+// step say two different things depending on history.
+var debugRepeatFrom = null;
 function debugBuildVisits(rec) {
   var seen = Object.create(null), out = new Array(rec.steps.length), i, st, k;
+  debugRepeatFrom = null;
   for (i = 0; i < rec.steps.length; i++) {
     st = rec.steps[i];
     if (!st || st.line == null) { out[i] = 0; continue; }
     k = (st.file || '<main>') + ':' + st.line;
     seen[k] = (seen[k] || 0) + 1;
     out[i] = seen[k];
+    if (out[i] >= 2 && debugRepeatFrom === null) debugRepeatFrom = i;
   }
   return out;
 }
@@ -2837,6 +2852,7 @@ function exitReplay(why) {
   var rec = debugRec;
   debugRec = null;
   debugVisits = null;
+  debugRepeatFrom = null;
   debugVarModel = null;
   debugLastOut = -1;
   debugErrShown = false;
@@ -4638,6 +4654,9 @@ window.TrinketAPI = {
                   // event fires BEFORE its line runs, which is why the
                   // tooltip says "about to".
                 , lineVisit      : (debugVisits && debugVisits[debugIdx]) || 0
+                  // Whether the ordinal has earned its place yet: see
+                  // debugRepeatFrom.
+                , visitOrdinals  : !!(debugRepeatFrom !== null && debugIdx >= debugRepeatFrom)
                   // The panel is a VIEW, so parsing a traceback is this side's
                   // job, not its own.
                 , hasError       : !!(debugRec && debugRec.error)
