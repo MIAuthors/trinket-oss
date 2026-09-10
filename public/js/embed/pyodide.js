@@ -1789,14 +1789,42 @@ var RECORD_HELPER = [
   // Exception:` inside a student's loop SWALLOWED the cap abort. Verified in a
   // real interpreter: tracing then dies and the loop runs on untraced, so a
   // `while True:` hangs the tab with no recording and nothing JS can interrupt,
-  // while _buf keeps growing with _size[0] frozen. The `except
+  // while _buf keeps growing with both size counters frozen. The `except
   // _TrinketStopRecording` clause below still precedes `except BaseException`,
   // so nothing else changes. A bare `except:` still swallows it; there is no
   // defence against that and it is much rarer student code.
   'class _TrinketStopRecording(BaseException): pass',
   '_steps = []',
   '_snaps = []',
-  '_size = [0]',
+  // Encoded cost, split in two because they are budgeted differently.
+  // _nsize is what the RECORDING (steps + snaps) will occupy once
+  // json.dumps has escaped it; _osize is stdout/stderr growth. Keeping them
+  // apart is what stops the output allowance below from subtracting output
+  // from its own budget -- the double-subtract in #274, which cost a
+  // mid-program print 60% of its bytes while a final-line print kept 100%.
+  // Seeded with the envelope -- the payload's own keys and braces, which are
+  // emitted whatever the program does. Measured: the empty payload
+  // `{"error": null, ... "steps": [], "snaps": []}` encodes to 135 bytes, and
+  // every varying field in it (_err, the flags, the two arrays) is charged
+  // separately below. Without this the bound is short by the wrapper, which is
+  // the difference between a bound and an estimate -- the complaint in #274.
+  '_nsize = [135]',
+  '_osize = [0]',
+  // Charged as `len(json.dumps(x)) + 2` -- the encoded object plus its
+  // separator in the enclosing array. TWO, not one: json.dumps defaults to
+  // `', '` WITH the space, so for N elements the array is
+  // 2 + sum(len(dumps(e))) + 2*(N-1) and charging len(dumps(e)) + 2 per
+  // element accounts for it exactly, brackets included. Charging +1 leaves the
+  // bound ~0.1% short, which is enough to exceed the cap -- verified, and it
+  // is the mistake that made this the fourth wrong version of this bound.
+  // The constants this replaces (+24 per variable, +40 per step) under-counted
+  // far worse: an empty variable entry encodes to 36 bytes, an empty step dict
+  // to 100.
+  'def _cost(_x):',
+  '    try:',
+  '        return len(json.dumps(_x)) + 2',
+  '    except Exception:',
+  '        return 2',
   '_truncated = [False]',
   // Deferred-recording state. _ring holds up to _lookback (step, snap, cost)
   // triples while coasting; _coasted counts every coasted line event; _kept
@@ -1903,8 +1931,12 @@ var RECORD_HELPER = [
   '        except Exception:',
   "            _r = '<unrepresentable>'",
   "        if len(_r) > _max_repr: _r = _r[:_max_repr] + '...'",
-  "        _out.append({'name': _name, 'type': type(_val).__name__, 'repr': _r})",
-  '        _size[0] += len(_r) + len(_name) + 24',
+  // The type name was written into every entry, charged nothing, and left
+  // unclamped -- a class with a pathological __name__ was unbounded. Same
+  // clamp as the repr.
+  '        _tn = type(_val).__name__',
+  '        if len(_tn) > _max_repr: _tn = _tn[:_max_repr] + \'...\'',
+  "        _out.append({'name': _name, 'type': _tn, 'repr': _r})",
   '        if len(_out) >= _max_vars: break',
   '    return _out',
   // Phase 2: trace the main file AND user modules imported from the Pyodide FS
@@ -1971,7 +2003,11 @@ var RECORD_HELPER = [
   // stdout growth since the last event (a single huge print would otherwise
   // sail past the cap into a multi-MB JSON). Unconditional: every line event
   // is recorded now, so every byte of stdout lands in the accounting.
-  '    _size[0] += _buf.tell() - _last_out[0]',
+  // Raw character growth, not encoded: json.dumps on the whole buffer at
+  // every line event would be O(n^2) in the hot path. This is a tripwire for
+  // runaway output, and the exact encoded bound is enforced by the clamp at
+  // the end, which does measure json.dumps.
+  '    _osize[0] += _buf.tell() - _last_out[0]',
   '    _last_out[0] = _buf.tell()',
   // Import attribution and the depth are needed by BOTH paths below, so they
   // run before either. _note_new only updates _seen/_imported, so running it
@@ -2006,30 +2042,38 @@ var RECORD_HELPER = [
   // what this step added to _size, and stdout growth is charged above _pre so
   // it is never credited back: the output is kept whole either way.
   '    if _defer and not _hit[0]:',
-  '        _pre = _size[0]',
   '        _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
   "        _st = {'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff}",
   '        _sn = _snap_ns(_frame.f_locals)',
-  '        _size[0] += 40',
-  '        _ring.append((_st, _sn, _size[0] - _pre))',
+  '        _c = _cost(_st) + _cost(_sn)',
+  '        _nsize[0] += _c',
+  '        _ring.append((_st, _sn, _c))',
   '        while len(_ring) > _lookback:',
-  '            _size[0] -= _ring.popleft()[2]',
+  '            _nsize[0] -= _ring.popleft()[2]',
   '        _coasted[0] += 1',
   '        _prev_line[0] = _frame.f_lineno if _d == 0 else _prev_line[0]',
   // Give up rather than coast forever. Reaching either bound leaves _hit
   // false, which the host reports as "that line never ran".
-  '        if _coasted[0] > _max_dormant or _size[0] > _max_bytes:',
+  '        if _coasted[0] > _max_dormant or _nsize[0] + _osize[0] > _max_bytes:',
   '            _truncated[0] = True',
   '            raise _TrinketStopRecording()',
   '        return _tracer',
-  // Per-step dict overhead joins the accounting.
-  '    _size[0] += 40',
-  '    if len(_steps) >= _max_steps or _size[0] > _max_bytes:',
+  // Build the step and its snapshot BEFORE the cap check, so the charge is
+  // what this step actually encodes to -- and so the step that trips the cap
+  // is not appended. Charging a flat estimate first and appending afterwards
+  // is how the bound drifted from the payload.
+  '    if len(_steps) >= _max_steps:',
   '        _truncated[0] = True',
   '        raise _TrinketStopRecording()',
   '    _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
-  "    _steps.append({'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff})",
-  '    _snaps.append(_snap_ns(_frame.f_locals))',
+  "    _st = {'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff}",
+  '    _sn = _snap_ns(_frame.f_locals)',
+  '    _nsize[0] += _cost(_st) + _cost(_sn)',
+  '    if _nsize[0] + _osize[0] > _max_bytes:',
+  '        _truncated[0] = True',
+  '        raise _TrinketStopRecording()',
+  '    _steps.append(_st)',
+  '    _snaps.append(_sn)',
   '    _prev_line[0] = _frame.f_lineno if _d == 0 else _prev_line[0]',
   '    return _tracer',
   "_g = {'__name__': '__main__'}",
@@ -2057,11 +2101,30 @@ var RECORD_HELPER = [
   // CJK, where it is still only ~12 KB encoded.
   '    if len(_err) > 2000:',
   "        _err = _err[:2000] + ' ... (error message truncated)'",
+  // Charged for the same reason as the envelope: it is in the payload. The
+  // clamp above bounds it to 2000 chars, but escaping can take that past 2 KB.
+  '    _nsize[0] += _cost(_err)',
   'finally:',
   '    sys.stdout, sys.stderr = _old_out, _old_err',
-  "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",
+  // The synthetic <end> step and the final globals snapshot go into the
+  // payload like any other, so they are charged like any other -- otherwise
+  // the output allowance below is computed against a _nsize that is short by
+  // a whole snapshot, which on a 50-variable program is not a rounding error.
+  // Unconditional, unlike the steps above: students can always step to the end.
+  "_end_st = {'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None}",
+  '_steps.append(_end_st)',
   '_note_new(_g)',
-  '_snaps.append(_snap_ns(_g))',
+  '_end_sn = _snap_ns(_g)',
+  '_snaps.append(_end_sn)',
+  '_nsize[0] += _cost(_end_st) + _cost(_end_sn)',
+  // The tracer stops AT the cap, then <end> is appended on top of it -- so on
+  // a program that filled the budget the recording lands slightly over. Drop
+  // steps from just before <end> until it fits. Off the hot path: this runs
+  // once, and only when the cap actually engaged. <end> and the first step are
+  // never dropped, so a student can always reach both ends of the recording.
+  'while _nsize[0] > _max_bytes and len(_steps) > 2:',
+  '    _nsize[0] -= _cost(_steps.pop(-2)) + _cost(_snaps.pop(-2))',
+  '    _truncated[0] = True',
   // The per-event accounting above charges stdout GROWTH at the next line
   // event, which bounds a print in the middle of a program but not the last
   // one -- there is no next event to charge it at -- and does not shrink _buf
@@ -2086,7 +2149,11 @@ var RECORD_HELPER = [
   // keeps a program that filled the budget with steps from losing its output
   // entirely -- the output is the half the student can actually read.
   '_out = _buf.getvalue()',
-  '_left = _max_bytes - _size[0]',
+  // _nsize only -- NOT the output, which used to be inside the same counter
+  // and so was subtracted from its own allowance (#274). The <end> step and
+  // final snapshot appended just above are charged too, so the allowance is
+  // what is genuinely left after the whole recording.
+  '_left = _max_bytes - _nsize[0]',
   'if _left < _min_out:',
   '    _left = _min_out',
   '_cut = len(_out) > _left',
