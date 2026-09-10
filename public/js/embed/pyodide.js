@@ -2048,6 +2048,15 @@ var RECORD_HELPER = [
   '    pass',
   'except BaseException as _e:',
   "    _err = ''.join(traceback.format_exception_only(type(_e), _e)).strip()",
+  // format_exception_only embeds the exception's full str(), and NOTHING
+  // charges _err against the byte estimate -- so the cap cannot engage at all
+  // here. `xs = list(range(300000)); assert len(xs) == 0, xs` measured a
+  // 2.18 MiB payload from THREE recorded steps, essentially all of it this
+  // string; `float('x' * 3_000_000)` measured 2.86 MiB. Both are things a
+  // student writes to "see" their data. 2000 characters is generous even in
+  // CJK, where it is still only ~12 KB encoded.
+  '    if len(_err) > 2000:',
+  "        _err = _err[:2000] + ' ... (error message truncated)'",
   'finally:',
   '    sys.stdout, sys.stderr = _old_out, _old_err',
   "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",

@@ -63,12 +63,23 @@ plots redrawn once per loop iteration with only the newest one shown.
   `DEBUG_MAX_DORMANT` (200 000 line events) while it looks for the breakpoint,
   crediting the byte cap back as its ring evicts, so a long coast cannot trip
   the 2 MB bound before the breakpoint fires.
-  The 2 MB figure bounds the **encoded** payload, not a character count:
-  `json.dumps` escapes, and the expansion is not small — measured, a quote or
-  newline is 2×, an accented letter 6× and a non-BMP emoji 12× (one character
-  becomes a `\uXXXX` surrogate pair). Output is clamped against the budget
-  *left* after steps and snapshots, with a `DEBUG_MIN_OUTPUT_BYTES` floor so a
-  step-heavy recording still shows what the program printed.
+  **`DEBUG_MAX_BYTES` is an ESTIMATE of the payload, not a bound on it, and it
+  currently under-counts.** Say that plainly rather than quoting 2 MB as a
+  guarantee. `_size[0]` charges characters and two flat constants; `json.dumps`
+  emits JSON syntax and escapes. Measured: a quote or newline encodes at 2×, an
+  accented letter 6× and a non-BMP emoji 12× (one character becomes a `\uXXXX`
+  surrogate pair), an empty variable entry costs 38 bytes against the 24
+  charged, and an empty step dict 99 against the 40 charged. `_err` and the
+  `type` field are charged nothing at all. Measured end to end: an ordinary
+  Euler projectile program with 20 scalars and 5 lists produces a **2.75 MiB**
+  payload, and fifty variables initialised to `None` produce **3.49 MiB**.
+  Output alone *is* clamped against the encoded length and against the budget
+  left after steps and snapshots, with a `DEBUG_MIN_OUTPUT_BYTES` floor so a
+  step-heavy recording still shows what the program printed — but `steps` and
+  `snaps` share the same `json.dumps` and are not clamped in encoded terms.
+  Correcting the accounting is deliberately left to its own change: it touches
+  the tracer's hot path, where the bounded-repr work bought 14-180×, so it
+  needs measuring under Pyodide rather than native CPython.
 - Markup is nested **inside** `#variables-wrap` in
   `lib/views/embed/pyodide.html:439-478`, which is why
   `features.stepDebugger` requires `features.variableExplorer`.
