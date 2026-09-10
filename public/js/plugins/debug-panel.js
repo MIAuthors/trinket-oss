@@ -13,9 +13,12 @@
  * Shape deliberately copies public/js/plugins/plotpolish-adapter.js: this file
  * holds everything that knows about the panel, and pyodide.js hands over the
  * few closure-locals it cannot reach (the debugger's state and its actions)
- * through init(). Gated by features.debugPanel; with the flag off this file
- * still loads but never defines window.trinketDebugPanel, so every hook in
- * pyodide.js is a no-op.
+ * through init(). Gated by features.debugPanel, at the TEMPLATE: pyodide.html
+ * appends this file to the js list only under
+ * `{% if config.features.stepDebugger and config.features.debugPanel %}`, so
+ * with either flag off the file is never served at all, window.trinketDebugPanel
+ * is undefined, and every hook in pyodide.js is a no-op. (Verified on a deploy
+ * with the flag off: the script list carries /js/debug.js and not this file.)
  *
  * Slice 1 of docs/design/debugger-panel.md: the panel shell only. It drives the
  * EXISTING replay functions and does not reimplement any of them, and the
