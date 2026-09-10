@@ -135,13 +135,23 @@ test.describe('step-through debugger', () => {
     expect(await varsText(page)).toContain('i = 3');
     expect(await varsText(page)).toContain('Reached the end');
 
-    // Leaving replay puts the launch control back and collapses the pill, so
-    // the student can record again. The pill itself stays: the program is
-    // still steppable.
+    // Leaving replay collapses the pill and drops the controls. The pill
+    // itself stays, because the program is still steppable.
+    //
+    // Do NOT assert the launch group is *visible* here. Collapsing sets
+    // display:none on .tk-dbg-body, which contains it — so the group's own
+    // `hidden` attribute is false while the element renders not at all. An
+    // earlier draft of this spec checked the attribute by hand, saw false,
+    // and asserted visibility; Playwright caught it. What the student is
+    // promised is that the pill collapses, the controls go, and the pill is
+    // still there to reopen.
     await pill.locator('[data-act="exit"]').click();
     await expect(controls).toBeHidden();
-    await expect(pill.locator('[data-grp="launch"]')).toBeVisible();
+    await expect(pill, 'exit should collapse the pill').not.toHaveClass(/\bopen\b/);
     await expect(pill).toBeVisible();
+    // The launch control is the group that comes back on reopen, so assert it
+    // is armed rather than rendered.
+    await expect(pill.locator('[data-grp="launch"]')).not.toHaveAttribute('hidden', /.*/);
   });
 
   test('offers nothing to step through for a program too short to debug', async ({ page }) => {
