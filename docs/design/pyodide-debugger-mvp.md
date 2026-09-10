@@ -214,9 +214,22 @@ dependencies. Same blast-radius discipline as the explorer.
     What ships instead: **the recording always starts at the program's first
     line.** `_bp` is still passed to the recorder, but only so it can report
     `bpHit` — whether any marked line executed — and the marked lines are what
-    auto mode stops on during replay. `_max_dormant`, `DEBUG_MAX_DORMANT`, the
-    200 000-dormant-line-event cap and the `armed`/`skipped` result keys are
-    all deleted; the result carries `truncated` and `bpHit`. The remaining
+    auto mode stops on during replay.
+
+    **Superseded 2026-09-09, and this paragraph used to say the opposite.** An
+    earlier revision recorded that `_max_dormant`, `DEBUG_MAX_DORMANT`, the
+    200 000-dormant-line-event cap and the `armed`/`skipped` result keys were
+    *deleted and should not be reimplemented*. They are back, deliberately, as
+    an **opt-in** path: `runStepThrough(defer)` passes `_defer` into
+    `RECORD_HELPER`, which coasts without recording until a marked line is
+    reached, keeping the last `DEBUG_LOOKBACK_STEPS` (100) steps in a ring
+    buffer so the student arrives with a run-up rather than cold. It is offered
+    only by the panel's "record from the breakpoint instead" button, and only
+    after a recording ran out of budget before reaching a marked line — which
+    is the one question the first run cannot answer: whether the line is
+    unreachable, or merely past the cap. The default path still records from
+    line 1. The result carries `truncated`, `bpHit`, and — on a deferred run —
+    `deferred`, `kept` and `skipped`. The remaining
     bound (5 000 steps / 2 MB) is strictly tighter than the one it replaced.
 
     The accepted cost, Larry's explicit ruling: a breakpoint **below** a long

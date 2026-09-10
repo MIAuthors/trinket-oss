@@ -24,9 +24,15 @@ anything below it:
 - **No message ever renders inside the pill.** Everything the panel says —
   error banner, end-of-recording, the recorder's note, transient notes — is
   composed by `saysHtml()` at the top of the floating variables window.
-- Still to do: slice 2 (show the pill only after a Run, ≥2 non-import lines,
-  never VPython), slice 3 (adjudicate ←/→ between the panel and Ace),
-  slice 4 (matplotlib frame capture — gated on a collaborator notice).
+- Slice 2 shipped: the pill appears only after a Run, needs ≥2 non-import
+  lines, and never appears for VPython (`debugPanelAvailable()`,
+  `debugHasRunOnce`).
+- Slice 3 shipped: ←/→ are adjudicated between the panel and Ace by focus,
+  with `stopPropagation` on the panel's own controls.
+- Slice 4 (matplotlib in replay) is **parked**, 2026-09-09. The gate was
+  discharged and it was planned in full; two review rounds then killed both
+  designs for grouping artists into loop passes, and the work outgrew its
+  1.5–2.5 d estimate. The panel ships without it. See section 3.
 
 The ask (Larry, 2026-09-08): take the step-through debugger out of the
 Variables tab and give it its own floating affordance in the editor's file-tab
