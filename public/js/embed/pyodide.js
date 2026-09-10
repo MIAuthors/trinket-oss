@@ -85,7 +85,11 @@ var MATPLOTLIB_SETUP_CODE = [
   "                _m.canvas.draw_idle()",
   "                _m.refresh_all()",
   "        except NonGuiException as _exc:",
-  "            warnings.warn(str(_exc))",
+  // stacklevel=2 attributes the warning to the CALLER -- the student's own
+  // plt.show() line. Without it the warning is stamped with the injected
+  // wrapper's location, which surfaces as "<exec>:21: UserWarning: ..." for
+  // code the student cannot see or open.
+  "            warnings.warn(str(_exc), stacklevel=2)",
   "",
   // Patch after use(), which selects the backend show() dispatches to. The
   // name is deleted so nothing is left behind in pyodide.globals for the
