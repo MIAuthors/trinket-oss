@@ -47,6 +47,17 @@ const varsText = (page) => page.evaluate(() => {
 });
 
 test.describe('step-through debugger', () => {
+  // playwright.deploy.config.js caps a test at 90 s ("be patient but not
+  // silly"), which is BELOW the 180 s this spec allows for the first Pyodide
+  // boot — so on a genuinely cold deploy the test would die on the test
+  // timeout before its own assertion ever gave up, and report as a failure
+  // rather than as the slow download it is. Raise it for this block only.
+  //
+  // Worth knowing: math-output.spec.js in this directory has the same shape
+  // (180 s expects under the 90 s cap) and has not hit it, because nothing
+  // has been slow enough yet. That is luck, not design.
+  test.describe.configure({ timeout: 240_000 });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/embed/python3');
 
