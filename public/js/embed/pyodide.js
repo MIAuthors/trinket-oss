@@ -2589,9 +2589,38 @@ function ensureMplAssets(msg) {
 
 // A WebSocket-shaped object over the worker channel. mpl.js only ever uses
 // binaryType, onopen, onmessage, close and send.
+// Coalesce resize requests to the last size seen in a 150 ms window. With
+// readyState set, mpl.js's ResizeObserver fires once per animation frame during
+// a drag, and each request costs the worker a full Agg render plus a PNG encode
+// -- measured at hundreds of milliseconds each. Undebounced, one drag queues
+// dozens of renders the student then waits out. Trailing, not leading: the size
+// that matters is the one the pointer stopped at.
+function debounceMplResize() {
+  if (!window.mpl || !window.mpl.figure || window.mpl.figure.prototype.__trinketResizeDebounced) return;
+  var orig = window.mpl.figure.prototype.request_resize;
+  window.mpl.figure.prototype.request_resize = function(w, h) {
+    var fig = this;
+    clearTimeout(fig.__trinketResizeTimer);
+    fig.__trinketResizeTimer = setTimeout(function() { orig.call(fig, w, h); }, 150);
+  };
+  window.mpl.figure.prototype.__trinketResizeDebounced = true;
+}
+
 function makeMplSocket(figureId) {
   return {
     binaryType : 'arraybuffer',
+    // mpl.js gates the resize on this and NOTHING else does: its ResizeObserver
+    // ends in `if (fig.ws.readyState == 1 && width != 0 && height != 0)` before
+    // calling request_resize. `undefined == 1` is false, so dragging the
+    // figure's corner never told Python anything -- the container grew, the
+    // canvas grew, and the figure kept rendering at its old size.
+    //
+    // Nothing else in mpl.js checks it, which is exactly why every OTHER event
+    // worked: send_message has no such gate, so clicks, motion and draws all
+    // arrived while resize alone was dropped. Pyodide's own main-thread
+    // MockJsWebSocket sets readyState = 1 in its onopen setter, which is why
+    // the main thread never had this bug.
+    readyState : 1,
     onopen     : null,
     onmessage  : null,
     close      : function() {},
@@ -2994,6 +3023,7 @@ function handleWorkerFigure(msg) {
 
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
     applyMplToolbarIcons(fig);
+    debounceMplResize();
     if (typeof socket.onopen === 'function') { socket.onopen(); }
 
     return;
