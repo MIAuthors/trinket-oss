@@ -36,13 +36,62 @@ var VPYTHON_WHEEL_NAME = 'vpython-7.6.6.dev0-py3-none-any.whl';
 // and wires the full interactive toolbar + 3D mouse-orbit automatically.
 // plt.close('all') ensures stale figures from a previous run don't resurface.
 // figure.autolayout keeps axis labels/titles from clipping (picup PR #18).
+//
+// #254: plt.show() is also made idempotent PER FIGURE here, and a repeat
+// show() of a figure already on the page redraws it in place.
+//
+// Pyodide's webagg manager.show() builds a brand new mpl.figure and appends it
+// to document.pyodideMplTarget on every call, overwriting self.js_fig — so a
+// show() inside a loop stacks one orphaned container per pass. Measured on a
+// six-iteration loop: six containers, all labelled "Figure 1", 3,726px of pane
+// for a program with exactly one figure (get_fignums() == [1]).
+//
+// `js_fig` is the "already on the page" marker, and it lives on the MANAGER,
+// which is what makes this safe against the trap that produced defect 3:
+// plt.close() destroys the manager, so a figure created afterwards gets a
+// fresh manager with no js_fig even though matplotlib REUSES the number.
+// Measured: two successive figures both report number 1 with different id().
+// A registry keyed on the figure number would silently never draw the second.
+//
+// Redrawing in place is draw_idle() + refresh_all(), which pushes a new image
+// over the socket the existing js_fig is already attached to. Verified against
+// a control run: same single container, different rendered pixels.
 var MATPLOTLIB_SETUP_CODE = [
   "import matplotlib",
   "matplotlib.use('webagg')",
   "matplotlib.rcParams['figure.autolayout'] = True",
   "import matplotlib.pyplot as _plt",
   "_plt.close('all')",
-  "del _plt",
+  "",
+  "def _trinket_show(*args, **kwargs):",
+  "    import warnings",
+  "    from matplotlib._pylab_helpers import Gcf",
+  "    from matplotlib.backend_bases import NonGuiException",
+  "    from matplotlib.backends.backend_webagg import WebAggApplication",
+  // Loads mpl.css and the mpl JS the figure constructor needs. Skipping it
+  // fails with "ReferenceError: mpl is not defined" on the very first show;
+  // it guards on cls.initialized and returns early, so calling it every time
+  // costs nothing after the first.
+  "    WebAggApplication.initialize()",
+  "    for _m in Gcf.get_all_fig_managers():",
+  // Mirror matplotlib's own pyplot_show, which catches NonGuiException and
+  // warns rather than raising. A student who calls switch_backend('agg') and
+  // then show() gets a warning upstream; without this they would get a
+  // traceback pointing into injected code they never wrote.
+  "        try:",
+  "            if getattr(_m, 'js_fig', None) is None:",
+  "                _m.show()",
+  "            else:",
+  "                _m.canvas.draw_idle()",
+  "                _m.refresh_all()",
+  "        except NonGuiException as _exc:",
+  "            warnings.warn(str(_exc))",
+  "",
+  // Patch after use(), which selects the backend show() dispatches to. The
+  // name is deleted so nothing is left behind in pyodide.globals for the
+  // Variables tab to list; the function itself survives as pyplot.show.
+  "_plt.show = _trinket_show",
+  "del _plt, _trinket_show",
 ].join('\n');
 
 // The `console` module surfaced to python3 user code: an async input() that
@@ -3380,17 +3429,22 @@ function startRun() {
         return pyodide.runPythonAsync(MATPLOTLIB_SETUP_CODE).then(function() {
           return runProgram(prog);
         }).then(function(result) {
-          // Notebook-style auto-display: if the program created figures but
-          // never called plt.show(), show them. If a canvas already rendered
-          // (the user called show()), skip — so we never double-plot.
-          var g = document.getElementById('graphic');
-          if (g && g.querySelector('canvas')) {
-            return result;
-          }
+          // Notebook-style auto-display: show any figure the program left
+          // open. #254 — this used to ask the DOM "did anything render?" via
+          // g.querySelector('canvas') and skip if so, which is a different
+          // question from "has every open figure been shown". A program that
+          // called show() and THEN created a second figure rendered only the
+          // first, because the guard saw the first one's canvas and returned.
+          // Measured: get_fignums() == [1, 2], one figure on the page.
+          //
+          // No guard is needed now. show() is idempotent per figure (see
+          // MATPLOTLIB_SETUP_CODE), so figures already on the page redraw in
+          // place instead of double-plotting, and this call is also what
+          // picks up edits made after the student's own show().
           return pyodide.runPythonAsync(
-            "import matplotlib.pyplot as _plt\n" +
-            "if _plt.get_fignums():\n" +
-            "    _plt.show()\n"
+            "import matplotlib.pyplot\n" +
+            "if matplotlib.pyplot.get_fignums():\n" +
+            "    matplotlib.pyplot.show()\n"
           ).then(function() { return result; });
         });
       }
