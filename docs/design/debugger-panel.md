@@ -18,9 +18,14 @@ anything below it:
   (reuse the in-tab table). Every variable the student binds appears under the
   pill in first-appearance order; imported names are excluded by the recorder,
   not by a JS filter.
-- **Deferred recording is gone** (removed the same day). The recording always
-  starts at the program's first line; `bpHit`/`truncated` replaced
-  `armed`/`skipped`; auto mode stops at breakpoints via `debugAutoStep`.
+- **Deferred recording came back as an opt-in** (deleted 2026-09-08, restored
+  2026-09-09). A recording still always starts at the program's first line, and
+  nothing defers automatically — the difference from the deleted version. When
+  a recording truncates *before* reaching the student's breakpoint the panel
+  offers a button, and only that button calls `runStepThrough(true)`, which
+  coasts to the breakpoint and keeps a `DEBUG_LOOKBACK_STEPS` ring of the steps
+  before it. `bpHit`/`truncated` replaced `armed`/`skipped`; auto mode stops at
+  breakpoints via `debugAutoStep`.
 - **No message ever renders inside the pill.** Everything the panel says —
   error banner, end-of-recording, the recorder's note, transient notes — is
   composed by `saysHtml()` at the top of the floating variables window.
@@ -53,9 +58,17 @@ plots redrawn once per loop iteration with only the newest one shown.
 - Recorder + replay live in `public/js/embed/pyodide.js:1712-2290`
   (`RECORD_HELPER`, `runStepThrough`, `debugStepTo`, `paintReplaySnap`,
   `exitReplay`). Caps: 5 000 steps, 50 vars/step, 120-char reprs, **2 MB total
-  JSON** (`DEBUG_MAX_BYTES`), frame depth 20. (The 200 000 dormant-line-event
-  cap named here originally went away with deferred recording on 2026-09-08 —
-  every line event is now recorded under the 5 000-step / 2 MB bound.)
+  JSON** (`DEBUG_MAX_BYTES`), frame depth 20. An ordinary recording is bound by
+  the 5 000-step / 2 MB pair. A **deferred** one additionally coasts under
+  `DEBUG_MAX_DORMANT` (200 000 line events) while it looks for the breakpoint,
+  crediting the byte cap back as its ring evicts, so a long coast cannot trip
+  the 2 MB bound before the breakpoint fires.
+  The 2 MB figure bounds the **encoded** payload, not a character count:
+  `json.dumps` escapes, and the expansion is not small — measured, a quote or
+  newline is 2×, an accented letter 6× and a non-BMP emoji 12× (one character
+  becomes a `\uXXXX` surrogate pair). Output is clamped against the budget
+  *left* after steps and snapshots, with a `DEBUG_MIN_OUTPUT_BYTES` floor so a
+  step-heavy recording still shows what the program printed.
 - Markup is nested **inside** `#variables-wrap` in
   `lib/views/embed/pyodide.html:439-478`, which is why
   `features.stepDebugger` requires `features.variableExplorer`.
