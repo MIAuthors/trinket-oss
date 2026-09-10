@@ -79,10 +79,30 @@ const pill = (d) => d.querySelector('.tk-dbg');
 const vars = (d) => d.querySelector('.tk-dbg-vars');
 
 // The variables window only paints while the pill is expanded -- collapsed is
-// the resting state, and paintVars() returns early on it. The DEBUG toggle is
-// the route in that does NOT also start a recording (the grip tap does).
+// the resting state, and paintVars() returns early on it.
+//
+// NOTE: this DOES arm a recording. The click handler's `if (!expanded)` branch
+// runs setExpanded(true, true) for ANY click on the closed pill, the toggle
+// included -- an earlier version of this comment claimed otherwise and a test
+// written against it armed twice. The arm is deferred one tick, so a test that
+// cares has to advance the timer.
 function expand(doc) {
   doc.querySelector('.tk-dbg [data-act="toggle"]').click();
+}
+
+// armRecording re-arms itself through setTimeout while the runner is busy, so
+// a test that never advances the queue cannot observe what the queue does.
+// Collect the callbacks instead of waiting 200ms a turn, and flush them by
+// hand: the point of these tests is the ORDER of arm, cancel and retry.
+function manualTimers(win) {
+  const queued = [];
+  const real = win.setTimeout;
+  win.setTimeout = function (fn) { queued.push(fn); return queued.length; };
+  return {
+    pending: () => queued.length,
+    flush() { queued.splice(0).forEach((fn) => fn()); },
+    restore() { win.setTimeout = real; },
+  };
 }
 
 describe('debug panel — the feature gate', () => {
@@ -213,17 +233,64 @@ describe('debug panel — cancelling a queued recording', () => {
   // host goes idle. A cancel pressed during the queued window has nothing to
   // cancel yet, so it has to be remembered -- otherwise the recording starts
   // after the student asked for it not to.
-  it('a cancel while the recording is only queued stops it starting', () => {
-    const h = boot({ available: true, state: { recording: true } });
-    h.panel.sync();
-    h.ctx.actions.cancel();
-    expect(h.calls.cancel).toBe(1);
-    expect(h.calls.start).toBe(0);
+  // These two used to call h.ctx.actions.cancel() / .start() directly and
+  // assert the fake's own counter had moved. That passes with the panel
+  // deleted -- it exercised the mock, not armWaiting/armCancelled. Drive the
+  // pill instead.
+  it('a cancel while the recording is only QUEUED stops it ever starting', () => {
+    const h = boot({ available: true, state: { busy: true } });
+    const t = manualTimers(h.win);
+    try {
+      // Opening the COLLAPSED pill is itself the request to record: the
+      // click handler's `if (!expanded)` branch runs setExpanded(true, true)
+      // for any click on the closed pill, the toggle included. (The helper's
+      // comment above claiming otherwise is wrong -- found by this test.)
+      expand(h.doc);
+      // setExpanded defers the arm one tick so the expand animation and the
+      // blocking recording do not fight over a frame, so nothing has armed
+      // yet -- this pending callback IS the arm.
+      expect(t.pending(), 'opening the pill should queue the arm').toBeGreaterThan(0);
+      t.flush();                           // the arm runs; the runner is busy
+      expect(h.calls.start, 'a busy runner must not be recorded yet').toBe(0);
+
+      // The cancel the pill renders WHILE it waits. Assert it is actually
+      // SHOWN: querySelector finds hidden nodes, and a first draft of this
+      // test passed a hidden button and proved nothing.
+      const recGrp = h.doc.querySelector('[data-grp="recording"]');
+      expect(recGrp.hidden, 'the waiting state has to be visible').toBe(false);
+      const cancel = recGrp.querySelector('[data-act="cancel"]');
+      expect(cancel).toBeTruthy();
+
+      // Its whole point: nothing is recording yet, so it must NOT reach
+      // actions.cancel() -- there is nothing there to flag. Refusing to
+      // re-arm is the only thing that can actually stop it.
+      cancel.click();
+      expect(h.calls.cancel, 'nothing is recording, so there is nothing to cancel').toBe(0);
+
+      t.flush();                           // the queued retry runs, and refuses
+      h.state.busy = false;                // the runner goes idle afterwards
+      t.flush();
+      expect(h.calls.start, 'a cancelled queue must never start').toBe(0);
+    } finally { t.restore(); }
   });
 
-  it('the host is asked to start exactly once per launch', () => {
-    const h = boot({ available: true });
-    h.ctx.actions.start();
-    expect(h.calls.start).toBe(1);
+  it('a queued recording that is NOT cancelled starts once the runner idles', () => {
+    // The control for the test above: without it, "start was never called"
+    // proves nothing, because a queue that is simply broken never starts
+    // anything either.
+    const h = boot({ available: true, state: { busy: true } });
+    const t = manualTimers(h.win);
+    try {
+      expand(h.doc);
+      t.flush();                           // the deferred arm; runner is busy
+      expect(h.calls.start).toBe(0);
+      t.flush();                           // still busy -> re-arms
+      expect(h.calls.start).toBe(0);
+      h.state.busy = false;
+      t.flush();                           // now idle -> starts, exactly once
+      expect(h.calls.start).toBe(1);
+      t.flush();
+      expect(h.calls.start, 'and not again').toBe(1);
+    } finally { t.restore(); }
   });
 });

@@ -1748,6 +1748,11 @@ var DEBUG_MAX_VARS = 50;
 var DEBUG_MAX_REPR = 120;
 var DEBUG_MAX_DEPTH = 20;
 var DEBUG_MAX_BYTES = 2 * 1024 * 1024;
+// Output shares DEBUG_MAX_BYTES with steps and snapshots rather than getting a
+// second full allowance. This is the floor it keeps even when they spent the
+// lot: a program whose recording filled the budget should still show what it
+// printed, because that is the half the student can read.
+var DEBUG_MIN_OUTPUT_BYTES = 64 * 1024;
 // OPT-IN deferred recording (see debugRunDeferred). Only reachable from the
 // button the panel offers after a recording truncated before reaching the
 // student's breakpoint -- never automatic, which is the whole difference from
@@ -2055,9 +2060,40 @@ var RECORD_HELPER = [
   // reached json.dumps in full. Truncate here, where the payload is actually
   // built. The marker is left in the text on purpose: it lands in the console
   // the student reads, which is the only place the loss is visible.
+  //
+  // Two things that clamp got wrong, and both let a multi-megabyte payload
+  // through even though the cap "held":
+  //
+  //  1. It measured CHARACTERS, and json.dumps escapes. Measured ratios for
+  //     the encoded form: a quote or a newline 2x, an accented letter 6x, and
+  //     a non-BMP emoji 12x -- one Python character becomes a \uXXXX surrogate
+  //     PAIR. So 2 Mi characters of emoji serialize to about 24 MiB. A
+  //     character count is not a byte bound.
+  //  2. It gave output the WHOLE 2 MB even when steps and snapshots had
+  //     already spent most of it, so the real ceiling was ~4 MB of payload
+  //     before escaping, not the 2 MB the cap advertises.
+  //
+  // So budget against what is LEFT, and bound the ENCODED length. The floor
+  // keeps a program that filled the budget with steps from losing its output
+  // entirely -- the output is the half the student can actually read.
   '_out = _buf.getvalue()',
-  'if len(_out) > _max_bytes:',
-  "    _out = _out[:_max_bytes] + '\\n... output truncated: the program printed more than the debugger can store ...\\n'",
+  '_left = _max_bytes - _size[0]',
+  'if _left < _min_out:',
+  '    _left = _min_out',
+  '_cut = len(_out) > _left',
+  'if _cut:',
+  '    _out = _out[:_left]',
+  // Geometric, so it terminates: at most ~12 halvings from a 2 MB buffer, and
+  // the loop body does not run at all for output that does not escape.
+  "while len(_out) > 512 and len(json.dumps(_out)) - 2 > _left:",
+  '    _out = _out[:len(_out) // 2]',
+  '    _cut = True',
+  // _truncated[0] is deliberately NOT set: it drives the copy about the
+  // RECORDING being cut short, which is a different claim from the program
+  // having printed more than we can store. The marker in the text is the
+  // report, and it lands in the console the student is already reading.
+  'if _cut:',
+  "    _out = _out + '\\n... output truncated: the program printed more than the debugger can store ...\\n'",
   "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'deferred': bool(_defer), 'kept': _kept[0], 'skipped': _skipped[0], 'output': _out, 'steps': _steps, 'snaps': _snaps})"
 ].join('\n');
 
@@ -3061,7 +3097,8 @@ function runStepThrough(defer) {
             _max_vars: DEBUG_MAX_VARS,
             _max_repr: DEBUG_MAX_REPR,
             _max_depth: DEBUG_MAX_DEPTH,
-            _max_bytes: DEBUG_MAX_BYTES
+            _max_bytes: DEBUG_MAX_BYTES,
+            _min_out: DEBUG_MIN_OUTPUT_BYTES
           });
           return JSON.parse(pyodide.runPython(RECORD_HELPER, { globals: ns }));
         } finally {
