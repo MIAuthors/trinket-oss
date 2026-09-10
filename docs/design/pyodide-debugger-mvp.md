@@ -232,13 +232,21 @@ dependencies. Same blast-radius discipline as the explorer.
     `deferred`, `kept` and `skipped`. The remaining
     bound (5 000 steps / 2 MB) is strictly tighter than the one it replaced.
 
-    The accepted cost, Larry's explicit ruling: a breakpoint **below** a long
-    loop is unreachable, because the step budget goes to whatever runs first
-    (measured: 70 009 line events for `range(10000)` over a 6-line body). His
-    words — *"don't put a breakpoint below a 10,000-iteration loop is totally
-    fine."* The reserve/coast design that would buy those steps back was
-    scoped and **declined**; what the UI owes the student in that case is an
-    honest note, not a recovered recording.
+    The accepted cost, Larry's explicit ruling at the time: a breakpoint
+    **below** a long loop is unreachable, because the step budget goes to
+    whatever runs first (measured: 70 009 line events for `range(10000)` over a
+    6-line body). His words — *"don't put a breakpoint below a
+    10,000-iteration loop is totally fine."* The reserve/coast design that
+    would buy those steps back was scoped and declined.
+
+    **That ruling was later reversed, and this paragraph is kept only for the
+    reasoning.** The coast came back as an *opt-in*: when a recording runs out
+    of budget before reaching a marked line, the panel offers a button, and
+    only that button calls `runStepThrough(true)`, which coasts to the
+    breakpoint under `DEBUG_MAX_DORMANT` and keeps a `DEBUG_LOOKBACK_STEPS`
+    ring of the steps before it. So the student now gets *both* — an honest
+    note, and a recovery they have to ask for. The default path is unchanged
+    and still records from line 1. See `debugger-panel.md` for the mechanism.
   - **Loop-iteration jump** ("next time line 8 runs") — largely subsumed by
     next-breakpoint navigation on a breakpointed line; keep only if a
     dedicated control proves necessary.
