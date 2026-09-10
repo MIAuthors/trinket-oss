@@ -2140,10 +2140,23 @@ function debugShowLine(st) {
 // mid-replay updates both the jump targets and where autoplay will stop, with
 // no re-record.
 
-var debugBreakpoints = {}; // file name -> { line(1-based): true }
+// file name -> { line(1-based): true }. Null-prototype at BOTH levels, because
+// the outer key is a student-chosen file name and the failures differ by name:
+//
+//   'constructor'  `debugBreakpoints[file] || (... = {})` short-circuits to
+//                  Object.prototype.constructor, so the line is written as a
+//                  property ON THE GLOBAL Function object. It still fires --
+//                  but the state is shared with the whole page, and every file
+//                  so named collides on one map.
+//   '__proto__'    the assignment sets the prototype instead of storing
+//                  anything, so `Object.keys` sees no entry at all and the
+//                  breakpoint silently vanishes.
+//
+// Both were checked by running them, not reasoned about.
+var debugBreakpoints = Object.create(null);
 
 function debugToggleBreakpoint(file, line) {
-  var bp = debugBreakpoints[file] || (debugBreakpoints[file] = {});
+  var bp = debugBreakpoints[file] || (debugBreakpoints[file] = Object.create(null));
   if (bp[line]) delete bp[line]; else bp[line] = true;
   // "your breakpoint was not reached" describes the table AS IT WAS when the
   // recording ran. The student has just changed it, so drop the claim rather
@@ -2355,7 +2368,8 @@ function debugBreakpointList() {
 // Breakpoint payload for the recorder: file label -> [lines]. The main file is
 // keyed '<main>' (its frames carry no file label).
 function debugBreakpointPayload() {
-  var out = {};
+  // Also file-keyed, and it is what crosses into Python.
+  var out = Object.create(null);
   for (var f in debugBreakpoints) {
     var lines = [];
     for (var l in debugBreakpoints[f]) lines.push(parseInt(l, 10));
@@ -2614,9 +2628,12 @@ function debugBuildVarModel() {
   if (!debugRec) return null;
   if (debugVarModel) return debugVarModel;
 
-  var files = {};
-  try { files = editor.getAllFiles() || {}; } catch (e) { files = {}; }
-  var lineCache = {};
+  // Both file-keyed, so both take the same null-prototype treatment as
+  // debugBreakpoints -- `lineCache['constructor']` is otherwise truthy and
+  // returns a Function where a line array is expected.
+  var files = Object.create(null);
+  try { files = editor.getAllFiles() || files; } catch (e) { files = Object.create(null); }
+  var lineCache = Object.create(null);
   function sourceLine(file, line) {
     var key = file || mainFile;
     if (!(key in lineCache)) {
