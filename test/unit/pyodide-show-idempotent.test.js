@@ -68,7 +68,10 @@ describe('plt.show() is idempotent per figure (#254)', () => {
     // traceback pointing into injected code they never wrote.
     const s = src();
     expect(s).toMatch(/except\s+NonGuiException/);
-    expect(s).toMatch(/warnings\.warn\(str\(_exc\)\)/);
+    // stacklevel=2 is part of the fix, not decoration: without it the warning
+    // is stamped with the injected wrapper's line instead of the student's
+    // own plt.show() call. Measured in the embed: <exec>:21 -> <exec>:4.
+    expect(s).toMatch(/warnings\.warn\(str\(_exc\),\s*stacklevel=2\)/);
   });
 
   it('leaves nothing behind in pyodide.globals', () => {
