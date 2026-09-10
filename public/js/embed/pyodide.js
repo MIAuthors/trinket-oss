@@ -2048,7 +2048,17 @@ var RECORD_HELPER = [
   "_steps.append({'line': None, 'func': '<end>', 'depth': 0, 'out': _buf.tell(), 'file': None, 'from_line': None, 'from_file': None})",
   '_note_new(_g)',
   '_snaps.append(_snap_ns(_g))',
-  "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'deferred': bool(_defer), 'kept': _kept[0], 'skipped': _skipped[0], 'output': _buf.getvalue(), 'steps': _steps, 'snaps': _snaps})"
+  // The per-event accounting above charges stdout GROWTH at the next line
+  // event, which bounds a print in the middle of a program but not the last
+  // one -- there is no next event to charge it at -- and does not shrink _buf
+  // after a cap abort either. So `print('x' * 10_000_000)` on the final line
+  // reached json.dumps in full. Truncate here, where the payload is actually
+  // built. The marker is left in the text on purpose: it lands in the console
+  // the student reads, which is the only place the loss is visible.
+  '_out = _buf.getvalue()',
+  'if len(_out) > _max_bytes:',
+  "    _out = _out[:_max_bytes] + '\\n... output truncated: the program printed more than the debugger can store ...\\n'",
+  "json.dumps({'error': _err, 'truncated': _truncated[0], 'bpHit': _hit[0], 'deferred': bool(_defer), 'kept': _kept[0], 'skipped': _skipped[0], 'output': _out, 'steps': _steps, 'snaps': _snaps})"
 ].join('\n');
 
 var debugRec = null;       // active recording ({error, truncated, output, steps, snaps}) or null
@@ -2616,7 +2626,10 @@ function debugBuildVarModel() {
     return arr && line > 0 && line <= arr.length ? arr[line - 1] : null;
   }
 
-  var order = [], firstStep = {}, fromImport = {};
+  // Null-prototype: these are keyed by STUDENT variable names, and a plain
+  // object answers `'constructor' in firstStep` before anything is recorded --
+  // so a variable so named would read as already-seen and vanish.
+  var order = [], firstStep = Object.create(null), fromImport = Object.create(null);
   for (var k = 0; k < debugRec.snaps.length; k++) {
     // Main-file steps only. `from lots import *` executes lots.py, and the
     // tracer follows user modules -- so those steps snapshot THAT module's
