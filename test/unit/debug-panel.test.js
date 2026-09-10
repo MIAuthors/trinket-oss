@@ -7,7 +7,7 @@
 // were found by RUNNING it, not by reading it. The invisible button, the pill
 // that hid before it could deliver its own explanation, and the message that
 // told students a variable was "not defined yet" when the filter above had
-// already ruled that out: all three are the kind of thing a assertion catches
+// already ruled that out: all three are the kind of thing an assertion catches
 // and a careful reading does not.
 //
 // The panel talks to pyodide.js only through the handover object, which makes
