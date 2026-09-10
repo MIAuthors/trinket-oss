@@ -83,7 +83,9 @@
   }
 
   var varsPlaced = false;  // true once the window has been dragged off the pill
-  var dropped = {};     // names the student has dismissed with the red x
+  // Null-prototype: keyed by student variable names, so `dropped['constructor']`
+  // must not inherit a truthy value from Object.prototype and hide the row.
+  var dropped = Object.create(null);   // names dismissed with the red x
   var lifted  = [];     // names promoted with the green arrow, most recent first
   var mounted = false;
   var placed  = false;  // true once the student has dragged it; stop auto-placing
@@ -788,7 +790,7 @@
       if (!b) return;
       var nm = b.getAttribute('data-var');
       if (b.getAttribute('data-vact') === 'showall') {
-        dropped = {};
+        dropped = Object.create(null);
         paintVars();
         return;
       }
@@ -1039,7 +1041,7 @@
     // A new recording is a fresh start: anything hidden belonged to the old
     // one, and the highlight starts on step mode rather than inheriting
     // whichever half happened to drive the previous recording.
-    dropped = {};
+    dropped = Object.create(null);
     lifted = [];
     mode = 'step';
     editExited = false;   // the message has been answered by re-recording
@@ -1294,7 +1296,10 @@
         var ty = n2 in types ? types[n2] : null;
         var shown = v === null ? null : clipVal(v);
         var stmt = v === null
-          ? escHtml(n2) + ' <span class="tk-dbg-vt">not defined yet</span>'
+          // NOT "not defined yet": names first defined after this step are
+          // already filtered out above (firstStep[nm] > s.idx). Reaching here
+          // means the name was deleted, or belongs to another stack frame.
+          ? escHtml(n2) + ' <span class="tk-dbg-vt">not available at this step</span>'
           : '<span class="tk-dbg-vn">' + escHtml(n2) + '</span> = '
               + '<span class="tk-dbg-vv">' + escHtml(shown) + '</span>'
               + (ty ? ' <span class="tk-dbg-vt">(' + escHtml(ty) + ')</span>' : '');
@@ -1486,8 +1491,14 @@
     }
     var avail = false;
     try { avail = !!ctx.isAvailable(); } catch (e) { avail = false; }
-    $pill.hidden = !avail;
-    if (!avail) { hideHelp(); if ($vars) $vars.hidden = true; return; }
+    // An edit can drop the program below two runnable lines (or make it
+    // VPython), which turns isAvailable() false -- and onEditorChange() has
+    // just set editExited to promise the student an explanation. Hiding here
+    // would eat that promise, so keep the pill until the message is answered:
+    // collapsing, or the next recording, clears editExited.
+    var show = avail || editExited;
+    $pill.hidden = !show;
+    if (!show) { hideHelp(); if ($vars) $vars.hidden = true; return; }
 
     var s;
     try { s = ctx.getState() || {}; } catch (e) { return; }
@@ -1506,7 +1517,7 @@
     // inherited the previous run's dismissed variables, its pinned ones, and
     // whichever mode box happened to be lit. Same shape as the editExited
     // line above it, deliberately.
-    if (s.recording && !wasRecording) { dropped = {}; lifted = []; mode = 'step'; }
+    if (s.recording && !wasRecording) { dropped = Object.create(null); lifted = []; mode = 'step'; }
     // ...and on the FALLING edge, drop whatever the panel was saying about the
     // recording in flight ("recording again, from your breakpoint..."). By now
     // it has either opened a replay or the host has posted its own answer, and
