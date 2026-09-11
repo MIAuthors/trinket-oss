@@ -26,6 +26,12 @@
         usersubdomains    :  {{config.app.usersubdomains}},
         protocol          : '{{config.app.url.protocol}}',
         cachePrefix       : '{{config.app.cachePrefix}}',
+        // Verbatim from includes/app-config.html, which the APP pages include and
+        // this template does not — it hand-rolls its own config block. Without
+        // this line trinket-config.js prefix() falls back to Date.now(), minting a
+        // unique url per render that no cache can ever match (#269). App pages
+        // have always been correct; only embeds bust.
+        assetToken        : '{{ assetToken() }}',
         prefixes          :  {{ config.app.prefixes | json | safe }},
         components        :  {{ config.app.components | json | safe }},
         vendorHost        : '{{ config.aws.buckets.vendorassets.host }}',
