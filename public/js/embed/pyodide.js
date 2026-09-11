@@ -2547,6 +2547,18 @@ var workerRunError = null;   // set by onError so finishRun() can report it
 // comm, and what JupyterLite therefore does from a worker kernel.
 var mplLoaded  = false;   // mpl.js evaluated into the page
 var mplFigures = {};      // figureId -> { fig, socket }
+// Bumped whenever that set is torn down. A resize debounced before the bump
+// must not fire after it: worker figure ids are REUSED (`fig1` every run), so a
+// request left over from the last run would be applied to the NEW run's
+// manager, resizing a figure the student never touched. Checking the
+// generation rather than the id is what makes that safe on every teardown path,
+// including ones added later -- which is why both sites go through
+// resetMplFigures() instead of assigning mplFigures directly.
+var mplGeneration = 0;
+function resetMplFigures() {
+  mplFigures = {};
+  mplGeneration++;
+}
 
 function ensureMplAssets(msg) {
   if (mplLoaded) return true;
@@ -2600,8 +2612,16 @@ function debounceMplResize() {
   var orig = window.mpl.figure.prototype.request_resize;
   window.mpl.figure.prototype.request_resize = function(w, h) {
     var fig = this;
+    var gen = mplGeneration;
     clearTimeout(fig.__trinketResizeTimer);
-    fig.__trinketResizeTimer = setTimeout(function() { orig.call(fig, w, h); }, 150);
+    fig.__trinketResizeTimer = setTimeout(function() {
+      fig.__trinketResizeTimer = null;
+      // Torn down while we waited. Drop it rather than send it: see
+      // mplGeneration. 150 ms is short, but "drag the corner, then hit Run"
+      // is an ordinary thing to do and lands inside it.
+      if (gen !== mplGeneration) return;
+      orig.call(fig, w, h);
+    }, 150);
   };
   window.mpl.figure.prototype.__trinketResizeDebounced = true;
 }
@@ -3117,7 +3137,7 @@ function handleWorkerFigure(msg) {
 // marks the opt-in worker VPython path so the kernel can install the wheel.
 function runInWorker(program, files, serialized, decision) {
   workerRunError = null;
-  mplFigures = {};              // figures belong to a run; mpl.js itself persists
+  resetMplFigures();            // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
 
   // A VPython run starts from a FRESH INTERPRETER (spec V7a).
@@ -3904,7 +3924,7 @@ window.TrinketAPI = {
     $('#graphic-wrap').addClass('hide');
     $('#output-dragbar').addClass('hide');
     $('#console-wrap').css('height', '100%');
-    mplFigures = {};
+    resetMplFigures();
 
     // The plot-style panel is anchored to #graphic-wrap, which survives the
     // empty() above, and its backend points at the namespace clearMainThreadMemory()
