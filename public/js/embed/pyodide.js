@@ -1848,7 +1848,12 @@ var RECORD_HELPER = [
   // the new names are library furniture. No blocklist, and it covers
   // `import x`, `from x import y` and `from x import *` alike.
   '_src_lines = _user_source.split(chr(10))',
-  '_imported = set()',
+  // name -> id() of the object the import bound. A bare SET of names hid any
+  // later variable that reused the name: `from math import pi` then `pi = 3.14`
+  // at top level, or a function-local `e = sum(data)` after `from math import
+  // *`, vanished from the panel entirely. Identity distinguishes the imported
+  // object from a rebinding; the depth gate below covers the rest.
+  '_imported = {}',
   '_seen = set()',
   '_prev_line = [0]',
   '_ns_len = [-1]',
@@ -1862,7 +1867,8 @@ var RECORD_HELPER = [
   '    _ns_len[0] = len(_ns)',
   '    _new = set(_ns.keys()) - _seen',
   '    if _new:',
-  '        if _is_import_line(_prev_line[0]): _imported.update(_new)',
+  '        if _is_import_line(_prev_line[0]):',
+  '            for _n in _new: _imported[_n] = id(_ns[_n])',
   '        _seen.update(_new)',
   // A PRECONFIGURED reprlib.Repr for the containers it specialises, and the
   // builtin repr() for everything else. This is the single biggest cost in the
@@ -1917,11 +1923,16 @@ var RECORD_HELPER = [
   '_rl.maxlist = _rl.maxtuple = _rl.maxset = _rl.maxfrozenset = _rl.maxdeque = 30',
   '_rl.maxstring = _max_repr',
   '_rl.maxother = _max_repr',
-  'def _snap_ns(_ns):',
+  // `_top` is whether this namespace IS the module frame. _imported is built
+  // from module-level import lines only, so applying it to a function's
+  // f_locals hid any local sharing a name with an import -- and identity
+  // alone would not catch `def f(): pi = math.pi`, where the local is bound
+  // to the very object the import named.
+  'def _snap_ns(_ns, _top=True):',
   '    _out = []',
   '    for _name, _val in list(_ns.items()):',
   '        if _name in _SKIP: continue',
-  '        if _name in _imported: continue',
+  '        if _top and _imported.get(_name, -1) == id(_val): continue',
   "        if _name.startswith('__') and _name.endswith('__'): continue",
   '        if isinstance(_val, types.ModuleType): continue',
   '        if isinstance(_val, (types.FunctionType, types.BuiltinFunctionType, types.LambdaType)): continue',
@@ -2044,7 +2055,7 @@ var RECORD_HELPER = [
   '    if _defer and not _hit[0]:',
   '        _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
   "        _st = {'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff}",
-  '        _sn = _snap_ns(_frame.f_locals)',
+  '        _sn = _snap_ns(_frame.f_locals, _d == 0)',
   '        _c = _cost(_st) + _cost(_sn)',
   '        _nsize[0] += _c',
   '        _ring.append((_st, _sn, _c))',
@@ -2067,7 +2078,7 @@ var RECORD_HELPER = [
   '        raise _TrinketStopRecording()',
   '    _fl, _ff = _call_site(_frame) if _d > 0 else (None, None)',
   "    _st = {'line': _frame.f_lineno, 'func': _frame.f_code.co_name, 'depth': _d, 'out': _buf.tell(), 'file': _file_label(_frame.f_code.co_filename), 'from_line': _fl, 'from_file': _ff}",
-  '    _sn = _snap_ns(_frame.f_locals)',
+  '    _sn = _snap_ns(_frame.f_locals, _d == 0)',
   '    _nsize[0] += _cost(_st) + _cost(_sn)',
   '    if _nsize[0] + _osize[0] > _max_bytes:',
   '        _truncated[0] = True',
@@ -2444,8 +2455,25 @@ function debugErrorMessage() {
   if (!debugRec || !debugRec.error) return null;
   var lines = String(debugRec.error).replace(/\s+$/, '').split('\n');
   var head = -1;
+  // The suffix group is REQUIRED. It was optional, which reduced the whole
+  // pattern to /^\w[\w.]*\s*:/ -- "any word followed by a colon" -- and since
+  // the loop keeps the LAST match, a colon inside the student's own message
+  // won: `raise ValueError('a\nfoo:')` produced a banner reading just "foo:",
+  // with the error type gone. Found by an ultrareview of #266, 2026-09-11.
   for (var i = 0; i < lines.length; i++) {
-    if (/^\w[\w.]*(Error|Exception|Warning|Exit|Interrupt|StopIteration)?\s*:/.test(lines[i])) head = i;
+    if (/^\w[\w.]*(Error|Exception|Warning|Exit|Interrupt|StopIteration)\s*:/.test(lines[i])) head = i;
+  }
+  // Nothing matched, so the exception's class name ends in none of those --
+  // `class MyProblem(Exception)`, which students do write. Simply dropping the
+  // `?` above would send those to the last-line fallback below, i.e. back to
+  // the bug this function exists to fix. So: loose shape, but the FIRST match,
+  // because here the header is above the message rather than below it. The
+  // "Traceback (most recent call last):" line cannot match (a space follows
+  // the word) and the indented File lines cannot match (^\w fails).
+  if (head < 0) {
+    for (var k = 0; k < lines.length; k++) {
+      if (/^\w[\w.]*\s*:/.test(lines[k])) { head = k; break; }
+    }
   }
   if (head >= 0) {
     return lines.slice(head).join(' ').replace(/\s+/g, ' ').trim();

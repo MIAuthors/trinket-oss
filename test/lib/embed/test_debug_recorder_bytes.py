@@ -299,6 +299,74 @@ def test_helper_no_longer_uses_the_flat_estimates():
         'allowance double-subtracts again')
 
 
+# ---------------------------------------------------------------------------
+# _imported must not hide a variable that merely REUSES an imported name.
+#
+# `_imported` is filled at module level, from names that appeared on a line the
+# source says is an import. The filter then ran over EVERY frame's f_locals, so
+# a function-local sharing a name with an import vanished from the Variables
+# panel -- and so did a top-level rebinding of one. Found by an ultrareview of
+# #266, 2026-09-11, after Copilot's pass 4 had flagged it and it survived.
+# ---------------------------------------------------------------------------
+
+def _names(payload):
+    seen = set()
+    for snap in payload['snaps']:
+        for row in snap:
+            seen.add(row['name'] if isinstance(row, dict) else row[0])
+    return seen
+
+
+def test_a_function_local_that_shadows_a_star_import_is_still_shown():
+    # `from math import *` puts `e` in _imported; the local `e` is a different
+    # object in a different frame and is the student's own variable.
+    d, _n, _ns = record(
+        'from math import *\n'
+        'def f(data):\n'
+        '    e = sum(data)\n'
+        '    return e\n'
+        'total = f([1, 2, 3])\n')
+    assert 'e' in _names(d), (
+        'a function-local shadowing an imported name is missing from the '
+        'snapshots; _imported is being applied to a non-module frame')
+
+
+def test_a_top_level_rebinding_of_an_imported_name_is_still_shown():
+    d, _n, _ns = record(
+        'from math import pi\n'
+        'pi = 3.14\n'
+        'r = pi * 2\n')
+    assert 'pi' in _names(d), (
+        'a top-level reassignment of an imported name is missing; the filter '
+        'is keyed on the NAME rather than on the imported object')
+
+
+def test_the_imported_object_itself_is_still_hidden():
+    # The other side of the gate: an import the student never touches is
+    # clutter, and must stay filtered. A test for the fix that does not also
+    # pin this would pass for a version that simply deleted the filter.
+    d, _n, _ns = record(
+        'from math import pi\n'
+        'r = 2.0\n'
+        'r = r + 1.0\n')
+    assert 'pi' not in _names(d), (
+        'the imported object is showing up as a student variable again')
+
+
+def test_a_local_bound_to_the_imported_object_is_not_hidden_by_identity_alone():
+    # `pi_local = pi` binds the SAME object, so an identity check alone would
+    # hide it. The depth gate is what keeps it visible.
+    d, _n, _ns = record(
+        'from math import pi\n'
+        'def g():\n'
+        '    pi_local = pi\n'
+        '    return pi_local\n'
+        'v = g()\n')
+    assert 'pi_local' in _names(d), (
+        'a local bound to the imported object vanished; the module-frame gate '
+        'is not being applied')
+
+
 if __name__ == "__main__":
     _fns = [v for k, v in sorted(globals().items())
             if k.startswith("test_") and callable(v)]
