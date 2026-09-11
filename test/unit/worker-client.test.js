@@ -30,14 +30,15 @@ async function bootedClient(extra) {
 
 function newClient(extra) {
   const { FakeWorker, made } = fakeWorkerFactory();
-  const events = { stdout: [], stderr: [], errors: [] };
+  const events = { stdout: [], stderr: [], errors: [], figures: [] };
   const client = createWorkerClient(Object.assign({
     workerUrl: '/js/embed/pyodide-worker.js',
     pyodideUrl: 'https://cdn/pyodide.js',
     WorkerCtor: FakeWorker,
     onStdout: (t) => events.stdout.push(t),
     onStderr: (t) => events.stderr.push(t),
-    onError:  (t) => events.errors.push(t)
+    onError:  (t) => events.errors.push(t),
+    onFigure: (m) => events.figures.push(m)
   }, extra || {}));
   return { client, made, events };
 }
@@ -203,6 +204,87 @@ describe('createWorkerClient', () => {
 
     made[0].onmessage({ data: { type: 'done', id: firstId } });
     expect(client.isRunning()).toBe(true);
+  });
+});
+
+describe('figure frames are scoped to the WORKER, not to the run', () => {
+  // The property this replaced: frames used to be dropped unless they matched
+  // the in-flight run, and settle() nulls that when the program ends. But a
+  // matplotlib figure OUTLIVES its run -- pan, zoom, home and resize all act on
+  // a finished plot, Python answers with a frame, and the page threw it away.
+  //
+  // `e.target` is what carries the distinction, so every call below passes one.
+  // A real Worker sets it; the fake one did not, which is precisely why the old
+  // source-text assertions could not have caught a regression here.
+
+  const frame = (w, extra) => Object.assign(
+    { data: { type: 'figure', kind: 'frame', id: 'run-1', figureId: 'fig1' } }, { target: w }, extra || {});
+
+  it('forwards a frame from the LIVE worker after its program has ended', async () => {
+    const { client, made, events } = await bootedClient();
+    client.run('plot');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+    made[0].onmessage({ data: { type: 'done', id: id }, target: made[0] });
+    await tick();
+    expect(client.isRunning()).toBe(false);   // settle() has nulled the run
+
+    made[0].onmessage(frame(made[0]));
+    expect(events.figures.length).toBe(1);    // dropped before this change
+  });
+
+  it('drops a frame from a REPLACED worker, which is the property worth keeping', async () => {
+    // The reason scoping exists at all: a dead worker must not paint over the
+    // new run's output. Losing this would be a real regression, not a nit.
+    const { client, made, events } = await bootedClient();
+    client.run('first');
+    await tick();
+    client.stop();
+    client.run('second');
+    await tick();
+    expect(made.length).toBeGreaterThan(1);
+
+    made[0].onmessage(frame(made[0]));        // the dead one
+    expect(events.figures.length).toBe(0);
+
+    made[1].onmessage(frame(made[1]));        // the live one
+    expect(events.figures.length).toBe(1);
+  });
+
+  it('no longer matches on the run id, which is what made a finished figure inert', async () => {
+    const { client, made, events } = await bootedClient();
+    client.run('plot');
+    await tick();
+    made[0].onmessage(frame(made[0], { data: { type: 'figure', kind: 'frame', id: 'a-stale-run-id' } }));
+    expect(events.figures.length).toBe(1);
+  });
+
+  it('needs no save exemption any more -- worker scoping subsumes it', async () => {
+    // #252 fixed the save button with a `kind === 'save'` special case. That
+    // was the narrow version of this fix: a save reply is late for exactly the
+    // same reason an interactive frame is late. The exemption is deleted, so
+    // this test is what keeps the button working.
+    const { client, made, events } = await bootedClient();
+    client.run('plot');
+    await tick();
+    const id = made[0].posted.find(m => m.type === 'run').id;
+    made[0].onmessage({ data: { type: 'done', id: id }, target: made[0] });
+    await tick();
+
+    made[0].onmessage({ data: { type: 'figure', kind: 'save', b64: 'x' }, target: made[0] });
+    expect(events.figures.length).toBe(1);
+    expect(events.figures[0].kind).toBe('save');
+  });
+
+  it('drops a save reply from a replaced worker too', async () => {
+    const { client, made, events } = await bootedClient();
+    client.run('first');
+    await tick();
+    client.stop();
+    client.run('second');
+    await tick();
+    made[0].onmessage({ data: { type: 'figure', kind: 'save', b64: 'x' }, target: made[0] });
+    expect(events.figures.length).toBe(0);
   });
 });
 
