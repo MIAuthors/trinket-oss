@@ -63,22 +63,28 @@
         return;
       }
 
-      // A figure belongs to a run, so it is scoped like input-request: a figure
-      // from a worker we already replaced must not paint over the new run's
-      // output. (The plan suggested rendering figures unconditionally; scoping
-      // them is strictly safer and costs nothing.)
+      // A figure belongs to a WORKER, not to a run: a figure from a worker we
+      // already replaced must not paint over the new run's output, but a figure
+      // from the live worker stays interactive after its program has ended.
       if (msg.type === 'figure') {
-        // A save reply is exempt from the run scoping, for the same reason
-        // scene-ops is (below): it legitimately arrives after settle() nulls
-        // `current`. The student clicks Save on a figure the finished run left
-        // behind, so by the time the bytes come back there is no current run to
-        // match -- and scoping dropped them, which is why that button did
-        // nothing on this runtime (#252). Nothing is painted here either way:
-        // these kinds carry a file to download, not frame data, so a stale one
-        // cannot draw over a newer run's output. That was the risk the scoping
-        // exists to prevent.
-        var isSave = (msg.kind === 'save' || msg.kind === 'save-error');
-        if (!isSave && (!current || msg.id !== current.id)) return;
+        // Scoped to the LIVE WORKER, not to the run. The run scoping was too
+        // tight: settle() nulls `current` when the program ends, so every frame
+        // after that was dropped -- and a matplotlib figure outlives its run.
+        // Pan, zoom, home and resize all act on a finished plot, Python handles
+        // them and sends a frame, and the page threw it away. The figure simply
+        // stopped responding once the program was done.
+        //
+        // Save had this bug first (#252) and was fixed with a `kind === 'save'`
+        // exemption. That exemption is gone: scoping to the live worker
+        // subsumes it, because a save reply is late for exactly the same reason
+        // an interactive frame is late. The narrow fix had solved the one kind
+        // anybody had tested.
+        //
+        // `e.target !== worker` keeps the property the scoping exists for --
+        // a REPLACED worker cannot paint over the new run's output, because it
+        // is not this worker. A finished-but-live worker still can, which is
+        // exactly what we want.
+        if (e.target !== worker) return;
         if (opts.onFigure) opts.onFigure(msg);
         return;
       }
