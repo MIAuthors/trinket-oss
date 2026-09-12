@@ -22,7 +22,15 @@ var PYODIDE_INDEX_URL = window.__PYODIDE_INDEX_URL__ || 'https://cdn.jsdelivr.ne
 // the webvpython `vpython` package.
 // 3.2.3 = the rsWVPRunner GCS build the Dockerfile provisions; 3.2.2 was the stale components-tarball fallback (spec 2026-08-10, decision V3).
 var GLOW_SRC = '/components/vpython-glowscript/package/glow.3.2.3.min.js';
-var VPYTHON_ZIP_URL = '/js/embed/wvpython/vpython.zip';
+// Asset URLs built here at runtime must carry the deploy token or they are
+// served max-age=300 and re-fetched every five minutes (#234). Stamp ONLY when
+// the embed projected assetToken (#270): without it trinketConfig.prefix()
+// falls back to Date.now(), a url nothing has cached -- worse than bare (#269).
+function assetUrl(path) {
+  var cfg = window.trinketConfig;
+  return (cfg && cfg.get && cfg.get('assetToken')) ? cfg.prefix(path) : path;
+}
+var VPYTHON_ZIP_URL = assetUrl('/js/embed/wvpython/vpython.zip');
 // The vpython-jupyter wheel the WORKER path installs (spec 2026-08-10) — a
 // different package from the main-thread bridge zip above. This name is the ONE
 // place the page says which file to fetch; scripts/sync-vpython-worker.sh reads
@@ -1201,13 +1209,13 @@ function ensureVpython() {
   return vpythonLoading;
 }
 
-var ASYNC_TRANSFORM_URL = '/js/embed/wvpython/vpython/_async_transform.py';
+var ASYNC_TRANSFORM_URL = assetUrl('/js/embed/wvpython/vpython/_async_transform.py');
 
 // Typeset math output (features.mathOutput, surfaced as
 // trinket.config.mathOutput). When off, nothing here is fetched, no Python is
 // installed and every run path is byte-for-byte what it was before the
 // feature — which is the point: this ships default-off.
-var TRINKET_DISPLAY_URL = '/js/embed/_trinket_display.py';
+var TRINKET_DISPLAY_URL = assetUrl('/js/embed/_trinket_display.py');
 
 // Filename the run wrapper compiles under. Deliberately NOT <exec>, which
 // formatPythonTraceback renames to the student's main file: this name is
@@ -2535,7 +2543,7 @@ function ensureWorkerClient() {
   if (workerClient) return workerClient;
 
   workerClient = workerClientApi.createWorkerClient({
-    workerUrl  : '/js/embed/pyodide-worker.js',
+    workerUrl  : assetUrl('/js/embed/pyodide-worker.js'),
     pyodideUrl : PYODIDE_INDEX_URL + 'pyodide.mjs',   // module build (#215)
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
