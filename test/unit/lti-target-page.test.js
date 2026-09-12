@@ -108,6 +108,74 @@ describe('ltiTarget.resolveTarget: page links (#13)', () => {
     expect(t.assignment.materialSlug).toBe('momentum-lab');
   });
 
+  // A heal that stays in memory is paid for again on EVERY later launch of the link
+  // (one lesson read per lesson scanned + the material read). After a successful
+  // re-resolve the slugs must be written back to the record, best-effort, so the
+  // next launch takes the cached branch — exactly like a freshly bootstrapped link.
+  describe.each([
+    ['page',       'page'],
+    ['assignment', 'assignment']
+  ])('persisting the heal of a slug-less cached %s record', (targetType, key) => {
+    let materialLookups;
+    beforeEach(() => {
+      materialLookups = 0;
+      Material.findById.mockImplementation((id) => { materialLookups++; return Promise.resolve(materials[id] || null); });
+    });
+
+    function staleRecord(saveImpl) {
+      return { courseId: 'c1', targetType: targetType, targetId: 'm7',
+               save: vi.fn(saveImpl || (() => Promise.resolve())) };
+    }
+
+    it('backfills both slugs onto the record and saves it', async () => {
+      const existing = staleRecord();
+      vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(existing));
+
+      const t = await ltiTarget.resolveTarget(claimsFor({}, 'rl-heal-' + targetType), platform);
+
+      expect(t[key]).toEqual(expect.objectContaining({ lessonSlug: 'chapter-3', materialSlug: 'momentum-lab' }));
+      expect(existing.save, 'the healed slugs must be persisted').toHaveBeenCalledTimes(1);
+      expect(existing.lessonSlug).toBe('chapter-3');
+      expect(existing.materialSlug).toBe('momentum-lab');
+    });
+
+    it('serves the second launch from the backfilled record without re-resolving', async () => {
+      const existing = staleRecord();
+      vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(existing));
+      await ltiTarget.resolveTarget(claimsFor({}, 'rl-heal-' + targetType), platform);
+      lessonLookups = 0; materialLookups = 0;
+
+      const t = await ltiTarget.resolveTarget(claimsFor({}, 'rl-heal-' + targetType), platform);
+
+      expect(t[key]).toEqual(expect.objectContaining({ lessonSlug: 'chapter-3', materialSlug: 'momentum-lab' }));
+      expect(lessonLookups,   'second launch must not scan lessons').toBe(0);
+      expect(materialLookups, 'second launch must not read the material').toBe(0);
+      expect(existing.save, 'nothing left to heal on the second launch').toHaveBeenCalledTimes(1);
+    });
+
+    it('still returns the coordinates when the backfill save rejects', async () => {
+      const existing = staleRecord(() => Promise.reject(new Error('write failed')));
+      vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(existing));
+
+      const t = await ltiTarget.resolveTarget(claimsFor({}, 'rl-heal-' + targetType), platform);
+
+      expect(existing.save).toHaveBeenCalledTimes(1);
+      expect(t[key]).toEqual(expect.objectContaining({ lessonSlug: 'chapter-3', materialSlug: 'momentum-lab' }));
+    });
+
+    it('does not write when the material cannot be resolved', async () => {
+      const existing = staleRecord();
+      existing.targetId = 'm-gone';
+      vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(existing));
+
+      const t = await ltiTarget.resolveTarget(claimsFor({}, 'rl-heal-' + targetType), platform);
+
+      expect(t[key] && t[key].lessonSlug).toBeFalsy();
+      expect(existing.save).not.toHaveBeenCalled();
+      expect(existing.lessonSlug).toBeUndefined();
+    });
+  });
+
   it('falls back to the course when the page material cannot be found', async () => {
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(null));
 
