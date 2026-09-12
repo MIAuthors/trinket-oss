@@ -92,6 +92,22 @@ describe('ltiTarget.resolveTarget: page links (#13)', () => {
     expect(t.page.materialSlug).toBe('momentum-lab');
   });
 
+  // Found while fixing #13: the cached ASSIGNMENT path for a pre-cache record (no
+  // slugs persisted) called a resolver that does not exist, so the launch's promise
+  // chain rejected instead of re-resolving from the stored targetId.
+  it('heals a slug-less cached assignment record by re-resolving from its targetId', async () => {
+    vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve({
+      courseId: 'c1', targetType: 'assignment', targetId: 'm7'
+    }));
+
+    const t = await ltiTarget.resolveTarget(claimsFor({}, 'rl-assignment-stale'), platform);
+
+    expect(t.targetType).toBe('assignment');
+    expect(t.assignment, 'a pre-cache assignment record must still land on its page').toBeTruthy();
+    expect(t.assignment.lessonSlug).toBe('chapter-3');
+    expect(t.assignment.materialSlug).toBe('momentum-lab');
+  });
+
   it('falls back to the course when the page material cannot be found', async () => {
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => Promise.resolve(null));
 
