@@ -363,9 +363,30 @@
       'except NameError:',
       '    pass',
       'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
+      // Figures belong to a RUN, and MPL_SETUP runs once per run (see the
+      // loadPackagesFromImports chain below), so this sits exactly where
+      // _plt.close('all') sits in the main thread's MATPLOTLIB_SETUP_CODE and
+      // gives the two runtimes the same figure lifetime: cleared when the next
+      // PLOTTING run starts, not at the end of the run that drew it, so the
+      // toolbar's Save still has a figure to deliver in between.
+      //
+      // Without it, pyplot keeps the previous run's figure while
+      // _trinket_managers below is reset -- so run two draws on top of run one
+      // and nothing can close it afterwards. #255.
+      "_plt.close('all')",
       'from matplotlib.backends import backend_webagg_core as _wac',
       '',
       '_trinket_managers = {}',
+      '',
+      // FigureManagerWebAgg in backend_webagg_core has `_toolbar2_class = None`;
+      // it is backend_webagg (the server-backed one we do not use) that sets it.
+      // So the manager Trinket builds has no toolbar object, and
+      // handle_toolbar_button does getattr(None, name)() -> AttributeError,
+      // swallowed by the empty `except` around the event dispatch. Home, Back,
+      // Forward, Pan and Zoom have therefore never done anything on this
+      // runtime -- they render, they take the click, and nothing happens.
+      'class _TrinketFigureManager(_wac.FigureManagerWebAgg):',
+      '    _toolbar2_class = _wac.NavigationToolbar2WebAgg',
       '',
       '# Module level ON PURPOSE: inside a class body Python mangles any name',
       '# starting with two underscores, so `_js.__trinket_worker_mpl` would',
@@ -417,7 +438,7 @@
       '        if _figid in _trinket_managers:',
       '            continue',
       '        _canvas = _wac.FigureCanvasWebAggCore(_fig)',
-      '        _manager = _wac.FigureManagerWebAgg(_canvas, _num)',
+      '        _manager = _TrinketFigureManager(_canvas, _num)',
       '        _trinket_managers[_figid] = _manager',
       '        # Announce the figure BEFORE attaching the socket. add_web_socket',
       '        # starts sending immediately, and postMessage preserves order — so',
