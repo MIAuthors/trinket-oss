@@ -378,6 +378,16 @@
       '',
       '_trinket_managers = {}',
       '',
+      // FigureManagerWebAgg in backend_webagg_core has `_toolbar2_class = None`;
+      // it is backend_webagg (the server-backed one we do not use) that sets it.
+      // So the manager Trinket builds has no toolbar object, and
+      // handle_toolbar_button does getattr(None, name)() -> AttributeError,
+      // swallowed by the empty `except` around the event dispatch. Home, Back,
+      // Forward, Pan and Zoom have therefore never done anything on this
+      // runtime -- they render, they take the click, and nothing happens.
+      'class _TrinketFigureManager(_wac.FigureManagerWebAgg):',
+      '    _toolbar2_class = _wac.NavigationToolbar2WebAgg',
+      '',
       '# Module level ON PURPOSE: inside a class body Python mangles any name',
       '# starting with two underscores, so `_js.__trinket_worker_mpl` would',
       '# become `_js._TrinketSocket__trinket_worker_mpl` and fail at runtime.',
@@ -428,7 +438,7 @@
       '        if _figid in _trinket_managers:',
       '            continue',
       '        _canvas = _wac.FigureCanvasWebAggCore(_fig)',
-      '        _manager = _wac.FigureManagerWebAgg(_canvas, _num)',
+      '        _manager = _TrinketFigureManager(_canvas, _num)',
       '        _trinket_managers[_figid] = _manager',
       '        # Announce the figure BEFORE attaching the socket. add_web_socket',
       '        # starts sending immediately, and postMessage preserves order — so',
