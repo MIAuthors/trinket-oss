@@ -3581,6 +3581,18 @@ var workerRunError = null;   // set by onError so finishRun() can report it
 // comm, and what JupyterLite therefore does from a worker kernel.
 var mplLoaded  = false;   // mpl.js evaluated into the page
 var mplFigures = {};      // figureId -> { fig, socket }
+// Bumped whenever that set is torn down. A resize debounced before the bump
+// must not fire after it: worker figure ids are REUSED (`fig1` every run), so a
+// request left over from the last run would be applied to the NEW run's
+// manager, resizing a figure the student never touched. Checking the
+// generation rather than the id is what makes that safe on every teardown path,
+// including ones added later -- which is why both sites go through
+// resetMplFigures() instead of assigning mplFigures directly.
+var mplGeneration = 0;
+function resetMplFigures() {
+  mplFigures = {};
+  mplGeneration++;
+}
 
 function ensureMplAssets(msg) {
   if (mplLoaded) return true;
@@ -3623,9 +3635,46 @@ function ensureMplAssets(msg) {
 
 // A WebSocket-shaped object over the worker channel. mpl.js only ever uses
 // binaryType, onopen, onmessage, close and send.
+// Coalesce resize requests to the last size seen in a 150 ms window. With
+// readyState set, mpl.js's ResizeObserver fires once per animation frame during
+// a drag, and each request costs the worker a full Agg render plus a PNG encode
+// -- measured at hundreds of milliseconds each. Undebounced, one drag queues
+// dozens of renders the student then waits out. Trailing, not leading: the size
+// that matters is the one the pointer stopped at.
+function debounceMplResize() {
+  if (!window.mpl || !window.mpl.figure || window.mpl.figure.prototype.__trinketResizeDebounced) return;
+  var orig = window.mpl.figure.prototype.request_resize;
+  window.mpl.figure.prototype.request_resize = function(w, h) {
+    var fig = this;
+    var gen = mplGeneration;
+    clearTimeout(fig.__trinketResizeTimer);
+    fig.__trinketResizeTimer = setTimeout(function() {
+      fig.__trinketResizeTimer = null;
+      // Torn down while we waited. Drop it rather than send it: see
+      // mplGeneration. 150 ms is short, but "drag the corner, then hit Run"
+      // is an ordinary thing to do and lands inside it.
+      if (gen !== mplGeneration) return;
+      orig.call(fig, w, h);
+    }, 150);
+  };
+  window.mpl.figure.prototype.__trinketResizeDebounced = true;
+}
+
 function makeMplSocket(figureId) {
   return {
     binaryType : 'arraybuffer',
+    // mpl.js gates the resize on this and NOTHING else does: its ResizeObserver
+    // ends in `if (fig.ws.readyState == 1 && width != 0 && height != 0)` before
+    // calling request_resize. `undefined == 1` is false, so dragging the
+    // figure's corner never told Python anything -- the container grew, the
+    // canvas grew, and the figure kept rendering at its old size.
+    //
+    // Nothing else in mpl.js checks it, which is exactly why every OTHER event
+    // worked: send_message has no such gate, so clicks, motion and draws all
+    // arrived while resize alone was dropped. Pyodide's own main-thread
+    // MockJsWebSocket sets readyState = 1 in its onopen setter, which is why
+    // the main thread never had this bug.
+    readyState : 1,
     onopen     : null,
     onmessage  : null,
     close      : function() {},
@@ -4028,6 +4077,7 @@ function handleWorkerFigure(msg) {
 
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
     applyMplToolbarIcons(fig);
+    debounceMplResize();
     if (typeof socket.onopen === 'function') { socket.onopen(); }
 
     return;
@@ -4121,7 +4171,7 @@ function handleWorkerFigure(msg) {
 // marks the opt-in worker VPython path so the kernel can install the wheel.
 function runInWorker(program, files, serialized, decision) {
   workerRunError = null;
-  mplFigures = {};              // figures belong to a run; mpl.js itself persists
+  resetMplFigures();            // figures belong to a run; mpl.js itself persists
   ensureWorkerClient();
 
   // A VPython run starts from a FRESH INTERPRETER (spec V7a).
@@ -5109,7 +5159,7 @@ window.TrinketAPI = {
     $('#graphic-wrap').addClass('hide');
     $('#output-dragbar').addClass('hide');
     $('#console-wrap').css('height', '100%');
-    mplFigures = {};
+    resetMplFigures();
 
     // The plot-style panel is anchored to #graphic-wrap, which survives the
     // empty() above, and its backend points at the namespace clearMainThreadMemory()
