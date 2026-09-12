@@ -142,12 +142,40 @@ function throwawayPassword() {
 async function mint(request, baseURL, role) {
   assertMintable(baseURL);
   const { apiKey, projectId } = await firebaseConfig(request, baseURL);
-  const email    = fixtures.PREFIX + role + '-' + require('crypto').randomBytes(4).toString('hex') + '@example.com';
+  // Under the instructor posture (auth.requireApprovedAccount: true -- both
+  // productions) a brand-new account is REFUSED at first login unless its email
+  // is an admin email, an authority-approved instructor, or holds a course
+  // invitation (lib/util/instructorAuth.js isApprovedToSignup). A random
+  // per-run address is none of those, so SMOKE_INSTRUCTOR_EMAIL lets the
+  // teacher take a fixed address that the deploy's ADMIN_EMAILS names. The
+  // account is still created here and destroyed in teardown; only the string
+  // is deterministic. The student stays random: the instructor journey invites
+  // it before it ever signs in, which is the invitation arm of the same gate.
+  const fixed    = role === 'teacher' ? process.env.SMOKE_INSTRUCTOR_EMAIL : '';
+  const email    = fixed || (fixtures.PREFIX + role + '-' + require('crypto').randomBytes(4).toString('hex') + '@example.com');
   const password = throwawayPassword();
   const acct     = 'https://identitytoolkit.googleapis.com/v1/accounts:';
 
-  const up = await (await request.post(acct + 'signUp?key=' + apiKey,
+  let up = await (await request.post(acct + 'signUp?key=' + apiKey,
     { data: { email, password, returnSecureToken: true } })).json();
+  // A fixed address can collide with a previous run whose teardown never ran.
+  // Nobody knows that account's password, so remove it (admin, short-lived
+  // token -- the same privilege class as the emailVerified stamp below) and
+  // create it afresh. Random addresses never take this branch.
+  if (fixed && up.error && /EMAIL_EXISTS/.test(up.error.message || '')) {
+    const adminHdr = { Authorization: 'Bearer ' + gcloudToken(), 'x-goog-user-project': projectId };
+    const found = await (await request.post(
+      'https://identitytoolkit.googleapis.com/v1/projects/' + projectId + '/accounts:lookup',
+      { headers: adminHdr, data: { email: [email] } })).json();
+    const stale = ((found.users || [])[0] || {}).localId;
+    if (stale) {
+      await request.post('https://identitytoolkit.googleapis.com/v1/projects/' + projectId + '/accounts:delete',
+        { headers: adminHdr, data: { localId: stale } });
+      console.log('  ephemeral: removed stale ' + email + ' left by an earlier run');
+    }
+    up = await (await request.post(acct + 'signUp?key=' + apiKey,
+      { data: { email, password, returnSecureToken: true } })).json();
+  }
   if (!up.idToken) {
     throw new Error('signUp failed for ' + email + ': ' + JSON.stringify(up.error || up).slice(0, 200));
   }

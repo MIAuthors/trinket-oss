@@ -75,18 +75,29 @@ describe('worker figure save — the worker source', () => {
 // `type: 'figure'` message to the current run and drops the rest -- and a save
 // reply, by its nature, arrives after the run has settled and `current` is
 // null. The scoping is right for frame data and wrong for a file.
-describe('worker figure save — the run-scoping exemption', () => {
+describe('worker figure frames are scoped to the WORKER, not the run', () => {
   const src = fs.readFileSync(path.join(ROOT, 'public/js/embed/worker-client.js'), 'utf8');
   const branch = src.slice(src.indexOf("if (msg.type === 'figure')"),
                            src.indexOf("if (msg.type === 'scene-ops')"));
 
-  it('lets a save reply through after the run that made the figure has settled', () => {
-    expect(branch).toContain("msg.kind === 'save'");
-    expect(branch).toContain("msg.kind === 'save-error'");
+  // This block used to scope frames to `current`, the live RUN. settle() nulls
+  // `current` when a program ends, so every frame after that was dropped --
+  // and a matplotlib figure outlives its run. Pan, zoom, home and resize on a
+  // finished plot were all handled by Python and then discarded here.
+  it('does not scope frames to the current run', () => {
+    expect(branch).not.toMatch(/!current \|\| msg\.id !== current\.id/);
   });
 
-  it('still scopes ordinary figure frames to the current run', () => {
-    expect(branch).toMatch(/!current \|\| msg\.id !== current\.id/);
+  it('drops frames from a worker that has been replaced', () => {
+    expect(branch).toContain('e.target !== worker');
+  });
+
+  // Save needed its own exemption under run scoping (#252). Worker scoping
+  // subsumes it: a save reply is late for the same reason an interactive frame
+  // is, so the special case should be GONE rather than left as dead code.
+  it('needs no special case for save replies any more', () => {
+    expect(branch).not.toContain("msg.kind === 'save'");
+    expect(branch).not.toContain('isSave');
   });
 });
 
