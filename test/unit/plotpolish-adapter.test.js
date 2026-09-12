@@ -242,6 +242,42 @@ d('plot-style adapter — the re-run notice', () => {
     expect(win.$runs[0].data).toEqual({ action: 'code.run' });
   });
 
+  // Copilot on #281, and it was right: every assertion above dispatches the
+  // event by hand, so all of them pass even if the RENDERED button is not
+  // wired to it, or if plotpolish renames the event in a later release. That
+  // is the failure this whole PR exists to prevent -- the student is told to
+  // press a button that does nothing -- so it needs a test that presses the
+  // real button.
+  //
+  // The panel renders its full shadow DOM under jsdom (81 buttons, the two
+  // re-run surfaces, 13 range inputs), so no browser is needed for this.
+  it('runs when the STUDENT clicks the rendered button, not just on a hand-fired event', () => {
+    const win = boot();
+    addCanvas(win, null);
+    win.trinketPlotpolish.afterRun('worker');
+    const sr = pill(win).shadowRoot;
+
+    const stale = () => [...sr.querySelectorAll('button.stall.stale')];
+    expect(stale().length).toBeGreaterThan(0);
+    // Starts inert: there is nothing for a re-run to pick up yet.
+    expect(stale().every((b) => b.disabled)).toBe(true);
+
+    // Move a real control, the way a student would, so a change is pending.
+    const range = sr.querySelector('input[type=range]');
+    range.value = String(Number(range.value) + 4);
+    range.dispatchEvent(new win.Event('input', { bubbles: true }));
+    range.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const live = stale().filter((b) => !b.disabled);
+    expect(live.length).toBeGreaterThan(0);
+
+    live[0].click();
+
+    expect(win.$runs).toHaveLength(1);
+    expect(win.$runs[0].selector).toBe('#editor');
+    expect(win.$runs[0].name).toBe('trinket.code.run');
+  });
+
   it('does not run anything until the panel actually asks', () => {
     const win = boot();
     addCanvas(win, null);
