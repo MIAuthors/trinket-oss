@@ -139,12 +139,17 @@ describe('deep-link context survives a refused launch cookie (LTI 1.3)', () => {
     expect(ctx.split('.').length, 'a compact JWS').toBe(3);
     const payload = decodeJwtPayload(ctx);
     const json = JSON.stringify(payload);
-    expect(json).toContain(RETURN);
-    // The security property: a leaked picker URL must not be a bearer credential.
+    // The security properties. A leaked picker URL must not be a bearer credential
+    // (no identity in it), and it must not disclose the LMS's coordinates either:
+    // the return URL and the LMS's opaque `data` ride in an encrypted blob, so the
+    // URL reveals nothing beyond the token's type and expiry (review finding 2).
     expect(payload.sub).toBeUndefined();
     expect(payload.uid).toBeUndefined();
     expect(json).not.toContain(defaults.user.email);
     expect(json).not.toContain('dl-instructor-sub');
+    expect(json).not.toContain(RETURN);
+    expect(json).not.toContain('opaque-from-canvas');
+    expect(json).not.toContain('canvas-dl.test');
   });
 
   it('(b) framed, no cookie, valid ctx: offers "Continue in a new tab" — not /login, not the cookie guidance', async () => {
@@ -333,6 +338,7 @@ describe('deep-link context survives a refused launch cookie (LTI 1.1)', () => {
     expect(flow.lastResponse.headers.location).toMatch(/^\/lti\/deep-link\?ctx=/);
     const ctx = ctxFromLocation(flow.lastResponse.headers.location);
     expect(JSON.stringify(decodeJwtPayload(ctx))).not.toContain(consumer.secret);
+    expect(JSON.stringify(decodeJwtPayload(ctx))).not.toContain(RETURN11);
 
     const s = await server();
     const res = await s.inject({
@@ -440,5 +446,80 @@ describe('an explicit ctx names the deep-link request being answered', () => {
     });
     expect(again.payload).not.toContain('action="' + RETURN + '"');
     expect(again.payload).toMatch(/expired/i);
+  });
+});
+
+// Review finding 2: the ctx is bound to the user who launched. Without that it is
+// a transferable capability — any signed-in user who obtains the URL (history, a
+// proxy log, a screenshot) could answer that LMS request with their own content.
+// The binding is a keyed digest of the user id, so the token still carries no
+// identity; a different signed-in account is refused with a message that says so.
+describe('the ctx is bound to the launching user', () => {
+  beforeEach(() => { flow.cookies = {}; });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  // A DIFFERENT instructor's own first-party session.
+  async function otherSession() {
+    flow.cookies = {};
+    await flow.switchUser('user2');
+    const cookie = cookieHeader(flow.cookies.user2);
+    flow.cookies = {};
+    return { cookie };
+  }
+
+  it('(i) select: a ctx minted for user A, presented by signed-in user B, is refused', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const other = await otherSession();
+    const launch = await deepLinkLaunch13();                 // launched as A (the owner)
+    const ctx = ctxFromLocation(launch.headers.location);
+
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: other.cookie },
+      payload: { ctx, targetType: 'course', courseId: owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.payload).not.toContain('name="JWT"');
+    expect(res.payload).not.toContain(RETURN);
+    expect(res.payload).toMatch(/different account/i);
+  });
+
+  it('(ii) picker: the same ctx with B\'s session is refused, not the picker', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const other = await otherSession();
+    const launch = await deepLinkLaunch13();
+    const s = await server();
+    const res = await s.inject({
+      method: 'GET', url: launch.headers.location,
+      headers: { 'sec-fetch-dest': 'document', cookie: other.cookie }
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.payload).not.toMatch(/name="ctx"/);
+    expect(res.payload).not.toContain(owner.course.name);
+    expect(res.payload).toMatch(/different account/i);
+  });
+
+  it('(vi) the launching user is still let through on both steps', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const launch = await deepLinkLaunch13();
+    const ctx = ctxFromLocation(launch.headers.location);
+    const s = await server();
+    const picker = await s.inject({
+      method: 'GET', url: launch.headers.location,
+      headers: { 'sec-fetch-dest': 'document', cookie: owner.cookie }
+    });
+    expect(picker.statusCode).toBe(200);
+    expect(picker.payload).toContain('value="' + ctx + '"');
+    const sel = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: nextCookie(picker, owner.cookie) },
+      payload: { ctx, targetType: 'course', courseId: owner.course.id, title: 'C' }
+    });
+    expect(sel.statusCode).toBe(200);
+    expect(sel.payload).toContain('action="' + RETURN + '"');
   });
 });
