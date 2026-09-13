@@ -57,6 +57,13 @@ function cookieHeader(setCookie) {
   return (setCookie || []).map((c) => c.split(';')[0]).join('; ');
 }
 
+// yar keeps a session that fits under maxCookieSize IN the cookie (only larger
+// ones go to the cache), so a request that changes the session hands the new
+// state back in set-cookie. Follow it the way a browser would.
+function nextCookie(res, prev) {
+  return res.headers['set-cookie'] ? cookieHeader(res.headers['set-cookie']) : prev;
+}
+
 function decodeJwtPayload(token) {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
 }
@@ -404,13 +411,13 @@ describe('an explicit ctx names the deep-link request being answered', () => {
   it('a picker rendered from ctx updates the session, so a ctx-less select in that tab agrees', async () => {
     const t = await twoLaunches();
     const s = await server();
-    await s.inject({
+    const picker = await s.inject({
       method: 'GET', url: '/lti/deep-link?ctx=' + encodeURIComponent(t.ctxB),
       headers: { 'sec-fetch-dest': 'document', cookie: t.cookieA }
     });
     const res = await s.inject({
       method: 'POST', url: '/lti/deep-link/select',
-      headers: { cookie: t.cookieA },
+      headers: { cookie: nextCookie(picker, t.cookieA) },
       payload: { targetType: 'course', courseId: t.owner.course.id, title: 'C' }
     });
     expect(res.statusCode).toBe(200);
@@ -428,7 +435,7 @@ describe('an explicit ctx names the deep-link request being answered', () => {
     expect(first.payload).toContain('action="' + RETURN + '"');
     const again = await s.inject({
       method: 'POST', url: '/lti/deep-link/select',
-      headers: { cookie: t.cookieA },
+      headers: { cookie: nextCookie(first, t.cookieA) },
       payload: { targetType: 'course', courseId: t.owner.course.id, title: 'C' }
     });
     expect(again.payload).not.toContain('action="' + RETURN + '"');
