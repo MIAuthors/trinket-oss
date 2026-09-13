@@ -95,8 +95,10 @@ async function ownerSession() {
   return { course, cookie: cookieHeader(cookies) };
 }
 
-// A 1.3 deep-linking launch (Canvas link_selection). Returns the launch response.
-async function deepLinkLaunch13() {
+// A 1.3 deep-linking launch (Canvas link_selection by default). Returns the launch
+// response; its set-cookie is the launch session, its Location carries the ctx.
+async function deepLinkLaunch13(opts) {
+  opts = opts || {};
   const nonce = 'n-' + Math.random().toString(36).slice(2);
   const state = ltiState.sign({ nonce, iss: ISS, clientId: CID, target: config.url + '/lti/launch' });
   const claims = { iss: ISS, sub: 'dl-instructor-sub', nonce, email: defaults.user.email, name: 'Test User' };
@@ -106,8 +108,9 @@ async function deepLinkLaunch13() {
   claims[LTI + 'roles']         = ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor'];
   claims[LTI + 'tool_platform'] = { product_family_code: 'canvas' };
   claims[DL + 'deep_linking_settings'] = {
-    deep_link_return_url: RETURN, data: 'opaque-from-canvas',
-    accept_types: ['ltiResourceLink'], accept_multiple: true
+    deep_link_return_url: opts.returnUrl || RETURN, data: 'opaque-from-canvas',
+    accept_types: ['ltiResourceLink'],
+    accept_multiple: (opts.acceptMultiple === undefined) ? true : opts.acceptMultiple
   };
   vi.spyOn(ltiVerify, 'verifyLaunchToken').mockImplementation(() => Promise.resolve(claims));
   flow.cookies = {};
@@ -334,5 +337,101 @@ describe('deep-link context survives a refused launch cookie (LTI 1.1)', () => {
     expect(res.payload).toContain(RETURN11);
     expect(res.payload).toContain('oauth_signature');
     expect(res.payload).toContain('trinket_assignment');
+  });
+});
+
+// Review finding 1: a VALID explicit ctx must name the request being answered.
+// The session copy of the context (ltiDeepLink) is never cleared by a launch in a
+// DIFFERENT session — the instructor's own top-level tab keeps whatever the last
+// picker render stored — so "session first" answers an EARLIER launch when a
+// second one happens. Two launches A (content mode) then B (assignment mode):
+// B's ctx must render B's picker and return to B's URL wherever it is presented.
+describe('an explicit ctx names the deep-link request being answered', () => {
+  const RETURN_B = 'https://canvas-dl.test/courses/7/deep_linking_response_B';
+  beforeEach(() => { flow.cookies = {}; });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  async function twoLaunches() {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const a = await deepLinkLaunch13();                                              // content mode
+    const b = await deepLinkLaunch13({ returnUrl: RETURN_B, acceptMultiple: false });  // assignment mode
+    return {
+      owner,
+      cookieA: cookieHeader(a.headers['set-cookie']), ctxA: ctxFromLocation(a.headers.location),
+      cookieB: cookieHeader(b.headers['set-cookie']), ctxB: ctxFromLocation(b.headers.location)
+    };
+  }
+
+  it('picker: B\'s ctx presented in a session still holding A renders B\'s picker', async () => {
+    const t = await twoLaunches();
+    const s = await server();
+    const res = await s.inject({
+      method: 'GET', url: '/lti/deep-link?ctx=' + encodeURIComponent(t.ctxB),
+      headers: { 'sec-fetch-dest': 'document', cookie: t.cookieA }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toContain('Add a Trinket Assignment');
+    expect(res.payload).not.toContain('Add Trinket Content');
+  });
+
+  it('select: B\'s ctx presented in a session still holding A returns to B', async () => {
+    const t = await twoLaunches();
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: t.cookieA },
+      payload: { ctx: t.ctxB, targetType: 'course', courseId: t.owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode, String(res.payload).slice(0, 300)).toBe(200);
+    expect(res.payload).toContain(RETURN_B);
+    expect(res.payload).not.toContain('action="' + RETURN + '"');
+  });
+
+  it('select: A\'s still-valid ctx answers A even from B\'s session', async () => {
+    const t = await twoLaunches();
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: t.cookieB },
+      payload: { ctx: t.ctxA, targetType: 'course', courseId: t.owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toContain('action="' + RETURN + '"');
+    expect(res.payload).not.toContain(RETURN_B);
+  });
+
+  it('a picker rendered from ctx updates the session, so a ctx-less select in that tab agrees', async () => {
+    const t = await twoLaunches();
+    const s = await server();
+    await s.inject({
+      method: 'GET', url: '/lti/deep-link?ctx=' + encodeURIComponent(t.ctxB),
+      headers: { 'sec-fetch-dest': 'document', cookie: t.cookieA }
+    });
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: t.cookieA },
+      payload: { targetType: 'course', courseId: t.owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toContain(RETURN_B);
+  });
+
+  it('a completed select clears the session context', async () => {
+    const t = await twoLaunches();
+    const s = await server();
+    const first = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: t.cookieA },
+      payload: { targetType: 'course', courseId: t.owner.course.id, title: 'C' }
+    });
+    expect(first.payload).toContain('action="' + RETURN + '"');
+    const again = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { cookie: t.cookieA },
+      payload: { targetType: 'course', courseId: t.owner.course.id, title: 'C' }
+    });
+    expect(again.payload).not.toContain('action="' + RETURN + '"');
+    expect(again.payload).toMatch(/expired/i);
   });
 });
