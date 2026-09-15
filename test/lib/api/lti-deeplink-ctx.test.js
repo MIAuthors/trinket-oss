@@ -23,6 +23,7 @@ const ltiKeys     = require('../../../lib/util/ltiKeys');
 const LtiPlatform = require('../../../lib/models/ltiPlatform');
 const LtiConsumer = require('../../../lib/models/ltiConsumer');
 const v11         = require('../../../lib/util/lti11Verify');
+const lti11DeepLinking = require('../../../lib/util/lti11DeepLinking');
 const publicHostname = require('../../../lib/util/publicHostname');
 const crypto      = require('crypto');
 
@@ -521,5 +522,165 @@ describe('the ctx is bound to the launching user', () => {
     });
     expect(sel.statusCode).toBe(200);
     expect(sel.payload).toContain('action="' + RETURN + '"');
+  });
+});
+
+// Live Canvas result: the cookie-blocked flow worked up to the last step and then
+// stalled. Our auto-submit form posted the content item to Canvas's return URL in
+// the NEW tab; Canvas's success page does `window.parent || window.opener` — in a
+// top-level tab window.parent is the window itself, so it posts to itself and the
+// dialog in the LMS never closes. The return POST has to happen INSIDE the frame.
+//
+// So the continue page (in the frame) opens the tab and LISTENS; the picker in the
+// tab carries a relay id; select, reached with that id from a top-level request,
+// renders a relay page that hands the server-built form fields back to the frame
+// (postMessage to window.opener, BroadcastChannel as the fallback), and the frame
+// submits them. The fields are exactly what the auto-submit form would have posted:
+// the LMS validates the OAuth signature over them (1.1), nothing is recomputed.
+describe('relaying the LMS return into the frame', () => {
+  beforeEach(() => { flow.cookies = {}; });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const RELAY = () => crypto.randomBytes(12).toString('base64url');
+  const relayJson = (html) => {
+    const m = /<script type="application\/json" id="lti-dl-return">([\s\S]*?)<\/script>/.exec(html);
+    return m ? JSON.parse(m[1]) : null;
+  };
+
+  it('(d) the continue page carries a relay id and listens for the return, origin- and id-checked', async () => {
+    await seedPlatform();
+    const launch = await deepLinkLaunch13();
+    const s = await server();
+    const res = await s.inject({
+      method: 'GET', url: launch.headers.location,
+      headers: { 'sec-fetch-dest': 'iframe' }
+    });
+    expect(res.statusCode).toBe(200);
+    const m = /relay=([A-Za-z0-9_-]{8,64})/.exec(res.payload);
+    expect(m, 'continue link carries a relay id').toBeTruthy();
+    const id = m[1];
+    expect(res.payload).toContain("addEventListener('message'");
+    expect(res.payload).toContain('location.origin');
+    expect(res.payload).toContain("'lti-dl-return'");
+    expect(res.payload).toContain("BroadcastChannel('lti-dl-return-" + id + "')");
+    expect(res.payload).toMatch(/finish adding the link/i);
+  });
+
+  it('(e) the picker threads the relay id into every select form, like ctx', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const launch = await deepLinkLaunch13();
+    const relay = RELAY();
+    const s = await server();
+    const res = await s.inject({
+      method: 'GET', url: launch.headers.location + '&relay=' + relay,
+      headers: { 'sec-fetch-dest': 'document', cookie: owner.cookie }
+    });
+    expect(res.statusCode).toBe(200);
+    const forms = (res.payload.match(/action="\/lti\/deep-link\/select"/g) || []).length;
+    const relays = (res.payload.match(new RegExp('name="relay" value="' + relay + '"', 'g')) || []).length;
+    expect(forms).toBeGreaterThan(0);
+    expect(relays).toBe(forms);
+  });
+
+  it('(a) 1.3: select with relay from a top-level request renders the relay page, not the auto-submit form', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const launch = await deepLinkLaunch13();
+    const ctx = ctxFromLocation(launch.headers.location);
+    const relay = RELAY();
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { 'sec-fetch-dest': 'document', cookie: owner.cookie },
+      payload: { ctx, relay, targetType: 'course', courseId: owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode, String(res.payload).slice(0, 300)).toBe(200);
+    expect(res.payload).not.toContain('id="dl"');
+    expect(res.payload).toContain('window.opener');
+    expect(res.payload).toContain("BroadcastChannel('lti-dl-return-' + ");
+    const msg = relayJson(res.payload);
+    expect(msg, 'relay payload JSON').toBeTruthy();
+    expect(msg.type).toBe('lti-dl-return');
+    expect(msg.id).toBe(relay);
+    expect(msg.url).toBe(RETURN);
+    expect(Object.keys(msg.fields)).toEqual(['JWT']);
+    const dl = decodeJwtPayload(msg.fields.JWT);
+    expect(dl[LTI + 'message_type']).toBe('LtiDeepLinkingResponse');
+    expect(dl[DL + 'content_items'][0].custom.trinket_course).toBe(String(owner.course.id));
+  });
+
+  it('(b) select with relay but FRAMED still returns the auto-submit form (the session path)', async () => {
+    await seedPlatform();
+    const owner = await ownerSession();
+    const launch = await deepLinkLaunch13();
+    const ctx = ctxFromLocation(launch.headers.location);
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: '/lti/deep-link/select',
+      headers: { 'sec-fetch-dest': 'iframe', cookie: owner.cookie },
+      payload: { ctx, relay: RELAY(), targetType: 'course', courseId: owner.course.id, title: 'C' }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toContain('id="dl"');
+    expect(res.payload).toContain('name="JWT"');
+    expect(res.payload).toContain('action="' + RETURN + '"');
+    expect(relayJson(res.payload)).toBeNull();
+  });
+
+  it('(a) 1.1: the relay page carries every field the OAuth-signed return form would have', async () => {
+    const AUTHORITY = 'localhost';
+    const PATH = '/lti11/launch';
+    const RETURN11 = 'https://canvas.example/courses/1/external_content/success/external_tool_dialog';
+    const serverUrl = () => v11.launchUrlFromRequest(
+      { headers: { host: AUTHORITY }, info: { hostname: AUTHORITY }, path: PATH },
+      config.app.url, publicHostname.resolve);
+    const owner = await ownerSession();
+    const consumer = new LtiConsumer({ key: 'dlrelay-' + Math.random().toString(36).slice(2, 10),
+                                       secret: 'shhh-' + Math.random().toString(36).slice(2), name: 'relay test' });
+    await consumer.save();
+    const p = {
+      lti_message_type: 'ContentItemSelectionRequest', lti_version: 'LTI-1p0',
+      user_id: 'instructor-relay-1', roles: 'Instructor',
+      lis_person_contact_email_primary: defaults.user.email, lis_person_name_full: 'Test User',
+      content_item_return_url: RETURN11, accept_multiple: 'false', data: 'lms-opaque-11',
+      oauth_consumer_key: consumer.key, oauth_nonce: 'dl-' + Math.random().toString(36).slice(2),
+      oauth_timestamp: String(Math.floor(Date.now() / 1000)),
+      oauth_signature_method: 'HMAC-SHA1', oauth_version: '1.0'
+    };
+    p.oauth_signature = v11.sign('POST', serverUrl(), p, consumer.secret);
+    flow.cookies = {};
+    await flow._inject('POST', 'http://' + AUTHORITY + PATH, p);
+    const ctx = ctxFromLocation(flow.lastResponse.headers.location);
+    expect(ctx).toBeTruthy();
+
+    const relay = RELAY();
+    const s = await server();
+    const res = await s.inject({
+      method: 'POST', url: 'http://' + AUTHORITY + '/lti/deep-link/select',
+      headers: { 'sec-fetch-dest': 'document', cookie: owner.cookie },
+      payload: { ctx, relay, targetType: 'assignment', courseId: owner.course.id, targetId: 'material-1', title: 'HW 1' }
+    });
+    expect(res.statusCode, String(res.payload).slice(0, 300)).toBe(200);
+    expect(res.payload).not.toContain('id="dl"');
+    const msg = relayJson(res.payload);
+    expect(msg).toBeTruthy();
+    expect(msg.id).toBe(relay);
+    expect(msg.url).toBe(RETURN11);
+    // The same field set the server-side builder produces — the LMS verifies the
+    // OAuth signature over exactly these, so none may be missing or renamed.
+    const reference = lti11DeepLinking.buildReturnForm({
+      returnUrl: RETURN11, consumerKey: consumer.key, secret: consumer.secret,
+      contentItems: [lti11DeepLinking.assignmentContentItem({ courseId: owner.course.id, materialId: 'material-1', title: 'HW 1', scoreMaximum: 100 })],
+      data: 'lms-opaque-11'
+    });
+    expect(Object.keys(msg.fields).sort()).toEqual(Object.keys(reference).sort());
+    expect(msg.fields.lti_message_type).toBe('ContentItemSelection');
+    expect(msg.fields.oauth_consumer_key).toBe(consumer.key);
+    expect(msg.fields.data).toBe('lms-opaque-11');
+    expect(msg.fields.content_items).toContain('trinket_assignment');
+    // ...and the signature is over what is carried: verify it ourselves.
+    expect(v11.sign('POST', RETURN11, Object.assign({}, msg.fields, { oauth_signature: undefined }), consumer.secret))
+      .toBe(msg.fields.oauth_signature);
   });
 });
