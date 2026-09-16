@@ -814,6 +814,13 @@ function ensurePyodide() {
           .catch(function(e) {
             // A failed install must not stop the runtime booting: the student
             // loses typeset output, not their trinket.
+            //
+            // One exception, worth naming because the sentence above overstates
+            // it: `display` is installed by _trinket_display.install, which is
+            // inside the then() above, so with no helper a `display(...)` call
+            // raises NameError while a bare expression is merely silent. The
+            // worker behaves identically (see ensureDisplay in
+            // pyodide-worker.js, which carries the same contract in full).
             try { console.warn('[mathOutput] display hook unavailable:', e); } catch (e2) {}
           })
       : Promise.resolve()

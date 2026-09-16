@@ -223,8 +223,22 @@
         .then(function() { displayReady = true; })
         .catch(function(e) {
           // Never cache a failed load (one transient fetch error would poison
-          // every later run of this worker), and never let it stop the run: the
-          // student loses typeset output, not their program.
+          // every later run of this worker), and never let it stop the run.
+          //
+          // THE FAILURE CONTRACT, stated exactly, because "it degrades
+          // gracefully" is not true of both halves: with no helper, a bare
+          // expression is silent and the program runs on, but `display()` is
+          // never installed as a builtin and so raises NameError at that line.
+          // Verified by pointing the URL at a 404 and running it.
+          //
+          // That is PARITY, not a worker defect: the main thread's install
+          // does the same thing in the same situation, and its console output
+          // is identical (also verified by running, on ?runtime=main). A no-op
+          // `display` here would fix the symptom on one runtime and create the
+          // very divergence this feature exists to remove -- and it would hide
+          // a broken deploy behind silently-missing output, which is worse than
+          // a NameError naming the line. If that trade is ever reconsidered it
+          // belongs in both runtimes at once, not here.
           displayLoading = null;
           displayReady = false;
           try { console.warn('[mathOutput] display hook unavailable:', e); } catch (e2) {}
