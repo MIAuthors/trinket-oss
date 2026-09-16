@@ -45,6 +45,16 @@
       if (msg.type === 'stdout') { if (opts.onStdout) opts.onStdout(msg.text); return; }
       if (msg.type === 'stderr') { if (opts.onStderr) opts.onStderr(msg.text); return; }
 
+      // One typeset result (features.mathOutput). Streaming and UNSCOPED, like
+      // stdout and unlike `figure`, because that is what keeps it ordered: the
+      // page queues cards and program text in the same buffer, so the only thing
+      // that preserves program order is delivering them in the order the worker
+      // posted them. A run-scoped check would drop a card the moment settle()
+      // nulled `current`, which is exactly the bug the figure comment above
+      // describes. A replaced worker can therefore emit a late card, the same
+      // way it can emit late stdout.
+      if (msg.type === 'rich')   { if (opts.onRich)   opts.onRich(msg.json); return; }
+
       // input() cannot block in a worker — there is no SharedArrayBuffer in an
       // embed, so Atomics.wait is unavailable. The worker suspends on a promise
       // and we answer it here. Scoped to the current run so a prompt from a
@@ -152,7 +162,11 @@
         indexURL: opts.indexURL,
         // The page owns the variable-explorer helper source; the worker runs it
         // verbatim so the two runtimes cannot show different variables.
-        varsHelper: opts.varsHelper || ''
+        varsHelper: opts.varsHelper || '',
+        // The typeset-math helper's URL, empty when features.mathOutput is off.
+        // The page owns the flag and the cache-prefixed asset path; the worker
+        // fetches what it is given and never decides either.
+        displayUrl: opts.displayUrl || ''
       });
       return worker;
     }

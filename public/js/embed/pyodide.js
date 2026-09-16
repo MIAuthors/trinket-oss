@@ -3521,11 +3521,19 @@ function ensureWorkerClient() {
     indexURL   : PYODIDE_INDEX_URL,
     transformUrl : ASYNC_TRANSFORM_URL,
     varsHelper   : VARS_HELPER,
+    // features.mathOutput: empty when the flag is off, and the worker then
+    // fetches nothing and installs nothing. The URL is cache-prefixed here for
+    // the same reason every other asset is.
+    displayUrl   : mathOutputEnabled() ? TRINKET_DISPLAY_URL : '',
     // Completes the "Loading Python (Pyodide)… " line once the worker's Pyodide
     // has booted (#27). closeRuntimeLine() is a no-op unless a line is actually
     // open, so a boot nobody announced cannot print a stray "ready".
     onReady    : function() { closeRuntimeLine(); },
     onStdout   : function(text) { writeStream(text); },
+    // Straight into the main thread's own sink, so a worker card and a
+    // main-thread card go through exactly one code path from here on: same
+    // payload parsing, same queue, same renderer, same line cap.
+    onRich     : function(json) { window.__trinket_rich(json); },
     onFigure : function(msg) { handleWorkerFigure(msg); },
     onSceneOps : function(msg) { handleWorkerSceneOps(msg); },
     onInputRequest : function(prompt) {

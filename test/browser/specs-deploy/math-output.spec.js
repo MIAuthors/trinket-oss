@@ -8,8 +8,10 @@ const { test, expect } = require('@playwright/test');
 // needs Pyodide, SymPy and KaTeX all actually loading.
 //
 // Skips unless features.mathOutput is on, so it is inert on deploys that have
-// not enabled it — and skips on worker deploys, where slice 1 does nothing by
-// design (Task 8 follows #215).
+// not enabled it. It NO LONGER skips on worker deploys: #288 implemented the
+// worker half, and this spec is the positive control for it. Before #288 the
+// skip was hiding the one place the feature was broken — flag-on and flag-off
+// produced identical output there, so nothing could tell.
 async function editorRun(page, path, code) {
   await page.goto(path);
   await expect(page.locator('.ace_editor').first()).toBeVisible();
@@ -38,11 +40,16 @@ test.describe('typeset SymPy output', () => {
     // mathOutput was demonstrably ON, because the detection probed the wrong
     // object. "5 skipped" read as fine. Printing the reason makes a broken
     // detector look different from a feature that is simply off.
-    if (!cfg.math)   console.log('  [math-output] SKIP: mathOutput is off on this deploy');
-    if (cfg.worker)  console.log('  [math-output] SKIP: worker deploy — slice 1 is main-thread (Task 8 follows #215)');
-    if (cfg.math && !cfg.worker) console.log('  [math-output] RUNNING: mathOutput on, main-thread deploy');
+    if (!cfg.math) console.log('  [math-output] SKIP: mathOutput is off on this deploy');
+    // The runtime is NOT a skip condition any more, but it is still worth
+    // naming: the two runtimes reach the same cards by different routes (a
+    // direct JS call on the page, a posted `rich` message from the worker), so
+    // a failure reads very differently depending on which one ran.
+    if (cfg.math) {
+      console.log('  [math-output] RUNNING: mathOutput on, ' +
+                  (cfg.worker ? 'WORKER' : 'main-thread') + ' deploy');
+    }
     test.skip(!cfg.math, 'features.mathOutput is off on this deploy');
-    test.skip(cfg.worker, 'slice 1 is main-thread only; worker parity follows #215');
   });
 
   test('a bare SymPy expression renders as mathematics', async ({ page }) => {
@@ -59,12 +66,43 @@ test.describe('typeset SymPy output', () => {
       'a bare SymPy expression should typeset, not print a repr')
       .toBeVisible({ timeout: 180_000 });
 
-    // Interleaving is the point: math must appear in PROGRAM order.
+    // Interleaving is the point: the card must appear BETWEEN the two prints,
+    // not merely somewhere on the page. Asserting only BEFORE < AFTER passes
+    // even if the card lands at the very end, which is the specific way the
+    // worker could have failed: `rich` and `stdout` are separate messages there
+    // and stdout is batched, so program order is a property to prove, not to
+    // assume. The card carries an echo of the source line, which is what makes
+    // its position findable in the console text.
     const text = await consoleText(page);
     expect(text).toContain('BEFORE');
     expect(text).toContain('AFTER');
-    expect(text.indexOf('BEFORE'), 'math must not be hoisted out of program order')
+    const card = text.indexOf('Integral(sqrt(1/x), x)');
+    expect(card, 'the card should echo the source line it came from').toBeGreaterThan(-1);
+    expect(card, 'the card must not be hoisted above the print that precedes it')
+      .toBeGreaterThan(text.indexOf('BEFORE'));
+    expect(card, 'the card must not sink below the print that follows it')
       .toBeLessThan(text.indexOf('AFTER'));
+  });
+
+  test('display() typesets instead of raising (#288)', async ({ page }) => {
+    // The documented escape hatch, and the half that FAILED LOUDLY on the
+    // worker before #288: `display` is installed as a builtin by
+    // _trinket_display.install(), which only the main thread called, so a
+    // worker run raised NameError and halted the program at that line.
+    await editorRun(page, '/embed/python3',
+      'from sympy import symbols, Integral, sqrt\n' +
+      'x = symbols("x")\n' +
+      'display(Integral(sqrt(1/x), x))\n' +
+      'print("AFTER")\n');
+
+    await expect(page.locator('#console-output .katex').first(),
+      'display() should typeset its argument')
+      .toBeVisible({ timeout: 180_000 });
+
+    const text = await consoleText(page);
+    expect(text, 'display() must not raise').not.toContain('NameError');
+    expect(text, 'the program must keep running past the display() call')
+      .toContain('AFTER');
   });
 
   test('a non-typesettable value stays silent, as a script does', async ({ page }) => {

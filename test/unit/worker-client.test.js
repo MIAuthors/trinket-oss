@@ -30,7 +30,7 @@ async function bootedClient(extra) {
 
 function newClient(extra) {
   const { FakeWorker, made } = fakeWorkerFactory();
-  const events = { stdout: [], stderr: [], errors: [], figures: [] };
+  const events = { stdout: [], stderr: [], errors: [], figures: [], rich: [] };
   const client = createWorkerClient(Object.assign({
     workerUrl: '/js/embed/pyodide-worker.js',
     pyodideUrl: 'https://cdn/pyodide.js',
@@ -38,7 +38,8 @@ function newClient(extra) {
     onStdout: (t) => events.stdout.push(t),
     onStderr: (t) => events.stderr.push(t),
     onError:  (t) => events.errors.push(t),
-    onFigure: (m) => events.figures.push(m)
+    onFigure: (m) => events.figures.push(m),
+    onRich:   (j) => events.rich.push(j)
   }, extra || {}));
   return { client, made, events };
 }
@@ -443,5 +444,51 @@ describe('variable snapshot over the channel', () => {
     await tick();
     client.stop();
     await expect(client.snapshot()).resolves.toEqual([]);
+  });
+});
+
+// --- typeset math output (#288) ---------------------------------------------
+// The worker's half of features.mathOutput. The page owns the asset URL and the
+// renderer; the client's whole job is to carry the URL in and the payload back.
+describe('createWorkerClient and the `rich` message', () => {
+  it('carries the display helper URL on init, so the worker never decides the flag', () => {
+    const { made } = newClient({ displayUrl: '/cache-prefix-1/js/embed/_trinket_display.py' });
+    expect(made[0].posted[0].displayUrl).toBe('/cache-prefix-1/js/embed/_trinket_display.py');
+  });
+
+  it('sends an EMPTY displayUrl when the page does not supply one', () => {
+    // features.mathOutput off. An empty string is what stops the worker
+    // fetching anything at all, so this is the off switch, not a default.
+    const { made } = newClient();
+    expect(made[0].posted[0].displayUrl).toBe('');
+  });
+
+  it('forwards a rich payload to onRich as the RAW json string', async () => {
+    // Raw, not parsed: the page hands it straight to window.__trinket_rich,
+    // which is the same entry point the main thread's Python calls. Parsing
+    // here would mean two parsers and two ways to fail.
+    const { made, events } = await bootedClient();
+    made[0].onmessage({ data: { type: 'rich', id: 'run-1', json: '{"kind":"math","latex":"x"}' } });
+    expect(events.rich).toEqual(['{"kind":"math","latex":"x"}']);
+  });
+
+  it('delivers a rich payload with NO run in flight (unscoped, like stdout)', async () => {
+    // This is the load-bearing property, and it is why `rich` sits beside
+    // stdout rather than beside `figure`. The page queues cards and program
+    // text in ONE buffer, so program order survives only if both are delivered
+    // in the order the worker posted them. A run-scoped check would drop a card
+    // the moment settle() nulled `current` — the bug the figure path already
+    // had and fixed.
+    const { made, events } = await bootedClient();
+    made[0].onmessage({ data: { type: 'rich', id: 'run-stale', json: '{"kind":"math"}' } });
+    expect(events.rich).toEqual(['{"kind":"math"}']);
+  });
+
+  it('does not require an onRich callback (an older page simply ignores it)', async () => {
+    const { FakeWorker, made } = fakeWorkerFactory();
+    createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
+    made[0].onmessage({ data: { type: 'ready', v: 1 } });
+    await tick();
+    expect(() => made[0].onmessage({ data: { type: 'rich', json: '{}' } })).not.toThrow();
   });
 });
