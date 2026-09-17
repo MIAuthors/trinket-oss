@@ -201,6 +201,21 @@
         })
         .then(function(src) {
           pyodide.FS.writeFile('_trinket_display.py', src);
+          // Runs in a THROWAWAY namespace, not the student's globals.
+          //
+          // The main thread installs the same way but deletes its temporaries
+          // afterwards, which is safe THERE because it installs at boot, before
+          // any student code has run. Here the install is lazy, so it can land
+          // after the namespace already holds student state: a first attempt
+          // that failed on a transient fetch is retried on the next run, and the
+          // worker's interpreter persists across runs. A `del _d, _json, _js,
+          // _trinket_sink` would then remove a student's own `_json` rather than
+          // ours. An isolated namespace makes the whole class impossible instead
+          // of narrowing it -- nothing to overwrite and nothing to delete.
+          //
+          // install() mutates the module and builtins, so it does not need to
+          // see or touch the student's globals at all.
+          var ns = pyodide.toPy({});
           return pyodide.runPythonAsync([
             'import _trinket_display as _d',
             'import json as _json',
@@ -209,16 +224,15 @@
             // needs destroying.
             //
             // dumps and the JS callback are bound as DEFAULT ARGUMENTS, not read
-            // from globals: the del below removes the module names, and a body
-            // that resolved them at call time would raise NameError on the first
-            // displayed expression.
+            // from globals: this namespace is discarded the moment the install
+            // returns, and a body that resolved them at call time would raise
+            // NameError on the first displayed expression. The sink itself
+            // survives because the module holds the reference.
             'def _trinket_sink(p, _dumps=_json.dumps, _rich=_js.__trinket_rich):',
             '    _rich(_dumps(p))',
-            '_d.install(_trinket_sink)',
-            // The runner's own temporaries do not belong in the student's
-            // namespace; the sink survives because the module holds it.
-            'del _d, _json, _js, _trinket_sink'
-          ].join('\n'));
+            '_d.install(_trinket_sink)'
+          ].join('\n'), { globals: ns })
+            .finally(function() { try { ns.destroy(); } catch (e) {} });
         })
         .then(function() { displayReady = true; })
         .catch(function(e) {
