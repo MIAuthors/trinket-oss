@@ -108,6 +108,20 @@ describe('ltiNotifySubmission.notifyOnCoordinates', () => {
     expect(posted11.length).toBe(0);
   });
 
+  it('uses the placement it resolved by resource_link_id, not an ambiguous re-lookup', async () => {
+    // A material can have a dead duplicate placement alongside the live one.
+    // The late-report path already knows the exact placement, so it must not
+    // hand the question back to the (course, material) lookup.
+    stubLinkByLink(assignmentLink);
+    stubSubmissions([submitted]);
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, 'sid-late');
+
+    expect(posted11.length).toBe(1);
+    expect(LtiResourceLink.findAssignmentLink,
+      'the exact placement was known — no re-lookup').not.toHaveBeenCalled();
+  });
+
   it('never throws — a launch must not fail because gradebook bookkeeping did', async () => {
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation(() => { throw new Error('firestore down'); });
     stubSubmissions([submitted]);
