@@ -3759,6 +3759,14 @@ var MPL_TOOLBAR_ICONS = {
 // workaround, which is parity in the wrong direction.
 window.__trinketMplFigureShown = function(fig) {
   try { applyMplToolbarTitles(fig); } catch (e) {}
+  // The corner drag on main was undebounced: mpl.js's ResizeObserver fires once
+  // per animation frame during a drag and each request is a full render plus a
+  // PNG encode. Measured 12 outbound resizes, 14 frames and 14 Python draws for
+  // one 12-step drag, against 1/1/1 on the worker, which has had the debounce
+  // since it was armed in handleWorkerFigure. debounceMplResize patches the
+  // shared mpl.figure prototype and is idempotent, so arming it here -- once a
+  // figure exists, which is when window.mpl is guaranteed -- is enough.
+  try { debounceMplResize(); } catch (e) {}
 };
 
 // Idempotent: `button.title ||` leaves an existing tooltip alone, so this is
