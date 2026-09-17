@@ -121,7 +121,7 @@ One channel, typed messages, versioned with a `v` field so a stale cached worker
 
 | Type | Payload | Notes |
 |---|---|---|
-| `init` | `{ v, pyodideUrl, packages, varsHelper, displayUrl }` | once per worker. `displayUrl` is `_trinket_display.py` for `features.mathOutput` (#288) — empty string when the flag is off, and the worker then fetches nothing |
+| `init` | `{ v, pyodideUrl, indexURL, varsHelper, displayUrl }` | once per worker. `packages` was in this row and has never been sent — the implementation posts `indexURL` (`worker-client.js`), and packages are loaded per run from the program's imports. `displayUrl` is `_trinket_display.py` for `features.mathOutput` (#288) — empty string when the flag is off, and the worker then fetches nothing |
 | `run` | `{ id, source, files }` | `id` correlates every reply |
 | `stdin-reply` | `{ id, value }` | answers `input-request` |
 | `mpl-event` | `{ figureId, event }` | mouse/zoom into webagg |

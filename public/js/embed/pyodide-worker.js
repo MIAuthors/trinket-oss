@@ -215,6 +215,17 @@
           //
           // install() mutates the module and builtins, so it does not need to
           // see or touch the student's globals at all.
+          // A note for whoever adds an import to _trinket_display.py: every
+          // module it pulls in (ast, builtins, linecache, sys) and the json
+          // below is ALREADY in sys.modules from Pyodide's own boot, so these
+          // imports are dict hits and never touch the filesystem. That matters
+          // because msg.files has written the student's .py files by now and
+          // sys.path[0] is '' — a trinket shipping its own linecache.py could
+          // otherwise be imported here. Measured, not assumed: with a student
+          // `linecache.py` whose body is `BOOM = 1/0`, and separately with a
+          // student `json.py`, the install still succeeds and the card still
+          // renders. If an import is ever added that Pyodide does NOT preload,
+          // move ensureDisplay ahead of the msg.files writes in run().
           var ns = pyodide.toPy({});
           return pyodide.runPythonAsync([
             'import _trinket_display as _d',
