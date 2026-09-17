@@ -10,15 +10,15 @@ const { test, expect } = require('@playwright/test');
 // by the data coordinates Python reports for fixed pixels (.mpl-message echoes
 // "x=… y=…" on motion), which is the view itself rather than a picture of it.
 //
-// Home is asserted exactly on the y axis and on the x SPAN, not on pixels: the
-// worker sets figure.autolayout=True, so tight_layout re-runs on every draw and
-// the x mapping drifts a few percent per zoom/Home cycle as the y-tick-label
-// width changes the left margin (pan→Home, which keeps label widths, restores
-// both axes to the digit). Pre-existing, cosmetic, tracked separately; a
-// byte-identical-pixels assertion fails on it and would blame the wrong thing.
+// Home is asserted exactly on both axes. Before #283 was fixed the x mapping
+// came back a few percent off after zoom→Home (measured +3.3% on the worker,
+// +2.2% on the main thread): tight_layout's first pass after the nav-stack
+// restore reused the zoomed figure's tight bbox and overwrote the restored axes
+// position. The setup code now runs a second layout pass on that draw, and
+// these assertions are what would catch a regression.
 //
-// Worker deploys only: main-thread figures use matplotlib's own WebAgg page and
-// never had this bug.
+// The skip below is about the TOOLBAR (#280), which only the worker's manager
+// lacked; both runtimes set figure.autolayout and both had the #283 drift.
 
 const PROG = 'import matplotlib.pyplot as plt\nplt.plot([0,1,2,3],[0,1,4,9])\nplt.show()\nprint("FINI")\n';
 
@@ -29,7 +29,10 @@ async function runProgram(page, src) {
   await page.locator('.run-it').first().click();
   await expect.poll(async () => page.evaluate(() =>
     document.querySelector('#console-output')?.innerText || ''), { timeout: 180_000 }).toContain('FINI');
-  const fig = page.locator('.worker-figure.mpl-figure').first();
+  // #graphic holds the one figure on BOTH runtimes; the worker's host div has
+  // class .worker-figure, the main thread's (built by Pyodide's manager.show())
+  // has none, so anchoring on the class would make the probes worker-only.
+  const fig = page.locator('#graphic');
   await fig.waitFor({ state: 'attached', timeout: 60_000 });
   await page.waitForTimeout(2500);                 // first frame + first resize settle
   return fig;
@@ -95,8 +98,8 @@ test.describe('worker figure toolbar (#280)', () => {
     const home = await p.view();
     expect(home.T.y, 'Home restores the y view exactly').toBeCloseTo(initial.T.y, 2);
     expect(home.B.y).toBeCloseTo(initial.B.y, 2);
-    expect(Math.abs(home.xSpan - initial.xSpan) / initial.xSpan,
-      'Home restores the x span (tolerance is the autolayout drift, see header)').toBeLessThan(0.10);
+    expect(home.xSpan, 'Home restores the x span exactly (#283)').toBeCloseTo(initial.xSpan, 2);
+    expect(home.L.x, 'Home restores L.x exactly (#283)').toBeCloseTo(initial.L.x, 2);
   });
 
   test('Pan: a drag shifts the view, Home restores it to the digit', async ({ page }) => {
