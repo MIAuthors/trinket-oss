@@ -76,6 +76,7 @@ var MATPLOTLIB_SETUP_CODE = [
   "    from matplotlib._pylab_helpers import Gcf",
   "    from matplotlib.backend_bases import NonGuiException",
   "    from matplotlib.backends.backend_webagg import WebAggApplication",
+  "    import js as _js",
   // Loads mpl.css and the mpl JS the figure constructor needs. Skipping it
   // fails with "ReferenceError: mpl is not defined" on the very first show;
   // it guards on cls.initialized and returns early, so calling it every time
@@ -89,6 +90,11 @@ var MATPLOTLIB_SETUP_CODE = [
   "        try:",
   "            if getattr(_m, 'js_fig', None) is None:",
   "                _m.show()",
+  // Pyodide's patched mpl.js builds the toolbar with icon <img>s and no
+  // title attributes, so the buttons have no tooltips and nothing a test can
+  // select by. Hand the JS figure to the page so it can add the titles. The
+  // icons are left alone here -- see __trinketMplFigureShown.
+  "                _js.window.__trinketMplFigureShown(_m.js_fig)",
   "            else:",
   "                _m.canvas.draw_idle()",
   "                _m.refresh_all()",
@@ -3737,6 +3743,36 @@ var MPL_TOOLBAR_ICONS = {
   filesave     : 'fa-floppy-o',
   download     : 'fa-download'
 };
+
+// Main-thread figures are constructed by Pyodide's own manager.show(), not by
+// handleWorkerFigure, so nothing on this side ever touched their toolbar. The
+// setup code calls this right after _m.show().
+//
+// TITLES ONLY, deliberately -- NOT applyMplToolbarIcons. Pyodide's patched
+// mpl.js sets icon_img.alt and a mouseover handler but never button.title, so
+// main-thread buttons have no native tooltip and nothing a test can select by.
+// That is the gap. The icons themselves are fine here: the main thread resolves
+// mpl.toolbar_image_callback through its own matplotlib and gets real icon
+// PNGs. The worker cannot -- it harvests them and gets zero bytes -- which is
+// why applyMplToolbarIcons substitutes Font Awesome there. Running that
+// substitution here would swap matplotlib's own icons for the worker's
+// workaround, which is parity in the wrong direction.
+window.__trinketMplFigureShown = function(fig) {
+  try { applyMplToolbarTitles(fig); } catch (e) {}
+};
+
+// Idempotent: `button.title ||` leaves an existing tooltip alone, so this is
+// safe to call again on a figure that already has them.
+function applyMplToolbarTitles(fig) {
+  if (!fig || !fig.buttons || !window.mpl || !window.mpl.toolbar_items) return;
+  window.mpl.toolbar_items.forEach(function(item) {
+    var name   = item[0];                    // 'Home', 'Pan', … keys of fig.buttons
+    var button = name && fig.buttons[name];
+    if (!button) return;
+    var img = button.querySelector('img');
+    button.title = button.title || (img && img.alt) || name;
+  });
+}
 
 function applyMplToolbarIcons(fig) {
   if (!fig || !fig.buttons || !window.mpl || !window.mpl.toolbar_items) return;
