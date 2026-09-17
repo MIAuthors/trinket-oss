@@ -9,7 +9,10 @@
 // course: 135 of 273 student-assignment pairs had no coordinates.
 //
 // So when coordinates finally DO arrive at a later launch, report the submission
-// the student already made.
+// the student already made — and remember on the submission which token it was
+// reported against, so the retry is idempotent without being blind: a student
+// whose token was captured BEFORE this code existed still gets reported, and a
+// student already reported against the current token does not get re-announced.
 const lti11Outcomes   = require('../../../lib/util/lti11Outcomes');
 const LtiResourceLink = require('../../../lib/models/ltiResourceLink');
 const LtiOutcome      = require('../../../lib/models/ltiOutcome');
@@ -114,20 +117,80 @@ describe('ltiNotifySubmission.notifyOnCoordinates', () => {
   });
 });
 
-describe('LtiOutcome.record reports whether coordinates are new', () => {
-  // The launch handler only heals when coordinates actually just arrived or were
-  // reissued; re-posting on every routine relaunch would be noise.
-  it('flags a freshly created record, a changed one, and not an unchanged one', async () => {
-    const base = { platformId: 'lti11:k', resourceLinkId: 'rl-flag', userId: 'u-flag',
-                   sourcedId: 'sid-1', serviceUrl: 'https://lms.example/o' };
+describe('ltiNotifySubmission: the reported-against marker makes the retry idempotent', () => {
+  let posted11, saved;
 
-    const created = await LtiOutcome.record(base);
-    expect(created.coordsNew, 'a brand-new record has new coordinates').toBe(true);
+  const PLATFORM = 'lti11:key-abc';
+  const RL = 'rl-mark-1';
+  const USER = 'user-mark-1';
+  const MATERIAL = 'mat-mark-1';
+  const TOKEN = 'sid-current';
 
-    const same = await LtiOutcome.record(base);
-    expect(same.coordsNew, 'an identical relaunch is not new').toBe(false);
+  const assignmentLink = {
+    platformId: PLATFORM, resourceLinkId: RL,
+    targetType: 'assignment', targetId: MATERIAL, courseId: 'course-1'
+  };
 
-    const changed = await LtiOutcome.record(Object.assign({}, base, { sourcedId: 'sid-2' }));
-    expect(changed.coordsNew, 'a reissued sourcedid counts as new').toBe(true);
+  function submission(extra) {
+    return Object.assign({
+      id: 'sub-mark-1', _creator: USER, courseId: 'course-1', materialId: MATERIAL,
+      submittedOn: new Date('2026-09-10T00:00:00Z'),
+      save: function () { saved.push({ sourcedId: this.ltiReportedSourcedId, at: this.ltiReportedAt }); return Promise.resolve(this); }
+    }, extra || {});
+  }
+
+  beforeEach(() => {
+    posted11 = []; saved = [];
+    vi.spyOn(lti11Outcomes, 'postSubmission').mockImplementation((a) => { posted11.push(a); return Promise.resolve({ ok: true }); });
+    vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation((p, r, cb) => cb(null, assignmentLink));
+    vi.spyOn(LtiResourceLink, 'findAssignmentLink').mockImplementation((c, m, cb) => cb(null, assignmentLink));
+    vi.spyOn(LtiOutcome, 'findForPlacement').mockImplementation((p, r, u, cb) => cb(null, { sourcedId: TOKEN, serviceUrl: 'https://lms.example/outcomes' }));
+    vi.spyOn(LtiConsumer, 'findByKey').mockImplementation((k, cb) => cb(null, { key: 'key-abc', secret: 'sec', disabled: false }));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports work whose token was captured before this code existed (no marker)', async () => {
+    // The window that made gating on "is the token new" wrong: these students
+    // clicked their assignment already, so nothing about the token is new.
+    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
+    expect(posted11.length, 'an unmarked submission must be reported').toBe(1);
+  });
+
+  it('records the token it reported against', async () => {
+    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
+    expect(saved.length, 'the marker must be persisted').toBe(1);
+    expect(saved[0].sourcedId).toBe(TOKEN);
+    expect(saved[0].at).toBeInstanceOf(Date);
+  });
+
+  it('does not re-announce a submission already reported against this token', async () => {
+    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(
+      () => Promise.resolve([submission({ ltiReportedSourcedId: TOKEN, ltiReportedAt: new Date() })]));
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
+    expect(posted11.length, 'a routine relaunch must stay quiet').toBe(0);
+  });
+
+  it('reports again when the platform reissued a different token', async () => {
+    // An assignment re-created in the LMS mints new sourcedids; the old one is
+    // dead, so the submission has to be re-announced against the new one.
+    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(
+      () => Promise.resolve([submission({ ltiReportedSourcedId: 'sid-stale', ltiReportedAt: new Date() })]));
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
+    expect(posted11.length).toBe(1);
+    expect(saved[0].sourcedId).toBe(TOKEN);
+  });
+
+  it('retries after a failed post — a failure leaves no marker', async () => {
+    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+    lti11Outcomes.postSubmission.mockImplementation(() => Promise.reject(new Error('429 from the platform')));
+
+    await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
+    expect(saved.length, 'a failed report must not be marked as reported').toBe(0);
   });
 });

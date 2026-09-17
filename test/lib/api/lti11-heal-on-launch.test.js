@@ -134,6 +134,29 @@ describe('LTI 1.1: a launch reports a submission made before coordinates existed
     expect(posted[0].score, 'still no grade — trinket does not grade').toBeUndefined();
   });
 
+  it('reports work whose token was captured BEFORE this code shipped', async () => {
+    // The pre-deploy window: the student already clicked their assignment, so
+    // the token is on file and nothing about it is new. They must still be
+    // reported — this is the case that gating on token novelty would lose.
+    const { consumer, submission } = await setup();
+    const graded = { lis_result_sourcedid: 'sourced-preexisting',
+                     lis_outcome_service_url: 'https://lms.example/outcomes' };
+
+    // Simulate the old code: capture the token with no report.
+    const LtiOutcome = require('../../../lib/models/ltiOutcome');
+    await LtiOutcome.record({
+      platformId: 'lti11:' + consumer.key, resourceLinkId: RL,
+      userId: String(submission._creator), sourcedId: graded.lis_result_sourcedid,
+      serviceUrl: graded.lis_outcome_service_url });
+    expect(posted.length, 'nothing reported by the capture alone').toBe(0);
+
+    flow.cookies = {};
+    await flow._inject('POST', 'http://' + AUTHORITY + LAUNCH, signedLaunch(consumer, graded));
+    expect(flow.lastResponse.statusCode).toBe(302);
+    expect(await waitForPost(posted, 1), 'the pre-existing token must still report').toBe(true);
+    expect(posted[0].sourcedId).toBe('sourced-preexisting');
+  });
+
   it('does not report again on a routine relaunch with the same coordinates', async () => {
     const { consumer } = await setup();
 
