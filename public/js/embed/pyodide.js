@@ -3767,12 +3767,16 @@ function paneFit(figureId) {
   if (st.pointerDown) { st.deferred = true; return; }
   var box = paneFitBox(st.fig);
   if (!box) return;
-  st.pending  = true;
+  // A COUNT, not a flag. The worker's round trip is asynchronous, so two fits
+  // issued before either echo (the wrap observer and a probe, or two window
+  // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
+  // first and the second becomes a "drag" that recomputes figsize.
+  st.pendingFits += 1;
   st.seqAtFit = st.seq;
   try {
     st.fig.send_message('trinket_pane_fit', box);
   } catch (e) {
-    st.pending = false;
+    st.pendingFits -= 1;
   }
 }
 
@@ -3792,7 +3796,8 @@ function exposePaneFitProbe() {
       var out = {};
       Object.keys(paneFitState).forEach(function(id) {
         var st = paneFitState[id];
-        out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pending,
+        out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pendingFits > 0,
+                    pendingFits: st.pendingFits, awaitStartup: st.awaitStartup,
                     pointerDown: st.pointerDown, deferred: st.deferred,
                     generation: st.generation, chrome: mplFigureChrome(st.fig),
                     box: paneFitBox(st.fig) };
@@ -3844,8 +3849,25 @@ function armPaneFitClassifier() {
   window.mpl.figure.prototype.request_resize = function(w, h) {
     var fig = this;
     var st  = fig && paneFitState[fig.id];
-    if (st && st.pending && st.seq === st.seqAtFit) {
-      st.pending = false;
+    // The FIRST delivery is mpl.js's own startup resize (add_web_socket sizes
+    // the div from 300x150 to the figure's size). It is not ours and it is not
+    // a drag; Python already knows that size, so it is marked and dropped, and
+    // THIS is where the first fit is issued -- after the startup resize, and
+    // therefore after set_device_pixel_ratio, which travels in socket.onopen.
+    // Issuing the first fit at registration instead (before onopen on the
+    // worker) made Python divide manager.resize by a device_pixel_ratio still
+    // at 1, so the div went to DEVICE pixels (1479x1110 CSS at dpr 2), and
+    // the startup resize consumed `pending` so that echo was classified a
+    // drag: figsize 4.8x3.6 -> 9.82x7.37 in, floored, overflowing every pane.
+    if (st && st.awaitStartup) {
+      st.awaitStartup = false;
+      paneFitNote('startup', w, h);
+      try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
+      paneFit(fig.id);
+      return;
+    }
+    if (st && st.pendingFits > 0 && st.seq === st.seqAtFit) {
+      st.pendingFits -= 1;
       paneFitNote('echo', w, h);
       // Marked so Python drops it instead of recomputing figsize from twice-
       // truncated pixels -- which is the ratchet: measured 4.66 in -> 4.5682 in
@@ -3853,7 +3875,7 @@ function armPaneFitClassifier() {
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
       return;
     }
-    if (st) st.pending = false;
+    if (st) st.pendingFits = 0;
     paneFitNote('drag', w, h);
     return orig.apply(fig, arguments);
   };
@@ -3870,7 +3892,7 @@ function registerPaneFit(fig) {
   if (paneFitState[fig.id]) return;
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
-    seq: 0, seqAtFit: -1, pending: false,
+    seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true,
     pointerDown: false, deferred: false
   };
 
@@ -3883,16 +3905,26 @@ function registerPaneFit(fig) {
   document.addEventListener('pointerup', function() {
     if (!st.pointerDown) return;
     st.pointerDown = false;
-    if (st.deferred) { st.deferred = false; paneFit(fig.id); }
+    if (!st.deferred) return;
+    st.deferred = false;
+    // Two frames, not now: the drag's final ResizeObserver delivery lands in
+    // the frame after the last pointermove, and observer callbacks run AFTER
+    // that frame's rAF callbacks. Then flush the debounced drag resize so it
+    // reaches Python BEFORE the fit, which fits the shape the student chose.
+    requestAnimationFrame(function() { requestAnimationFrame(function() {
+      if (fig.__trinketResizeFlush) fig.__trinketResizeFlush();
+      paneFit(fig.id);
+    }); });
   });
 
   ensurePaneFitObserver();
   armPaneFitClassifier();
   exposePaneFitProbe();
-  // The FIRST fit, issued from here so that mpl.js's own startup resize --
-  // add_web_socket sizes the div from 300x150 to the figure's size -- is
-  // classified as this fit's echo rather than as a student drag.
-  paneFit(fig.id);
+  // No fit here. The first fit is issued by the classifier when mpl.js's own
+  // startup resize is delivered (see armPaneFitClassifier): that delivery is
+  // the one event guaranteed to come after socket.onopen has carried the
+  // device pixel ratio to Python, and treating it as the fit's echo was the
+  // startup bug described there.
 }
 
 function ensureMplAssets(msg) {
@@ -3949,8 +3981,21 @@ function debounceMplResize() {
     var fig = this;
     var gen = mplGeneration;
     clearTimeout(fig.__trinketResizeTimer);
+    // Exposed so the pane fit can FLUSH the trailing drag resize before it
+    // fits: a fit deferred to pointerup that is sent while the drag's last
+    // resize is still in this timer fits the PREVIOUS figsize, and the drag's
+    // size then lands on a figure already fitted -- measured: canvas 721x542
+    // over a 642x482 figure, 79 px of mismatch, on both runtimes.
+    fig.__trinketResizeFlush = function() {
+      clearTimeout(fig.__trinketResizeTimer);
+      fig.__trinketResizeTimer = null;
+      fig.__trinketResizeFlush = null;
+      if (gen !== mplGeneration) return;
+      orig.call(fig, w, h);
+    };
     fig.__trinketResizeTimer = setTimeout(function() {
       fig.__trinketResizeTimer = null;
+      fig.__trinketResizeFlush = null;
       // Torn down while we waited. Drop it rather than send it: see
       // mplGeneration. 150 ms is short, but "drag the corner, then hit Run"
       // is an ordinary thing to do and lands inside it.
