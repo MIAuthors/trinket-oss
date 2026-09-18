@@ -3741,6 +3741,15 @@ var mplGeneration = 0;
 function resetMplFigures() {
   mplFigures = {};
   mplGeneration++;
+  // Drop the document-level pointerup listeners with the state they close over.
+  // One is added per FIGURE, and figures are rebuilt on every run, so leaving
+  // them attached accumulates a listener per run for the life of the page --
+  // each holding its figure and its state alive. They are harmless when they
+  // fire (they return early once pointerDown is false) and still wrong.
+  Object.keys(paneFitState).forEach(function(id) {
+    var st = paneFitState[id];
+    try { document.removeEventListener('pointerup', st.onPointerUp); } catch (e) {}
+  });
   paneFitState = Object.create(null);
 }
 
@@ -4037,7 +4046,8 @@ function registerPaneFit(fig) {
   }
   // On the document, not the div: a drag that ends with the pointer outside the
   // figure still gets its pointerup, and a lost one leaves pointerDown stuck.
-  document.addEventListener('pointerup', function() {
+  // Kept on the state so resetMplFigures can detach it -- see there.
+  st.onPointerUp = function() {
     if (!st.pointerDown) return;
     st.pointerDown = false;
     if (!st.deferred) return;
@@ -4050,7 +4060,8 @@ function registerPaneFit(fig) {
       if (fig.__trinketResizeFlush) fig.__trinketResizeFlush();
       paneFit(fig.id);
     }); });
-  });
+  };
+  document.addEventListener('pointerup', st.onPointerUp);
 
   ensureMplToolbarCss();
   ensurePaneFitObserver();
