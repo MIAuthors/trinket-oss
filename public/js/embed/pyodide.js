@@ -3765,6 +3765,29 @@ function paneFitNote(kind, w, h) {
   if (paneFitLog.length > 40) paneFitLog.shift();
 }
 
+// Foundation styles bare `select { width: 100% }`, which stretches mpl.js's
+// format dropdown to the full toolbar width -- measured 482 px in a 482 px
+// toolbar. It therefore cannot share a line with the toolbar buttons at ANY
+// pane size, and pushes the coordinate readout onto a third line: 109 px of
+// toolbar where matplotlib intends about 55. Since the pane fit subtracts the
+// figure's chrome from the height it fits into, Foundation was quietly costing
+// every figure 54 px of height -- and height binds in most common window sizes.
+//
+// Scoped to #graphic so no other select on the page is affected. Injected from
+// here rather than added to static/scss/embed/_python.scss for two reasons:
+// public/css is served from a Docker volume seeded at image build time, so a
+// stylesheet change is invisible locally until that image is rebuilt; and more
+// importantly the fit's height budget DEPENDS on this rule, so keeping them
+// apart would let someone delete a stylesheet line and silently shrink every
+// figure.
+function ensureMplToolbarCss() {
+  if (document.getElementById('trinket-mpl-toolbar-css')) return;
+  var style = document.createElement('style');
+  style.id = 'trinket-mpl-toolbar-css';
+  style.textContent = '#graphic select.mpl-widget { width: auto; }';
+  document.head.appendChild(style);
+}
+
 // The figure's own furniture, measured LIVE rather than assumed: mpl.js wraps
 // the canvas in a root div carrying a title bar and a toolbar, and the toolbar
 // WRAPS onto a second line at narrow widths -- 137 px wrapped against about
@@ -3920,7 +3943,16 @@ function armPaneFitClassifier() {
       st.awaitStartup = false;
       paneFitNote('startup', w, h);
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
-      paneFit(fig.id);
+      // Deferred a frame rather than issued here. showGraphic() has just set
+      // #graphic-wrap's height as a PERCENTAGE, and at this point the browser
+      // has not resolved it -- so fitting now measures a pane that is about to
+      // change and the figure lands at one size and then another. Measured as a
+      // visible flicker on first draw (746 px then 722 px on the worker). One
+      // frame of settling makes it one fit. If the pane still moves afterwards
+      // the wrap observer catches it, so this is only ever as good as before.
+      requestAnimationFrame(function() { requestAnimationFrame(function() {
+        paneFit(fig.id);
+      }); });
       return;
     }
     if (st && st.pendingFits > 0 && st.seq === st.seqAtFit) {
@@ -3985,6 +4017,7 @@ function registerPaneFit(fig) {
     }); });
   });
 
+  ensureMplToolbarCss();
   ensurePaneFitObserver();
   armPaneFitClassifier();
   exposePaneFitProbe();
