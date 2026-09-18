@@ -3863,7 +3863,13 @@ function paneFitBox(fig) {
   return { w: w, h: h, dpr: window.devicePixelRatio || 1 };
 }
 
-function paneFit(figureId) {
+// `fromChromeRefit` is set only by the echo branch's chrome re-measure. Every
+// other caller is a NEW reason to fit -- a window resize, a drag's flush, a
+// probe -- and refills the refit budget; a chrome refit must not refill the
+// budget it is spending, or the 2-cycle comes straight back. Verified: resetting
+// the counter wherever lastBoxSig is updated (the obvious reading of "two per
+// box") made the review's oscillator run away again, 40 entries and still going.
+function paneFit(figureId, fromChromeRefit) {
   var st = paneFitState[figureId];
   if (!st || st.generation !== mplGeneration) return;
   // Deferred rather than applied mid-gesture: applying a fit while the corner
@@ -3889,6 +3895,7 @@ function paneFit(figureId) {
   var sig = box.w + 'x' + box.h + '@' + box.dpr;
   if (sig === st.lastBoxSig) return;
   st.lastBoxSig = sig;
+  if (!fromChromeRefit) st.chromeRefits = 0;
   // A COUNT, not a flag. The worker's round trip is asynchronous, so two fits
   // issued before either echo (the wrap observer and a probe, or two window
   // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
@@ -3931,6 +3938,7 @@ function exposePaneFitProbe() {
         out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pendingFits > 0,
                     pendingFits: st.pendingFits, awaitStartup: st.awaitStartup,
                     lastBoxSig: st.lastBoxSig, chromeAtFit: st.chromeAtFit,
+                    chromeRefits: st.chromeRefits,
                     pointerDown: st.pointerDown, deferred: st.deferred,
                     generation: st.generation, chrome: mplFigureChrome(st.fig),
                     box: paneFitBox(st.fig) };
@@ -4055,21 +4063,22 @@ function armPaneFitClassifier() {
       // the figure visibly flipping between 513 and 481 px. Today's chrome is
       // CONSTANT in width -- swept 900 px down to 160 px, 82 on the worker and
       // 86 on main -- so nothing in the shipped page oscillates, but that is a
-      // CSS-fragile invariant and not a bound. Two refits per box is enough for
-      // the settle this exists for (64 -> 82, one refit) and makes the bound
-      // structural.
+      // CSS-fragile invariant and not a bound.
+      //
+      // The budget is TWO PER BOX, and "per box" has a trap in it: the counter
+      // is refilled by any fit that is NOT itself a chrome refit, because a
+      // chrome refit is itself a new box, so refilling wherever lastBoxSig is
+      // updated refills the budget it is spending -- measured, the runaway came
+      // straight back. Two is enough for the settle this exists for (64 -> 82,
+      // one refit), and a drag resets it as a new baseline for the shape.
       requestAnimationFrame(function() { requestAnimationFrame(function() {
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
         var now = mplFigureChrome(fig);
         if (now === st.chromeAtFit) return;
         if (st.chromeRefits >= 2) return;
         st.chromeRefits += 1;
-        // Logged like a classifier decision, because that log is the only
-        // surface a test or a console can see this on -- and "the figure
-        // corrected itself" is otherwise indistinguishable from the wrap
-        // observer happening to fire, which is what used to do it by luck.
         paneFitNote('chrome', st.chromeAtFit, now);
-        paneFit(fig.id);
+        paneFit(fig.id, true);
       }); });
       return;
     }

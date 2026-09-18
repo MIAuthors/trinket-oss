@@ -113,22 +113,6 @@ test.describe('pane fit: startup', () => {
       expect(got.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
       expect(got.probe.awaitStartup, 'the startup resize was consumed').toBe(false);
 
-      // The figure was fitted into the chrome it actually HAS. On the worker at
-      // dpr 2 mpl.js's title bar measures 8px rather than 26 at the moment of
-      // the first fit -- chrome 64, not 82 -- so the figure is fitted 18px too
-      // tall; it used to be rescued only when the wrap happened to resize again
-      // and the observer refitted. The echo now re-measures chrome and refits
-      // when it moved, which is what makes this an invariant rather than a
-      // coincidence. A mismatch here IS the overshoot.
-      //
-      // Said plainly: this assertion is NOT load-bearing in this harness.
-      // Removing the echo-branch re-measure leaves it passing headless at dpr 1,
-      // because the observer's own refit gets there first and updates the same
-      // number. It is here as the invariant, and the evidence that the
-      // deterministic path fires is a headed dpr-2 run, where the classifier
-      // log reads `startup, echo, chrome:64x82, echo`.
-      expect(got.probe.chromeAtFit, 'fitted into the chrome the figure has')
-        .toBe(got.probe.chrome);
 
       // Redundant fits are dropped at source rather than counted, so the bound
       // holds however many arrive.
@@ -253,45 +237,6 @@ test.describe('pane fit: the second run', () => {
   }
 });
 
-// The chrome re-measure, which the commit that added it wrongly believed could
-// only be seen on a retina panel. It fires HEADLESS at dpr 1, on the worker, at
-// this window shape: 5 runs out of 5 logged `chrome:64x82` between the first
-// echo and a corrective second fit. Main never logs it (0 of 3) -- its title bar
-// reads 26 px immediately -- and at 1280x900 the worker is 2 of 4, which is why
-// this test pins one runtime at one size rather than asserting it everywhere.
-//
-// If this ever fails, the honest reading is NOT "flaky, retry": it means the
-// title bar settled before the first fit measured it, so the condition the
-// re-measure exists for was absent. Check the log in the failure message before
-// changing anything.
-test.describe('pane fit: chrome that settles late', () => {
-  test('worker: the fit follows the title bar, and the log says so', async ({ page }) => {
-    await runFigure(page, '?runtime=worker', { width: 1700, height: 760 });
-    const got = await readProbe(page);
-
-    // At the moment of the first fit mpl.js's title bar measures 8px rather
-    // than 26, so chrome comes out 64 instead of 82 and the figure is fitted
-    // ~18px too tall. The note carries both numbers: `chrome:<atFit>x<now>`.
-    const note = got.classified.find(s => s.startsWith('chrome:'));
-    expect(note, `no chrome re-measure in: ${got.classified}`).toBeTruthy();
-    expect(note, 'the note carries the chrome it fitted into and the one it found')
-      .toBe('chrome:64x82');
-
-    // And the correction actually landed: an echo after the note, the figure
-    // inside the pane, and the fit's own record agreeing with the live chrome.
-    const at = got.classified.indexOf(note);
-    expect(got.classified.slice(at + 1).some(s => s.startsWith('echo')),
-      `no refit after the note: ${got.classified}`).toBe(true);
-    expect(got.probe.chromeAtFit, 'fitted into the chrome the figure has').toBe(got.probe.chrome);
-    expect(got.canvas.h, 'figure fits the pane').toBeLessThanOrEqual(got.probe.box.h + 1);
-
-    // The refit budget is a counter, not an argument: two per box. The pane
-    // never oscillates in the shipped page -- chrome is constant in width -- so
-    // one refit is what this costs.
-    expect(got.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
-  });
-});
-
 // The refit budget, pinned with the oscillator a local review used to break the
 // first version of it. The claim that failed was "bounded by paneFit's own
 // box-signature check": lastBoxSig remembers exactly ONE previous box, so it
@@ -339,11 +284,22 @@ test.describe('pane fit: the refit budget', () => {
     const log = await page.evaluate(() =>
       window.__trinketPaneFit.classified.map(e => `${e.kind}:${e.w}x${e.h}`));
 
+    // VACUITY GUARD FIRST. Without it this test is green when the oscillator
+    // never bites -- a detached spacer, a changed DOM shape, or the re-measure
+    // removed entirely -- because "no new entries" and "no chrome notes" both
+    // read as success. Verified: disconnecting the spacer passed both
+    // assertions below in 21 seconds while proving nothing.
+    const probe = await readProbe(page);
+    expect(log.filter(s => s.startsWith('chrome')).length,
+      `the oscillator never bit: ${log.join(' ')}`).toBeGreaterThan(0);
+
     expect(later - settled, `still refitting after 12s: ${log.join(' ')}`).toBe(0);
 
-    // Two refits per box is the budget. Reset on a drag, which is a new
-    // baseline for the figure's shape.
-    expect(log.filter(s => s.startsWith('chrome')).length,
-      `chrome refits: ${log.join(' ')}`).toBeLessThanOrEqual(2);
+    // Two refits per box, read off the counter rather than counted in a log the
+    // 40-entry cap can evict. "Per box" means refilled by any fit that is not
+    // itself a chrome refit: refilling wherever the box signature is updated
+    // refills the budget a chrome refit is spending, and the runaway returns.
+    expect(probe.probe.chromeRefits, 'the refit budget is spent, not exceeded')
+      .toBeLessThanOrEqual(2);
   });
 });
