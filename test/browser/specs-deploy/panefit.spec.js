@@ -130,9 +130,15 @@ test.describe('pane fit: startup', () => {
 test.describe('pane fit: the figure gets the whole pane', () => {
   for (const [label, query] of RUNTIMES) {
     test(`${label}: toolbar is one row and the dropdown matches the buttons`, async ({ page }) => {
-      // A tall window, where HEIGHT binds -- which it does in most desktop
-      // sizes, because the graphic pane's height follows the window at a 65%
-      // split. That is what makes the toolbar's height worth reclaiming.
+      // A big window. The comment here used to say HEIGHT binds at this size,
+      // and that was true before the Foundation fix gave every figure 54px of
+      // height back: measured now at 1920x1080, WIDTH binds on both runtimes --
+      // canvas 775x581 in a 775x597 box on the worker and 775x593 on main, i.e.
+      // 100% of the width and 97-98% of the height. Copilot read the stale
+      // comment and reported the 90%-of-width assertion below as a false
+      // failure waiting to happen; the comment was wrong, the assertion is not.
+      // Height still binds at shapes like 1700x760, which is where the vertical
+      // assertions live.
       await runFigure(page, query, { width: 1920, height: 1080 });
       const got = await readProbe(page);
       const tb = got.toolbar;
@@ -404,5 +410,60 @@ test.describe('pane fit: more than one figure', () => {
       expect(fig.refits, `figure ${fig.id} did not refill: ${JSON.stringify(after)}`)
         .toBeLessThan(2);
     }
+  });
+});
+
+// `Clear memory`, then run again, then press Home. Copilot found this on fork
+// PR #8 and it reproduced first try: the setup block's guards live on the
+// matplotlib CLASSES and survive a namespace reset, while the helper names the
+// wrappers resolved lived in Pyodide's globals and did not. So after a clear the
+// patched methods were still installed and their dependencies were gone:
+//
+//   NameError: name '_nav_update_view' is not defined
+//
+// raised inside `home()`, with the figure's Home button silently doing nothing.
+// It reaches the page as an unhandled error rather than the console, which is
+// why this test listens for pageerror instead of reading #console-output.
+//
+// Every wrapper now binds what it needs as a default argument, so this covers
+// the tight-layout patch, the nav restore, the resize echo guard and the save
+// dpi normalisation together -- they all had the same shape.
+test.describe('pane fit: after Clear memory', () => {
+  test('main: the figure toolbar still works on the next run', async ({ page }) => {
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await runFigure(page, '?runtime=main', { width: 1400, height: 900 });
+
+    const clicked = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('a,button')]
+        .find(e => /clear memory/i.test(e.textContent || ''));
+      if (!el) return false;
+      el.click();
+      return true;
+    });
+    expect(clicked, 'the embed offers a Clear memory control').toBe(true);
+    await page.waitForTimeout(2500);
+
+    // Re-run by the embed's own event rather than the Run control: at narrow
+    // widths that control is a split button whose click opens a menu.
+    await page.evaluate(() => { $('#editor').trigger('trinket.code.run', { action: 'code.run' }); });
+    await expect.poll(async () => page.evaluate(() =>
+      (document.querySelector('#console-output')?.textContent || '').includes('FINI')),
+      { timeout: 240_000 }).toBe(true);
+    await page.locator('#graphic canvas').first().waitFor({ state: 'attached', timeout: 60_000 });
+    await page.waitForTimeout(4000);
+
+    const pressed = await page.evaluate(() => {
+      const b = document.querySelector('#graphic button[title*="Reset"], #graphic .mpl-toolbar button');
+      if (!b) return false;
+      b.click();
+      return true;
+    });
+    expect(pressed, 'the figure has a Home button').toBe(true);
+    await page.waitForTimeout(2500);
+
+    expect(pageErrors.filter(m => /NameError/.test(m)),
+      `Python raised into the page: ${pageErrors.join(' | ')}`).toHaveLength(0);
   });
 });

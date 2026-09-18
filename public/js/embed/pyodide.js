@@ -130,25 +130,28 @@ var MATPLOTLIB_SETUP_CODE = [
   "# flag. Ordinary draws pay one pass as before; with figure.autolayout off the",
   "# engine is never instantiated and none of this runs.",
   "#",
-  "# The helper names below STAY in globals, unlike _plt and _trinket_show at",
-  "# the end of this block. They have to: the two wrappers resolve _le_exec,",
-  "# _nav_update_view and _le from globals at CALL time, so deleting them",
-  "# raises NameError on the first Home (checked). They are also invisible",
-  "# where the deletions matter -- _snap_ns drops modules and functions by",
-  "# type, and all six are one or the other.",
+  "# Every wrapper below BINDS what it needs as a default argument instead of",
+  "# resolving it from globals at call time. The names may still be in globals,",
+  "# but nothing depends on that -- and it used to: `Clear memory` resets the",
+  "# Pyodide globals to the pre-setup baseline while leaving the patched methods",
+  "# installed on the classes, and the class-attribute guards above then skip",
+  "# re-patching, so the wrappers called into names that no longer existed.",
+  "# Measured on the shipped build: clear memory, re-run, press Home ->",
+  "# NameError: name '_nav_update_view' is not defined, and the figure's Home",
+  "# button silently does nothing. Found by Copilot on fork PR #8.",
   "import matplotlib.layout_engine as _le",
   "from matplotlib import backend_bases as _bb",
   "if not getattr(_le.TightLayoutEngine, '_trinket_relayout_patched', False):",
   "    _le_exec = _le.TightLayoutEngine.execute",
-  "    def _trinket_layout_execute(self, fig):",
-  "        _le_exec(self, fig)",
+  "    def _trinket_layout_execute(self, fig, _exec=_le_exec):",
+  "        _exec(self, fig)",
   "        if getattr(fig, '_trinket_relayout', False):",
   "            fig._trinket_relayout = False",
-  "            _le_exec(self, fig)",
+  "            _exec(self, fig)",
   "    _le.TightLayoutEngine.execute = _trinket_layout_execute",
   "    _le.TightLayoutEngine._trinket_relayout_patched = True",
   "    _nav_update_view = _bb.NavigationToolbar2._update_view",
-  "    def _trinket_update_view(self):",
+  "    def _trinket_update_view(self, _prev=_nav_update_view, _le=_le):",
   "        # Only when the tight engine is actually in charge. plotpolish's",
   "        # 'Fit labels in figure' toggle calls fig.set_layout_engine() on a",
   "        # LIVE figure, so a restore while it is off would leave the flag set",
@@ -157,7 +160,7 @@ var MATPLOTLIB_SETUP_CODE = [
   "        _f = self.canvas.figure",
   "        if isinstance(_f.get_layout_engine(), _le.TightLayoutEngine):",
   "            _f._trinket_relayout = True",
-  "        return _nav_update_view(self)",
+  "        return _prev(self)",
   "    _bb.NavigationToolbar2._update_view = _trinket_update_view",
   "",
   "from matplotlib.backends import backend_webagg_core as _wac",
@@ -201,7 +204,7 @@ var MATPLOTLIB_SETUP_CODE = [
   "    _wac.FigureCanvasWebAggCore.handle_trinket_pane_fit = _trinket_pane_fit",
   "",
   "    _trinket_prev_resize = _wac.FigureCanvasWebAggCore.handle_resize",
-  "    def _trinket_handle_resize(self, event):",
+  "    def _trinket_handle_resize(self, event, _prev=_trinket_prev_resize):",
   "        # mpl.js's ResizeObserver cannot tell our fit from the student dragging",
   "        # the figure's corner -- both arrive as {type:'resize'} -- so the PAGE",
   "        # classifies them, by pointer order, and marks its own fit's echo.",
@@ -213,7 +216,7 @@ var MATPLOTLIB_SETUP_CODE = [
   "        # FIXED\" quietly broken, and quieter than the bug it replaced.",
   "        if event.get('trinket_fit_echo'):",
   "            return",
-  "        return _trinket_prev_resize(self, event)",
+  "        return _prev(self, event)",
   "    _wac.FigureCanvasWebAggCore.handle_resize = _trinket_handle_resize",
   "    _wac.FigureCanvasWebAggCore._trinket_panefit_patched = True",
   "# savefig.dpi can be the STRING 'figure', which matplotlib resolves to",
@@ -228,10 +231,10 @@ var MATPLOTLIB_SETUP_CODE = [
   "# Resolved here to the figure's COMPOSED density, rcParams['figure.dpi'],",
   "# which the fit never touches -- so 'figure' means what a student picking it",
   "# would expect, and keeps meaning it.",
-  "def _trinket_savefig_dpi():",
-  "    _d = matplotlib.rcParams['savefig.dpi']",
+  "def _trinket_savefig_dpi(_mpl=matplotlib):",
+  "    _d = _mpl.rcParams['savefig.dpi']",
   "    if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
-  "        return matplotlib.rcParams['figure.dpi']",
+  "        return _mpl.rcParams['figure.dpi']",
   "    return _d",
   "",
   "# The main thread's save is the wheel's own patched handle_save, which passes",
@@ -240,15 +243,15 @@ var MATPLOTLIB_SETUP_CODE = [
   "# choice. A pure pass-through whenever the rc is already numeric.",
   "if not getattr(_wac.FigureCanvasWebAggCore, '_trinket_savedpi_patched', False):",
   "    _trinket_prev_save = _wac.FigureCanvasWebAggCore.handle_save",
-  "    def _trinket_handle_save(self, event):",
-  "        _d = matplotlib.rcParams['savefig.dpi']",
+  "    def _trinket_handle_save(self, event, _mpl=matplotlib, _prev=_trinket_prev_save, _dpi=_trinket_savefig_dpi):",
+  "        _d = _mpl.rcParams['savefig.dpi']",
   "        if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
-  "            matplotlib.rcParams['savefig.dpi'] = _trinket_savefig_dpi()",
+  "            _mpl.rcParams['savefig.dpi'] = _dpi()",
   "            try:",
-  "                return _trinket_prev_save(self, event)",
+  "                return _prev(self, event)",
   "            finally:",
-  "                matplotlib.rcParams['savefig.dpi'] = _d",
-  "        return _trinket_prev_save(self, event)",
+  "                _mpl.rcParams['savefig.dpi'] = _d",
+  "        return _prev(self, event)",
   "    _wac.FigureCanvasWebAggCore.handle_save = _trinket_handle_save",
   "    _wac.FigureCanvasWebAggCore._trinket_savedpi_patched = True",
   "_plt.show = _trinket_show",
@@ -3872,6 +3875,20 @@ function paneFitBox(fig) {
 function paneFit(figureId, fromChromeRefit) {
   var st = paneFitState[figureId];
   if (!st || st.generation !== mplGeneration) return;
+  // Never fit a figure that has not had its startup resize yet. That resize is
+  // the first event guaranteed to come after socket.onopen has carried the
+  // device pixel ratio to Python, and fitting before it is the dpr-2 blocker
+  // that struck build-list item 6: manager.resize divided by a ratio still at 1
+  // sized the div in DEVICE pixels and recomputed figsize as 9.82x7.37in.
+  //
+  // The route in is the wrap observer's debounced callback: resetMplFigures()
+  // does not cancel a queued setTimeout(paneFitAll, 150), so a pane resize
+  // landing in the last 150 ms before a new figure registers can fit it early.
+  // Guarding HERE rather than cancelling that timer covers every caller,
+  // including ones nobody has enumerated. I could not construct the race -- the
+  // window is the gap between registration and the first ResizeObserver
+  // delivery -- so this is an invariant made explicit, not a measured repair.
+  if (st.awaitStartup) return;
   // Deferred rather than applied mid-gesture: applying a fit while the corner
   // is held yanks the div to the fitted size under the student's finger and
   // then lets the drag carry on from there. Issued on pointerup instead.
