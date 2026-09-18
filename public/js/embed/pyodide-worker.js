@@ -621,9 +621,9 @@
       "# which the fit never touches -- so 'figure' means what a student picking it",
       "# would expect, and keeps meaning it.",
       "def _trinket_savefig_dpi():",
-      "    _d = _plt.rcParams['savefig.dpi']",
+      "    _d = matplotlib.rcParams['savefig.dpi']",
       "    if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
-      "        return _plt.rcParams['figure.dpi']",
+      "        return matplotlib.rcParams['figure.dpi']",
       "    return _d",
       '_plt.show = _trinket_show'
     ].join('\n');
