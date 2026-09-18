@@ -216,6 +216,41 @@ var MATPLOTLIB_SETUP_CODE = [
   "        return _trinket_prev_resize(self, event)",
   "    _wac.FigureCanvasWebAggCore.handle_resize = _trinket_handle_resize",
   "    _wac.FigureCanvasWebAggCore._trinket_panefit_patched = True",
+  "# savefig.dpi can be the STRING 'figure', which matplotlib resolves to",
+  "# figure._original_dpi -- and the pane fit makes that unreliable. Every canvas",
+  "# construction rewrites _original_dpi, and print_figure builds a FRESH canvas",
+  "# for svg and pdf, so one vector export leaves it holding the fitted DEVICE",
+  "# dpi. Measured: a post-SVG 'figure' export gave 960x720 on the worker and",
+  "# 949x712 on the main thread -- twice the CSS size, and dependent on both the",
+  "# pane at export time and the display density. Before any vector export the",
+  "# same choice gives 480x360, so the student's file silently changes meaning.",
+  "#",
+  "# Resolved here to the figure's COMPOSED density, rcParams['figure.dpi'],",
+  "# which the fit never touches -- so 'figure' means what a student picking it",
+  "# would expect, and keeps meaning it.",
+  "def _trinket_savefig_dpi():",
+  "    _d = _plt.rcParams['savefig.dpi']",
+  "    if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
+  "        return _plt.rcParams['figure.dpi']",
+  "    return _d",
+  "",
+  "# The main thread's save is the wheel's own patched handle_save, which passes",
+  "# no dpi and so reads the rc directly. Normalise it for the duration of that",
+  "# call and put it back, so both runtimes export the same file for the same",
+  "# choice. A pure pass-through whenever the rc is already numeric.",
+  "if not getattr(_wac.FigureCanvasWebAggCore, '_trinket_savedpi_patched', False):",
+  "    _trinket_prev_save = _wac.FigureCanvasWebAggCore.handle_save",
+  "    def _trinket_handle_save(self, event):",
+  "        _d = _plt.rcParams['savefig.dpi']",
+  "        if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
+  "            _plt.rcParams['savefig.dpi'] = _trinket_savefig_dpi()",
+  "            try:",
+  "                return _trinket_prev_save(self, event)",
+  "            finally:",
+  "                _plt.rcParams['savefig.dpi'] = _d",
+  "        return _trinket_prev_save(self, event)",
+  "    _wac.FigureCanvasWebAggCore.handle_save = _trinket_handle_save",
+  "    _wac.FigureCanvasWebAggCore._trinket_savedpi_patched = True",
   "_plt.show = _trinket_show",
   "del _plt, _trinket_show",
 ].join('\n');
@@ -3921,6 +3956,17 @@ function registerPaneFit(fig) {
   var div = fig.canvas && fig.canvas.parentNode;
   if (div && div.addEventListener) {
     div.addEventListener('pointerdown', function() { st.seq++; st.pointerDown = true; });
+    // mpl.js gives canvas_div `resize: both`, so the browser draws a grip in
+    // its bottom-right corner and a student can drag it. That drag changes the
+    // figure's SHAPE -- its size in inches -- which is what gets downloaded,
+    // while the pane fit only changes the scale it is drawn at. Nothing said
+    // so, and the grip has no element of its own to hang a tooltip on, so the
+    // explanation goes on the div.
+    if (!div.title) {
+      div.title = 'Drag the bottom-right corner to change the figure\u2019s shape. ' +
+                  'That shape is what gets downloaded; resizing the pane only ' +
+                  'changes how large it is drawn.';
+    }
   }
   // On the document, not the div: a drag that ends with the pointer outside the
   // figure still gets its pointerup, and a lost one leaves pointerDown stuck.

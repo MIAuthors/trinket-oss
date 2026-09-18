@@ -313,28 +313,33 @@
       // in the generated block, which saves them, runs mpl.style.use(<name>),
       // and restores them, so a re-run draws what the preview showed.
       //
-      // The list mirrors what each runtime actually sets, and they differ:
-      //   main   pyodide.js MATPLOTLIB_SETUP_CODE -- figure.autolayout only
-      //   worker pyodide-worker.js MPL_SETUP      -- autolayout AND a
-      //          pane-fitting figure.figsize
+      // The keys the HOST sets, which a style must not be allowed to take back.
+      // Both runtimes now set all three -- the list used to differ, because the
+      // main thread set only figure.autolayout while the worker also set a
+      // pane-fitting figure.figsize. Since the dpi pane fit, both set a FIXED
+      // figure.figsize of 4.8 x 3.6 and a savefig.dpi of 300, so the runtime
+      // ternary is gone and the two cannot drift.
       //
-      // So figsize is listed on the worker only. On the main thread it would be
-      // wrong rather than merely useless: nothing sets figsize there, so the
-      // block would save and restore whatever happened to be current and
-      // defeat a style's own figsize for no reason.
+      // Why each one has to be here, all measured against the shipped wheel:
       //
-      // Why it matters on the worker: 8 of matplotlib's 29 styles set
-      // figure.figsize, seaborn-v0_8 among them -- and that is one of the
-      // default curated buttons. Before v0.3.2 picking it threw the pane fit
-      // away on every re-run while live preview went on showing it, which is
-      // the live-matches-re-run promise broken. Fixed upstream, and this line
-      // is what opts the host into the fix.
+      //   figure.figsize   8 of the 29 styles set it, seaborn-v0_8 among them,
+      //                    and that is one of the default curated buttons.
+      //                    Without it on the list, picking seaborn silently
+      //                    rewrote 4.8 x 3.6 to 8 x 5.5 -- changing both the
+      //                    exported shape and what the pane fit is fitting,
+      //                    while live preview went on showing the old figure.
+      //   savefig.dpi      exactly one style sets it: `classic`, to 100. Not a
+      //                    curated button, but it is in the style dropdown, so
+      //                    picking it dropped a 300-dpi export to 100 with
+      //                    nothing saying so.
+      //   figure.autolayout  as before: it is a student-facing control ("Fit
+      //                    labels in figure") and the host's default is True.
       //
       // Per run, not in mount(): mount() is one-way, and a session can run on
-      // either runtime, so the list has to follow the run that just happened.
-      panel.hostRcKeys = runtime === 'worker'
-        ? ['figure.autolayout', 'figure.figsize']
-        : ['figure.autolayout'];
+      // either runtime, so the list has to follow the run that just happened --
+      // kept per-run even though the list no longer varies, because that is
+      // what makes it correct if it ever varies again.
+      panel.hostRcKeys = ['figure.autolayout', 'figure.figsize', 'savefig.dpi'];
 
       // canRerun follows wantLive: the button only exists in the state where
       // nothing previews, which is the only state the notice appears in at
