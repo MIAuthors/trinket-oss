@@ -194,6 +194,33 @@
   // Mounting
   // ---------------------------------------------------------------------
 
+  // In its floating layout the panel draws everything in a fixed-position
+  // layer and leaves its host element at 0x0 -- but the host is still
+  // `display: inline-flex`, so it sits on a line of its own after #graphic and
+  // the wrap's 12px/18px strut gives that line box 18 px of height.
+  //
+  // That was free for as long as the figure left slack in the pane. The dpi
+  // pane fit removes the slack: in every window shape where HEIGHT binds the
+  // figure now fills #graphic-wrap exactly, so those 18 px are the only thing
+  // that does not fit and the output pane becomes scrollable by exactly that
+  // much. Measured 489 against a 471-px viewport at 1700x760 on both runtimes,
+  // and the wrap really scrolls to 18; removing the element takes scrollHeight
+  // back to 471 and re-adding it restores 489.
+  //
+  // A block box of zero height generates no line box, which is the whole fix.
+  // Scoped to the floating layout by attribute rather than set inline: the
+  // panel also has a `pill` layout, where the host is a real inline pill inside
+  // a toolbar row, and an inline style would break that one. A document rule
+  // beats the shadow root's own :host declaration.
+  function ensurePanelHostCss() {
+    if (document.getElementById('trinket-plotpolish-host-css')) return;
+    var style = document.createElement('style');
+    style.id = 'trinket-plotpolish-host-css';
+    style.textContent =
+      '#graphic-wrap > plotpolish-panel[layout="float"] { display: block; }';
+    document.head.appendChild(style);
+  }
+
   // Both the panel and its position anchor go on #graphic-wrap, not #graphic.
   // #graphic is the obvious choice -- resetOutput() empties it every run while
   // the node itself persists -- but it is also *taller* than the wrap, which
@@ -208,6 +235,7 @@
     var fig  = document.getElementById('graphic');
     if (!wrap || !fig) return false;
 
+    ensurePanelHostCss();
     panel = document.createElement('plotpolish-panel');
     // Trinket's embed is hard-coded light and defines no CSS custom
     // properties; without this the panel follows the student's OS dark mode.
