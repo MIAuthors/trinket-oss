@@ -3780,24 +3780,43 @@ function paneFitNote(kind, w, h) {
 // importantly the fit's height budget DEPENDS on this rule, so keeping them
 // apart would let someone delete a stylesheet line and silently shrink every
 // figure.
+// Once the dropdown sits BESIDE the toolbar buttons it has to look like one of
+// them, and Foundation's padding leaves it taller with square corners. The
+// values are read off a real button rather than written down, so this follows
+// whatever the shipped wheel and the runtime's icon choice produce. Purely
+// cosmetic: if it cannot measure a button it leaves the dropdown alone.
+function matchMplDropdownToButtons(fig) {
+  try {
+    var root = fig && fig.root;
+    if (!root) return;
+    var btn = root.querySelector('button.mpl-widget');
+    var sel = root.querySelector('select.mpl-widget');
+    if (!btn || !sel || !btn.offsetHeight) return;
+    var cs = getComputedStyle(btn);
+    sel.style.height = btn.offsetHeight + 'px';
+    // Buttons are in groups, so each rounds only its OUTER corners and its
+    // computed radius reads like "6px 0px 0px 6px". A lone select wants all
+    // four, so take the largest.
+    var radii = String(cs.borderRadius).split(/\s+/).map(parseFloat).filter(function(n) { return !isNaN(n); });
+    var r = radii.length ? Math.max.apply(null, radii) : 0;
+    if (r > 0) sel.style.borderRadius = r + 'px';
+    // The baselines, not merely the boxes.
+    sel.style.marginBottom = cs.marginBottom;
+  } catch (e) { /* cosmetic only */ }
+}
+
 function ensureMplToolbarCss() {
   if (document.getElementById('trinket-mpl-toolbar-css')) return;
   var style = document.createElement('style');
   style.id = 'trinket-mpl-toolbar-css';
-  // width: Foundation's `select { width: 100% }`, undone -- see above.
-  // height + border-radius: once the dropdown sits BESIDE the toolbar buttons
-  // it has to look like one of them, and Foundation's padding made it 39 px
-  // against their 34, with square corners against their 6 px. Both values are
-  // matplotlib's own, read off a .mpl-widget button in the shipped wheel
-  // (height 34 px, radius 6 px, box-sizing border-box). margin-bottom matches
-  // the buttons' 20 px so the baselines line up rather than merely the boxes.
-  //
-  // Purely cosmetic, so if a future Pyodide changes those numbers the dropdown
-  // looks slightly off rather than anything breaking. Measured after: button
-  // and select both 34 px tall with their tops at the same pixel.
-  style.textContent = '#graphic select.mpl-widget {' +
-                      ' width: auto; height: 34px;' +
-                      ' border-radius: 6px; margin-bottom: 20px; }';
+  // Only the width is a fixed rule -- Foundation's `select { width: 100% }`,
+  // undone. Height and corners are COPIED FROM A REAL BUTTON at runtime by
+  // matchMplDropdownToButtons below, because the two runtimes do not agree:
+  // the worker's buttons carry Font Awesome glyphs and measure 34 px, the main
+  // thread's carry matplotlib's own PNG icons and measure 38. A hardcoded
+  // height matched one and left the other misaligned -- which is exactly the
+  // kind of divergence between the two integrations this work exists to close.
+  style.textContent = '#graphic select.mpl-widget { width: auto; }';
   document.head.appendChild(style);
 }
 
@@ -3964,6 +3983,9 @@ function armPaneFitClassifier() {
       // frame of settling makes it one fit. If the pane still moves afterwards
       // the wrap observer catches it, so this is only ever as good as before.
       requestAnimationFrame(function() { requestAnimationFrame(function() {
+        // By now the toolbar has laid out and its icons have loaded, which is
+        // what makes a button's height worth reading.
+        matchMplDropdownToButtons(fig);
         paneFit(fig.id);
       }); });
       return;
