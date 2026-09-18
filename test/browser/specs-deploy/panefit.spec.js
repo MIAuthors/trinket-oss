@@ -165,3 +165,60 @@ test.describe('pane fit: the figure gets the whole pane', () => {
     });
   }
 });
+
+// A student's second Run of the same program. Everything above runs the program
+// ONCE per page, which is what let this through: figure ids are reused (Pyodide
+// numbers the main thread's figures from 1 every run, the worker calls its
+// figure 'fig1'), so registration used to find the previous run's state and
+// return, leaving every fit addressed to a detached figure on a dead socket.
+//
+// Measured on the main thread at dpr 2 before the fix: run twice, narrow the
+// window, and the figure stayed 480px inside a 398px pane with NOTHING in the
+// classifier log; a corner drag on the new figure was then classified as an
+// echo, because the pointerdown listener sat on a div no longer in the
+// document. The worker was unaffected -- it tore its state down per run -- so
+// this needs both runtimes to be worth anything.
+test.describe('pane fit: the second run', () => {
+  for (const [label, query] of RUNTIMES) {
+    test(`${label}: a re-run's figure is the one that gets fitted`, async ({ page }) => {
+      await runFigure(page, query, { width: 1600, height: 900 });
+      const first = await readProbe(page);
+
+      // Mark the first run's canvas, then wait for a canvas that is not it.
+      // NOT the console: it is cleared at the start of every run, so the
+      // completion marker cannot appear twice -- and not the classifier log
+      // either, because under the bug nothing is ever logged, which would fail
+      // this as a timeout instead of as the assertion that names the symptom.
+      await page.evaluate(() => {
+        document.querySelector('#graphic canvas').dataset.trinketPrevRun = '1';
+      });
+      await page.locator('.run-it').first().click();
+      await expect.poll(async () => page.evaluate(() => {
+        const c = document.querySelector('#graphic canvas');
+        return !!c && c.dataset.trinketPrevRun !== '1';
+      }), { timeout: 240_000 }).toBe(true);
+      await page.waitForTimeout(4000);
+
+      // The mechanism: the new figure registered, rather than inheriting the
+      // old figure's state and returning at the guard.
+      const second = await readProbe(page);
+      expect(second.classified.filter(s => s.startsWith('startup')).length,
+        `a startup per run: ${second.classified}`).toBeGreaterThan(
+        first.classified.filter(s => s.startsWith('startup')).length);
+
+      // The symptom, which is what a student sees: narrow the window and the
+      // figure follows. 1200 keeps the side-by-side layout (below about 1100
+      // the output pane becomes tabbed, which is a different test).
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await expect.poll(async () => {
+        const got = await readProbe(page);
+        return got.canvas.w <= got.probe.box.w + 1;
+      }, { timeout: 30_000, message: 'the re-run figure never fitted the narrowed pane' }).toBe(true);
+
+      const after = await readProbe(page);
+      expect(after.canvas.w, `figure ${after.canvas.w} in a ${after.probe.box.w} pane`)
+        .toBeLessThanOrEqual(after.probe.box.w + 1);
+      expect(after.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
+    });
+  }
+});

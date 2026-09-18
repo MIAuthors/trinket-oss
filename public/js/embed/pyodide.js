@@ -4022,7 +4022,25 @@ function armPaneFitClassifier() {
 // before anything has been sized from the wrong numbers.
 function registerPaneFit(fig) {
   if (!fig || fig.id === undefined || fig.id === null) return;
-  if (paneFitState[fig.id]) return;
+  // Figure ids are REUSED -- Pyodide numbers the main thread's figures from 1
+  // every run, and the worker calls its figure 'fig1' -- so a bare
+  // `if (paneFitState[fig.id]) return;` made every run after the first inherit
+  // the PREVIOUS run's state, whose `fig` is a detached figure on a dead
+  // socket. Measured on the main thread at dpr 2: run twice, resize the window,
+  // and the figure stays 480px in a 398px pane with no classifier entry at all,
+  // because fits go to the old socket; a corner drag on the new figure is then
+  // classified as an echo, because the pointerdown listener is on a div that is
+  // no longer in the document, so `seq` never moves. Every teardown path that
+  // goes through resetMplFigures() clears this, but not every path does -- the
+  // step-through recorder runs MATPLOTLIB_SETUP_CODE without one -- so the
+  // identity check is what makes registration correct for callers we have not
+  // enumerated, rather than for the two we have.
+  var prior = paneFitState[fig.id];
+  if (prior) {
+    if (prior.fig === fig) return;          // genuinely the same figure, twice
+    try { document.removeEventListener('pointerup', prior.onPointerUp); } catch (e) {}
+    delete paneFitState[fig.id];
+  }
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
     seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true, lastBoxSig: null,
@@ -4944,6 +4962,14 @@ function startRun() {
   // because a stale scene must not survive a run that isn't VPython at all (or
   // that escaped to the main thread with ?runtime=main) either.
   resetVPythonScene();
+
+  // Same argument for matplotlib, and for the same reason it is unconditional:
+  // resetOutput() has just emptied #graphic, so any figure from the last run is
+  // detached, and its pane-fit state -- including a document-level pointerup
+  // listener holding it alive -- must not survive into this one. runInWorker()
+  // does this for the worker path; the main thread had no equivalent, which is
+  // what left a dead figure's state in place for the next run to inherit.
+  resetMplFigures();
 
   // Default to a console-only layout each run; showGraphic() re-splits the pane
   // when the code uses matplotlib.
