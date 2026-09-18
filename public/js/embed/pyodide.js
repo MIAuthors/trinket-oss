@@ -3706,6 +3706,159 @@ var mplGeneration = 0;
 function resetMplFigures() {
   mplFigures = {};
   mplGeneration++;
+  paneFitState = Object.create(null);
+}
+
+// ---- the dpi pane fit, page half ------------------------------------------
+//
+// The PANE sets scale, by scaling figure.dpi with figsize fixed; the student's
+// corner drag sets shape, by changing figsize. Python owns the arithmetic (see
+// handle_trinket_pane_fit in MATPLOTLIB_SETUP_CODE) -- this side owns the two
+// things only the page can know: how big the pane is, and which of the two
+// drags just happened.
+//
+// null prototype: figure ids come from Python ('fig1', or a number on the main
+// thread) and a plain object would answer to '__proto__'.
+var paneFitState    = Object.create(null);   // fig.id -> per-figure state
+var paneFitObserver = null;
+var PANE_FIT_DEBOUNCE_MS = 150;
+
+// The figure's own furniture, measured LIVE rather than assumed: mpl.js wraps
+// the canvas in a root div carrying a title bar and a toolbar, and the toolbar
+// WRAPS onto a second line at narrow widths -- 137 px wrapped against about
+// 70 px unwrapped, a swing worth ~18 dpi. Fitting to the pane box WITHOUT
+// subtracting this overflows vertically by the whole amount, which is what a
+// first attempt did in every height-bound window size.
+function mplFigureChrome(fig) {
+  try {
+    if (!fig || !fig.root || !fig.canvas) return 0;
+    var chrome = fig.root.offsetHeight - fig.canvas.offsetHeight;
+    return chrome > 0 ? chrome : 0;
+  } catch (e) { return 0; }
+}
+
+// What gets sent to Python: the pane's CSS box and the device pixel ratio, NOT
+// a dpi. The division happens in Python against the figure's current size, so
+// a student's own figsize= is fitted rather than assumed away.
+function paneFitBox(fig) {
+  var wrap = document.getElementById('graphic-wrap');
+  var pane = document.getElementById('graphic');
+  var el = (wrap && wrap.clientHeight) ? wrap : pane;
+  if (!el || !el.clientWidth) return null;
+  var w = el.clientWidth - 2;                  // canvas_div's border
+  var h = el.clientHeight - mplFigureChrome(fig);
+  if (w <= 0 || h <= 0) return null;
+  return { w: w, h: h, dpr: window.devicePixelRatio || 1 };
+}
+
+function paneFit(figureId) {
+  var st = paneFitState[figureId];
+  if (!st || st.generation !== mplGeneration) return;
+  // Deferred rather than applied mid-gesture: applying a fit while the corner
+  // is held yanks the div to the fitted size under the student's finger and
+  // then lets the drag carry on from there. Issued on pointerup instead.
+  if (st.pointerDown) { st.deferred = true; return; }
+  var box = paneFitBox(st.fig);
+  if (!box) return;
+  st.pending  = true;
+  st.seqAtFit = st.seq;
+  try {
+    st.fig.send_message('trinket_pane_fit', box);
+  } catch (e) {
+    st.pending = false;
+  }
+}
+
+function paneFitAll() {
+  Object.keys(paneFitState).forEach(paneFit);
+}
+
+// One observer for the pane, not one per figure: the thing that changed is the
+// pane, and every figure in it wants refitting.
+function ensurePaneFitObserver() {
+  if (paneFitObserver || typeof ResizeObserver === 'undefined') return;
+  var target = document.getElementById('graphic-wrap') || document.getElementById('graphic');
+  if (!target) return;
+  var timer = null;
+  paneFitObserver = new ResizeObserver(function() {
+    clearTimeout(timer);
+    timer = setTimeout(paneFitAll, PANE_FIT_DEBOUNCE_MS);
+  });
+  paneFitObserver.observe(target);
+}
+
+// THE DISCRIMINATOR. canvas_div changes size for exactly two reasons: our fit
+// (mpl.js applying Python's manager.resize) or the student dragging the CSS
+// resize handle. mpl.js's ResizeObserver reports both as the same
+// {type:'resize'}, and the observation itself carries nothing we control -- so
+// a sequence number on the outgoing message cannot help. What separates them is
+// ORDER: a drag always begins with a pointerdown on the div, and a fit's echo
+// never does.
+//
+// The rejected alternative was matching the expected device-pixel size within
+// +/-1, whose failure is reachable and was demonstrated: a drag to within a
+// pixel of the fitted size is silently swallowed.
+//
+// NOTE: no timeout on `pending`, ever. Measured echo latency is 9-12 ms and 3
+// animation frames on the worker, 104-117 ms and 2 frames on the main thread,
+// so a one-frame timeout -- the obvious defensive move -- would misclassify
+// every echo as a drag and reinstate the figsize ratchet this exists to stop.
+function armPaneFitClassifier() {
+  if (!window.mpl || !window.mpl.figure ||
+      window.mpl.figure.prototype.__trinketPaneFitClassified) return;
+  // Wrapped AFTER debounceMplResize, so this is the outer layer: an echo is
+  // sent immediately (it is already the size we asked for) while a real drag
+  // still goes through the debounce.
+  var orig = window.mpl.figure.prototype.request_resize;
+  window.mpl.figure.prototype.request_resize = function(w, h) {
+    var fig = this;
+    var st  = fig && paneFitState[fig.id];
+    if (st && st.pending && st.seq === st.seqAtFit) {
+      st.pending = false;
+      // Marked so Python drops it instead of recomputing figsize from twice-
+      // truncated pixels -- which is the ratchet: measured 4.66 in -> 4.5682 in
+      // over five fits at dpr 2, with the export moving 466x336 -> 463x333.
+      try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
+      return;
+    }
+    if (st) st.pending = false;
+    return orig.apply(fig, arguments);
+  };
+  window.mpl.figure.prototype.__trinketPaneFitClassified = true;
+}
+
+// Called once per figure, from whichever side built it: handleWorkerFigure on
+// the worker, __trinketMplFigureShown on the main thread. Both run while the
+// canvas is still at the HTML default 300x150, i.e. before mpl.js's first
+// ResizeObserver delivery -- which is what makes the first fit below land
+// before anything has been sized from the wrong numbers.
+function registerPaneFit(fig) {
+  if (!fig || fig.id === undefined || fig.id === null) return;
+  if (paneFitState[fig.id]) return;
+  var st = paneFitState[fig.id] = {
+    fig: fig, generation: mplGeneration,
+    seq: 0, seqAtFit: -1, pending: false,
+    pointerDown: false, deferred: false
+  };
+
+  var div = fig.canvas && fig.canvas.parentNode;
+  if (div && div.addEventListener) {
+    div.addEventListener('pointerdown', function() { st.seq++; st.pointerDown = true; });
+  }
+  // On the document, not the div: a drag that ends with the pointer outside the
+  // figure still gets its pointerup, and a lost one leaves pointerDown stuck.
+  document.addEventListener('pointerup', function() {
+    if (!st.pointerDown) return;
+    st.pointerDown = false;
+    if (st.deferred) { st.deferred = false; paneFit(fig.id); }
+  });
+
+  ensurePaneFitObserver();
+  armPaneFitClassifier();
+  // The FIRST fit, issued from here so that mpl.js's own startup resize --
+  // add_web_socket sizes the div from 300x150 to the figure's size -- is
+  // classified as this fit's echo rather than as a student drag.
+  paneFit(fig.id);
 }
 
 function ensureMplAssets(msg) {
@@ -3843,6 +3996,10 @@ window.__trinketMplFigureShown = function(fig) {
   // shared mpl.figure prototype and is idempotent, so arming it here -- once a
   // figure exists, which is when window.mpl is guaranteed -- is enough.
   try { debounceMplResize(); } catch (e) {}
+  // The pane fit registers here rather than in the setup code, because it
+  // needs the JS figure. Order matters: after debounceMplResize, so the
+  // classifier ends up the outer wrapper on request_resize.
+  try { registerPaneFit(fig); } catch (e) {}
 };
 
 // Idempotent: `button.title ||` leaves an existing tooltip alone, so this is
@@ -4230,6 +4387,11 @@ function handleWorkerFigure(msg) {
     mplFigures[msg.figureId] = { fig: fig, socket: socket };
     applyMplToolbarIcons(fig);
     debounceMplResize();
+    // Same registration the main thread does from __trinketMplFigureShown.
+    // Not routed through that hook: it applies TITLES only, and the worker
+    // wants applyMplToolbarIcons above -- calling both appends a second icon
+    // to every button.
+    registerPaneFit(fig);
     if (typeof socket.onopen === 'function') { socket.onopen(); }
 
     return;
@@ -4374,11 +4536,22 @@ function runInWorker(program, files, serialized, decision) {
   openRuntimeLine('Loading Python (Pyodide)… ');
 
   // The worker cannot see the page, so it cannot know how wide the graphic pane
-  // is. Pyodide's patched FigureManagerWebAgg ignores mpl.js's `resize` message
-  // (the same gap that makes it ignore `supports_binary`), so the size has to be
-  // set in Python BEFORE the figure is created — hence sending it here.
-  // #graphic is still HIDDEN at this point (showGraphic() runs when the first
-  // figure arrives), so its clientWidth is 0. Measure a visible ancestor.
+  // is.
+  //
+  // The comment that used to sit here said Pyodide's patched
+  // FigureManagerWebAgg "ignores mpl.js's `resize` message (the same gap that
+  // makes it ignore `supports_binary`)", and concluded the size therefore had to
+  // be set in Python before the figure existed. THAT WAS WRONG, and it is worth
+  // recording why rather than deleting quietly: handle_resize is present in the
+  // shipped wheel and dispatched like any other event. What was actually
+  // happening is that mpl.js gates the resize on `fig.ws.readyState == 1` and
+  // Trinket's fake socket had no readyState, so the message was never SENT.
+  // Fixed in #279; the figure is now fitted after it exists, by scaling dpi.
+  //
+  // This width survives for one job only: the pane fit's own first measurement
+  // needs a number before #graphic is visible. #graphic is still HIDDEN at this
+  // point (showGraphic() runs when the first figure arrives), so its
+  // clientWidth is 0. Measure a visible ancestor.
   var graphicWidth = 0;
   ['graphic', 'outputContainer', 'codeOutput'].forEach(function(id) {
     if (graphicWidth) return;
