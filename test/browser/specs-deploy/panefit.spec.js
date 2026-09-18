@@ -454,16 +454,104 @@ test.describe('pane fit: after Clear memory', () => {
     await page.locator('#graphic canvas').first().waitFor({ state: 'attached', timeout: 60_000 });
     await page.waitForTimeout(4000);
 
+    // FOUR wrappers were rebound, and pressing Home exercises exactly one of
+    // them. Reverting each binding separately and re-running showed the other
+    // three breaking in ways this test could not see -- the tight-layout one
+    // worst of all, since it raises inside every Figure.draw rather than on a
+    // button. So: Home, then a corner drag (the resize wrapper, and a draw,
+    // which is what reaches the layout engine), then Download (the save
+    // wrapper). All three surface a Python failure the same way, through
+    // webagg's on_message handler, as an unhandled page error.
+    //
+    // The fifth binding, `_dpi=_trinket_savefig_dpi`, is deliberately NOT
+    // pinned: that helper is defined OUTSIDE the `_trinket_savedpi_patched`
+    // guard, so it is redefined on every setup run and survives a clear for
+    // free. The other four live inside guarded blocks that the second run
+    // skips, which is precisely why they needed binding.
     const pressed = await page.evaluate(() => {
       const b = document.querySelector('#graphic button[title*="Reset"], #graphic .mpl-toolbar button');
+      if (!b) return null;
+      b.click();
+      return b.title || '(untitled)';
+    });
+    // Asserted, not assumed: the fallback selector is "the first toolbar
+    // button", which is Home only because matplotlib happens to order it first.
+    // Without this the test could press Pan and assert nothing.
+    expect(pressed, 'pressed Home').toContain('Reset');
+    await page.waitForTimeout(2000);
+
+    // A real corner drag. It has to be SLOW -- a hold, then small steps -- or
+    // the native resizer never engages and the test measures nothing: a first
+    // attempt with four fast steps produced zero `drag` entries in the
+    // classifier log and looked like a pass.
+    const corner = await page.evaluate(() => {
+      const r = document.querySelector('#graphic canvas').parentNode.getBoundingClientRect();
+      return { x: Math.round(r.right - 5), y: Math.round(r.bottom - 5) };
+    });
+    await page.mouse.move(corner.x, corner.y);
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    for (let k = 1; k <= 6; k++) {
+      await page.mouse.move(corner.x - 4 * k, corner.y - 3 * k);
+      await page.waitForTimeout(40);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(2000);
+    expect(await page.evaluate(() => window.__trinketPaneFit.classified.some(e => e.kind === 'drag')),
+      'the corner drag landed').toBe(true);
+
+    // Download. The wrapper normalises savefig.dpi for the duration of the
+    // call and puts it back; it calls through to the wheel's own handle_save
+    // on every path, so a plain Download exercises it.
+    const saved = await page.evaluate(() => {
+      const b = document.querySelector('#graphic button[title*="Download"]');
       if (!b) return false;
       b.click();
       return true;
     });
-    expect(pressed, 'the figure has a Home button').toBe(true);
+    expect(saved, 'the figure has a Download button').toBe(true);
     await page.waitForTimeout(2500);
 
     expect(pageErrors.filter(m => /NameError/.test(m)),
       `Python raised into the page: ${pageErrors.join(' | ')}`).toHaveLength(0);
   });
+});
+
+// A gesture the browser abandons. `pointercancel` is what a touch device sends
+// when scrolling takes over mid-drag, and there is no `pointerup` behind it: the
+// classifier's pointerDown flag stayed true for the life of the figure and every
+// later fit was deferred and never sent, so the figure stopped following the
+// pane silently -- a deferred fit logs nothing.
+//
+// Synthetic PointerEvents are enough here because the flag is set and cleared by
+// listeners, not by the native resizer: what is under test is the teardown, not
+// a real drag.
+test.describe('pane fit: a cancelled gesture', () => {
+  for (const [label, query] of RUNTIMES) {
+    test(`${label}: a cancelled pointer does not strand the figure`, async ({ page }) => {
+      await runFigure(page, query, { width: 1500, height: 760 });
+
+      await page.evaluate(() => {
+        const div = document.querySelector('#graphic canvas').parentNode;
+        const opts = { bubbles: true, composed: true, pointerId: 1, pointerType: 'touch', isPrimary: true };
+        div.dispatchEvent(new PointerEvent('pointerdown', opts));
+        div.dispatchEvent(new PointerEvent('pointercancel', opts));
+      });
+      await page.waitForTimeout(300);
+
+      // The symptom first, the mechanism after -- this file's rule. With the
+      // flag stranded this fit is deferred and never sent, and the figure
+      // overflows its pane by the whole difference: measured 562x421 in a
+      // 460x385 box on both runtimes. Checking pointerDown first would
+      // short-circuit the test and never assert what a student sees.
+      await page.setViewportSize({ width: 1150, height: 760 });
+      await page.waitForTimeout(4000);
+
+      const got = await readProbe(page);
+      expect(got.canvas.w, `figure ${got.canvas.w} in a ${got.probe.box.w} pane`)
+        .toBeLessThanOrEqual(got.probe.box.w + 1);
+      expect(got.probe.deferred, 'no fit is left deferred').toBe(false);
+      expect(got.probe.pointerDown, 'the cancel cleared the gesture').toBe(false);
+    });
+  }
 });
