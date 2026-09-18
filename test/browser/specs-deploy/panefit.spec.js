@@ -216,16 +216,16 @@ test.describe('pane fit: the second run', () => {
       }), { timeout: 240_000 }).toBe(true);
       await page.waitForTimeout(4000);
 
-      // The mechanism: the new figure registered, rather than inheriting the
-      // old figure's state and returning at the guard.
       const second = await readProbe(page);
-      expect(second.classified.filter(s => s.startsWith('startup')).length,
-        `a startup per run: ${second.classified}`).toBeGreaterThan(
-        first.classified.filter(s => s.startsWith('startup')).length);
 
-      // The symptom, which is what a student sees: narrow the window and the
-      // figure follows. 1200 keeps the side-by-side layout (below about 1100
-      // the output pane becomes tabbed, which is a different test).
+      // SYMPTOM FIRST, mechanism second -- the ordering discipline this file's
+      // sibling already follows. Under the double mutation (both halves of the
+      // fix reverted) the mechanism assertion fails first and short-circuits the
+      // test, so the assertion that names what a student sees never runs.
+      //
+      // What a student sees: narrow the window and the figure follows. 1200
+      // keeps the side-by-side layout (below about 1100 the output pane becomes
+      // tabbed, which is a different test).
       await page.setViewportSize({ width: 1200, height: 900 });
       await expect.poll(async () => {
         const got = await readProbe(page);
@@ -236,6 +236,114 @@ test.describe('pane fit: the second run', () => {
       expect(after.canvas.w, `figure ${after.canvas.w} in a ${after.probe.box.w} pane`)
         .toBeLessThanOrEqual(after.probe.box.w + 1);
       expect(after.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
+
+      // The mechanism behind it: the new figure registered, rather than
+      // inheriting the old figure's state and returning at the guard.
+      //
+      // Known and deliberate: this test is green with EITHER half of the fix
+      // reverted -- the identity check in registerPaneFit and the
+      // resetMplFigures() call in startRun each fix the re-run on their own, and
+      // only reverting both fails it. So a future refactor can delete one half
+      // and the suite stays quiet. Keeping both is a belt-and-braces call, not
+      // an accident.
+      expect(second.classified.filter(s => s.startsWith('startup')).length,
+        `a startup per run: ${second.classified}`).toBeGreaterThan(
+        first.classified.filter(s => s.startsWith('startup')).length);
     });
   }
+});
+
+// The chrome re-measure, which the commit that added it wrongly believed could
+// only be seen on a retina panel. It fires HEADLESS at dpr 1, on the worker, at
+// this window shape: 5 runs out of 5 logged `chrome:64x82` between the first
+// echo and a corrective second fit. Main never logs it (0 of 3) -- its title bar
+// reads 26 px immediately -- and at 1280x900 the worker is 2 of 4, which is why
+// this test pins one runtime at one size rather than asserting it everywhere.
+//
+// If this ever fails, the honest reading is NOT "flaky, retry": it means the
+// title bar settled before the first fit measured it, so the condition the
+// re-measure exists for was absent. Check the log in the failure message before
+// changing anything.
+test.describe('pane fit: chrome that settles late', () => {
+  test('worker: the fit follows the title bar, and the log says so', async ({ page }) => {
+    await runFigure(page, '?runtime=worker', { width: 1700, height: 760 });
+    const got = await readProbe(page);
+
+    // At the moment of the first fit mpl.js's title bar measures 8px rather
+    // than 26, so chrome comes out 64 instead of 82 and the figure is fitted
+    // ~18px too tall. The note carries both numbers: `chrome:<atFit>x<now>`.
+    const note = got.classified.find(s => s.startsWith('chrome:'));
+    expect(note, `no chrome re-measure in: ${got.classified}`).toBeTruthy();
+    expect(note, 'the note carries the chrome it fitted into and the one it found')
+      .toBe('chrome:64x82');
+
+    // And the correction actually landed: an echo after the note, the figure
+    // inside the pane, and the fit's own record agreeing with the live chrome.
+    const at = got.classified.indexOf(note);
+    expect(got.classified.slice(at + 1).some(s => s.startsWith('echo')),
+      `no refit after the note: ${got.classified}`).toBe(true);
+    expect(got.probe.chromeAtFit, 'fitted into the chrome the figure has').toBe(got.probe.chrome);
+    expect(got.canvas.h, 'figure fits the pane').toBeLessThanOrEqual(got.probe.box.h + 1);
+
+    // The refit budget is a counter, not an argument: two per box. The pane
+    // never oscillates in the shipped page -- chrome is constant in width -- so
+    // one refit is what this costs.
+    expect(got.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
+  });
+});
+
+// The refit budget, pinned with the oscillator a local review used to break the
+// first version of it. The claim that failed was "bounded by paneFit's own
+// box-signature check": lastBoxSig remembers exactly ONE previous box, so it
+// rules out a fixed point and not a 2-cycle, and a chrome term that depends on
+// the canvas width made the figure flip between 513 and 481 px forever -- 25 log
+// entries in the first second, each one a real resize and a full Agg render.
+//
+// Nothing in the shipped page oscillates: chrome is a constant 82 (worker) / 86
+// (main) from a 900 px figure down to a 160 px one. This test injects the
+// oscillator deliberately, because the bound has to be structural rather than a
+// property of today's CSS.
+test.describe('pane fit: the refit budget', () => {
+  test('main: a chrome oscillator settles instead of running forever', async ({ page }) => {
+    await runFigure(page, '?runtime=main', { width: 1700, height: 760 });
+
+    // A chrome term that grows when the figure is wide and shrinks when it is
+    // narrow -- the shape of a toolbar that wraps, which is what the original
+    // bound was argued from.
+    await page.evaluate(() => {
+      const canvas = document.querySelector('#graphic canvas');
+      const root = canvas.closest('div').parentNode;
+      const spacer = document.createElement('div');
+      spacer.style.height = '0px';
+      root.appendChild(spacer);
+      const threshold = canvas.clientWidth - 16;
+      new ResizeObserver(() => {
+        spacer.style.height = (canvas.clientWidth > threshold) ? '24px' : '0px';
+      }).observe(canvas);
+      spacer.style.height = '24px';
+      window.__trinketPaneFit.fit();
+    });
+
+    // The newest entry's TIMESTAMP, not the log's length: the log is capped at
+    // 40 entries, so under a real loop the length stops growing and a
+    // length-to-length comparison passes while the figure flips forever. That
+    // exact proxy passed under mutation here before this was rewritten.
+    const newest = () => page.evaluate(() => {
+      const log = window.__trinketPaneFit.classified;
+      return log.length ? log[log.length - 1].t : 0;
+    });
+    await page.waitForTimeout(6000);
+    const settled = await newest();
+    await page.waitForTimeout(6000);
+    const later = await newest();
+    const log = await page.evaluate(() =>
+      window.__trinketPaneFit.classified.map(e => `${e.kind}:${e.w}x${e.h}`));
+
+    expect(later - settled, `still refitting after 12s: ${log.join(' ')}`).toBe(0);
+
+    // Two refits per box is the budget. Reset on a drag, which is a new
+    // baseline for the figure's shape.
+    expect(log.filter(s => s.startsWith('chrome')).length,
+      `chrome refits: ${log.join(' ')}`).toBeLessThanOrEqual(2);
+  });
 });

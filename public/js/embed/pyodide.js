@@ -3830,11 +3830,17 @@ function ensureMplToolbarCss() {
 }
 
 // The figure's own furniture, measured LIVE rather than assumed: mpl.js wraps
-// the canvas in a root div carrying a title bar and a toolbar, and the toolbar
-// WRAPS onto a second line at narrow widths -- 137 px wrapped against about
-// 70 px unwrapped, a swing worth ~18 dpi. Fitting to the pane box WITHOUT
-// subtracting this overflows vertically by the whole amount, which is what a
-// first attempt did in every height-bound window size.
+// the canvas in a root div carrying a title bar and a toolbar. Fitting to the
+// pane box WITHOUT subtracting this overflows vertically by the whole amount,
+// which is what a first attempt did in every height-bound window size.
+//
+// It used to say the toolbar WRAPS at narrow widths -- 137 px wrapped against
+// about 70 px unwrapped -- and that was true before Foundation's
+// `select { width: 100% }` was undone (see ensureMplToolbarCss). It is not true
+// now: swept against the figure's own width from 900 px down to 160 px, chrome
+// is a CONSTANT 82 on the worker and 86 on main. Read as measured, not as
+// monotone in width -- the echo's chrome re-measure is bounded by a counter
+// precisely because nothing here guarantees a well-behaved chrome function.
 function mplFigureChrome(fig) {
   try {
     if (!fig || !fig.root || !fig.canvas) return 0;
@@ -3874,13 +3880,15 @@ function paneFit(figureId) {
   // Safe because the only things that change what the answer WOULD be are a new
   // figure (new state, fresh box) and a corner drag (which bumps seq and resets
   // the count on its way through the classifier).
+  // Recorded BEFORE the signature check, not after it: every early return
+  // leaves chromeAtFit holding an older fit's number while the figure's real
+  // chrome has moved on, and the startup spec asserts the two agree. Set here,
+  // it always describes the last box that was COMPUTED, which is what both the
+  // echo's re-measure and that assertion actually mean.
+  st.chromeAtFit = mplFigureChrome(st.fig);
   var sig = box.w + 'x' + box.h + '@' + box.dpr;
   if (sig === st.lastBoxSig) return;
   st.lastBoxSig = sig;
-  // The chrome this box was computed from, so the echo can tell whether the
-  // figure's own furniture had finished laying out when we measured it. See
-  // the echo branch in armPaneFitClassifier.
-  st.chromeAtFit = mplFigureChrome(st.fig);
   // A COUNT, not a flag. The worker's round trip is asynchronous, so two fits
   // issued before either echo (the wrap observer and a probe, or two window
   // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
@@ -3988,14 +3996,23 @@ function armPaneFitClassifier() {
       st.awaitStartup = false;
       paneFitNote('startup', w, h);
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
-      // Deferred a frame rather than issued here. showGraphic() has just set
+      // Deferred two frames rather than issued here. showGraphic() has just set
       // #graphic-wrap's height as a PERCENTAGE, and at this point the browser
       // has not resolved it -- so fitting now measures a pane that is about to
       // change and the figure lands at one size and then another. Measured as a
-      // visible flicker on first draw (746 px then 722 px on the worker). One
-      // frame of settling makes it one fit. If the pane still moves afterwards
+      // visible flicker on first draw (746 px then 722 px on the worker). Two
+      // frames of settling make it one fit. If the pane still moves afterwards
       // the wrap observer catches it, so this is only ever as good as before.
       requestAnimationFrame(function() { requestAnimationFrame(function() {
+        // The same guard the echo branch carries. Teardown was already covered
+        // by luck -- paneFit looks the state up by id and returns once
+        // resetMplFigures() has emptied the map -- but a NEW figure registering
+        // under the same reused id inside these two frames would be fitted
+        // before its own startup resize, i.e. before socket.onopen carries the
+        // device pixel ratio to Python. That is the dpr-2 blocker struck from
+        // build-list item 6, and same-id re-registration stopped being
+        // impossible when registerPaneFit learned to replace a stale state.
+        if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
         // By now the toolbar has laid out and its icons have loaded, which is
         // what makes a button's height worth reading.
         matchMplDropdownToButtons(fig);
@@ -4020,18 +4037,33 @@ function armPaneFitClassifier() {
       // it.
       //
       // Re-measuring HERE rather than waiting longer before the first fit is
-      // what makes it deterministic: no settle time has to be guessed, and the
-      // same check closes the case where a fit changes the pane enough to wrap
-      // the toolbar onto another line, which nothing used to refit.
+      // what makes it deterministic: no settle time has to be guessed. (An
+      // earlier version of this comment also claimed it covers a fit that wraps
+      // the toolbar onto another line. It would -- but that case is unreachable
+      // since the Foundation fix, so it is not a justification.)
       //
       // Two frames, because the echo can arrive before the furniture has
-      // finished laying out. Bounded by paneFit's own box-signature check: if
-      // the new chrome does not change the box, nothing is sent, so this cannot
-      // trade a flicker for a loop.
+      // finished laying out.
+      //
+      // COUNTED, not argued. The first version of this said it was bounded by
+      // paneFit's box-signature check -- and that was wrong: lastBoxSig
+      // remembers exactly ONE previous box, so it rules out a fixed point and
+      // not a 2-cycle. A local review built the cycle (a chrome term that
+      // depends on the canvas width, which is the very mechanism this comment
+      // used to invoke) and the log alternated
+      // `chrome:86x110 echo:481x361 chrome:110x86 echo:513x385` forever, with
+      // the figure visibly flipping between 513 and 481 px. Today's chrome is
+      // CONSTANT in width -- swept 900 px down to 160 px, 82 on the worker and
+      // 86 on main -- so nothing in the shipped page oscillates, but that is a
+      // CSS-fragile invariant and not a bound. Two refits per box is enough for
+      // the settle this exists for (64 -> 82, one refit) and makes the bound
+      // structural.
       requestAnimationFrame(function() { requestAnimationFrame(function() {
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
         var now = mplFigureChrome(fig);
         if (now === st.chromeAtFit) return;
+        if (st.chromeRefits >= 2) return;
+        st.chromeRefits += 1;
         // Logged like a classifier decision, because that log is the only
         // surface a test or a console can see this on -- and "the figure
         // corrected itself" is otherwise indistinguishable from the wrap
@@ -4041,7 +4073,8 @@ function armPaneFitClassifier() {
       }); });
       return;
     }
-    if (st) { st.pendingFits = 0; st.lastBoxSig = null; }
+    // A drag is a new baseline for both the box and the refit budget.
+    if (st) { st.pendingFits = 0; st.lastBoxSig = null; st.chromeRefits = 0; }
     paneFitNote('drag', w, h);
     return orig.apply(fig, arguments);
   };
@@ -4077,6 +4110,7 @@ function registerPaneFit(fig) {
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
     seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true, lastBoxSig: null,
+    chromeAtFit: null, chromeRefits: 0,
     pointerDown: false, deferred: false
   };
 
