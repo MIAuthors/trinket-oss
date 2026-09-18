@@ -113,6 +113,23 @@ test.describe('pane fit: startup', () => {
       expect(got.probe.pendingFits, 'fits in flight are bounded').toBeLessThanOrEqual(2);
       expect(got.probe.awaitStartup, 'the startup resize was consumed').toBe(false);
 
+      // The figure was fitted into the chrome it actually HAS. On the worker at
+      // dpr 2 mpl.js's title bar measures 8px rather than 26 at the moment of
+      // the first fit -- chrome 64, not 82 -- so the figure is fitted 18px too
+      // tall; it used to be rescued only when the wrap happened to resize again
+      // and the observer refitted. The echo now re-measures chrome and refits
+      // when it moved, which is what makes this an invariant rather than a
+      // coincidence. A mismatch here IS the overshoot.
+      //
+      // Said plainly: this assertion is NOT load-bearing in this harness.
+      // Removing the echo-branch re-measure leaves it passing headless at dpr 1,
+      // because the observer's own refit gets there first and updates the same
+      // number. It is here as the invariant, and the evidence that the
+      // deterministic path fires is a headed dpr-2 run, where the classifier
+      // log reads `startup, echo, chrome:64x82, echo`.
+      expect(got.probe.chromeAtFit, 'fitted into the chrome the figure has')
+        .toBe(got.probe.chrome);
+
       // Redundant fits are dropped at source rather than counted, so the bound
       // holds however many arrive.
       const after = await page.evaluate(async () => {

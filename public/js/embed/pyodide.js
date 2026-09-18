@@ -3877,6 +3877,10 @@ function paneFit(figureId) {
   var sig = box.w + 'x' + box.h + '@' + box.dpr;
   if (sig === st.lastBoxSig) return;
   st.lastBoxSig = sig;
+  // The chrome this box was computed from, so the echo can tell whether the
+  // figure's own furniture had finished laying out when we measured it. See
+  // the echo branch in armPaneFitClassifier.
+  st.chromeAtFit = mplFigureChrome(st.fig);
   // A COUNT, not a flag. The worker's round trip is asynchronous, so two fits
   // issued before either echo (the wrap observer and a probe, or two window
   // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
@@ -3918,7 +3922,7 @@ function exposePaneFitProbe() {
         var st = paneFitState[id];
         out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pendingFits > 0,
                     pendingFits: st.pendingFits, awaitStartup: st.awaitStartup,
-                    lastBoxSig: st.lastBoxSig,
+                    lastBoxSig: st.lastBoxSig, chromeAtFit: st.chromeAtFit,
                     pointerDown: st.pointerDown, deferred: st.deferred,
                     generation: st.generation, chrome: mplFigureChrome(st.fig),
                     box: paneFitBox(st.fig) };
@@ -4006,6 +4010,35 @@ function armPaneFitClassifier() {
       // truncated pixels -- which is the ratchet: measured 4.66 in -> 4.5682 in
       // over five fits at dpr 2, with the export moving 466x336 -> 463x333.
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
+      // The chrome we fitted into may not have been the chrome the figure ends
+      // up with. On the worker, at the moment of the FIRST fit, mpl.js's title
+      // bar measures 8 px rather than 26 -- chrome 64 instead of 82 -- and
+      // settles ~100 ms later, so the figure is fitted 18 px too tall and the
+      // pane is left scrollable until something else provokes a refit. Measured
+      // at dpr 2 in 10 of 10 fresh worker loads; it usually self-corrected, and
+      // once it did not. The main thread reads 26 immediately and never showed
+      // it.
+      //
+      // Re-measuring HERE rather than waiting longer before the first fit is
+      // what makes it deterministic: no settle time has to be guessed, and the
+      // same check closes the case where a fit changes the pane enough to wrap
+      // the toolbar onto another line, which nothing used to refit.
+      //
+      // Two frames, because the echo can arrive before the furniture has
+      // finished laying out. Bounded by paneFit's own box-signature check: if
+      // the new chrome does not change the box, nothing is sent, so this cannot
+      // trade a flicker for a loop.
+      requestAnimationFrame(function() { requestAnimationFrame(function() {
+        if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
+        var now = mplFigureChrome(fig);
+        if (now === st.chromeAtFit) return;
+        // Logged like a classifier decision, because that log is the only
+        // surface a test or a console can see this on -- and "the figure
+        // corrected itself" is otherwise indistinguishable from the wrap
+        // observer happening to fire, which is what used to do it by luck.
+        paneFitNote('chrome', st.chromeAtFit, now);
+        paneFit(fig.id);
+      }); });
       return;
     }
     if (st) { st.pendingFits = 0; st.lastBoxSig = null; }
