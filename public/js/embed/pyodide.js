@@ -3920,7 +3920,14 @@ function paneFit(figureId, fromChromeRefit) {
 }
 
 function paneFitAll() {
-  Object.keys(paneFitState).forEach(paneFit);
+  // NOT `forEach(paneFit)`. forEach calls back with (value, index, array), so
+  // the index arrived as `fromChromeRefit`: index 0 is falsy and every later one
+  // is truthy, which meant figures 2..n were treated as chrome refits by the two
+  // callers that must refill their budget -- the wrap observer and the probe.
+  // Measured on a two-figure program: after a window resize, figure 1's counter
+  // went back to 0 and figure 2's stayed at 2, permanently spent. Which figure
+  // was protected depended on Object.keys insertion order.
+  Object.keys(paneFitState).forEach(function(id) { paneFit(id); });
 }
 
 // Read by the browser specs and by anyone driving this from a console, in the

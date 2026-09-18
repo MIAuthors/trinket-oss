@@ -252,6 +252,17 @@ test.describe('pane fit: the refit budget', () => {
   test('main: a chrome oscillator settles instead of running forever', async ({ page }) => {
     await runFigure(page, '?runtime=main', { width: 1700, height: 760 });
 
+    // Before anything is injected: the figure fits the pane VERTICALLY. This is
+    // the only unconditional height-bound assertion in the suite -- every other
+    // one in this file is width-bound, and the one in panefit-plotstyle.spec.js
+    // sits behind a plotStyle skip, so on an ordinary deploy nothing else checks
+    // that subtracting chrome actually works. 1700x760 is a shape where height
+    // binds. The worker at a height-bound shape stays uncovered without
+    // plotStyle: a stated gap, not an oversight.
+    const fitted = await readProbe(page);
+    expect(fitted.canvas.h, 'figure fits the pane')
+      .toBeLessThanOrEqual(fitted.probe.box.h + 1);
+
     // A chrome term that grows when the figure is wide and shrinks when it is
     // narrow -- the shape of a toolbar that wraps, which is what the original
     // bound was argued from.
@@ -299,7 +310,99 @@ test.describe('pane fit: the refit budget', () => {
     // 40-entry cap can evict. "Per box" means refilled by any fit that is not
     // itself a chrome refit: refilling wherever the box signature is updated
     // refills the budget a chrome refit is spending, and the runaway returns.
+    // BOTH, deliberately. The counter cannot exceed 2 by construction -- its
+    // only increment is guarded by the same comparison -- so reading it is a
+    // statement about the code's shape, not a detector. The log count IS
+    // falsifiable: round 2's literal per-box reset put ~20 `chrome` entries in
+    // it. Swapping one for the other traded a working detector for a
+    // tautology, which the commit message wrongly called an improvement.
+    expect(log.filter(s => s.startsWith('chrome')).length,
+      `chrome refits in the log: ${log.join(' ')}`).toBeLessThanOrEqual(2);
     expect(probe.probe.chromeRefits, 'the refit budget is spent, not exceeded')
       .toBeLessThanOrEqual(2);
+  });
+});
+
+// Two figures, because every other test in this file draws one -- which is how
+// `Object.keys(paneFitState).forEach(paneFit)` survived review twice. forEach
+// calls back with (value, index, array), so the index landed in
+// `fromChromeRefit`: index 0 is falsy, every later index is truthy, and figures
+// 2..n were treated as chrome refits by the two callers whose whole job is to
+// refill the budget. Measured before the fix: after a window resize figure 1's
+// counter went back to 0 and figure 2's stayed at 2, spent for the life of the
+// page, with which figure was protected decided by Object.keys insertion order.
+const TWO_FIGURES = [
+  'import matplotlib.pyplot as plt',
+  'import numpy as np',
+  't = np.linspace(0, 10, 300)',
+  'plt.figure()',
+  'plt.plot(t, np.exp(-0.35*t)*np.cos(4*t))',
+  'plt.figure()',
+  'plt.plot(t, np.sin(t))',
+  'plt.show()',
+  'print("FINI")',
+].join('\n');
+
+test.describe('pane fit: more than one figure', () => {
+  test('main: every figure refills its refit budget, not just the first', async ({ page }) => {
+    await page.setViewportSize({ width: 1700, height: 760 });
+    await page.goto('/embed/python3?runtime=main');
+    await expect(page.locator('.ace_editor').first()).toBeVisible();
+    await page.evaluate((s) => {
+      document.querySelector('.ace_editor').env.editor.setValue(s, 1);
+    }, TWO_FIGURES);
+    await page.locator('.run-it').first().click();
+    await expect.poll(async () => page.evaluate(() =>
+      document.querySelector('#console-output')?.textContent || ''),
+      { timeout: 240_000 }).toContain('FINI');
+    // Two FIGURES, counted in the fit's own state -- not two canvases. mpl.js
+    // builds two per figure (the image and the rubberband overlay), so
+    // `#graphic canvas` is 4 here and counting it asserts the wrong thing.
+    await expect.poll(async () => page.evaluate(() =>
+      Object.keys(window.__trinketPaneFit.state()).length), { timeout: 60_000 }).toBe(2);
+    await page.waitForTimeout(4000);
+
+    const budgets = () => page.evaluate(() => {
+      const st = window.__trinketPaneFit.state();
+      return Object.keys(st).map(id => ({ id: id, refits: st[id].chromeRefits }));
+    });
+    expect((await budgets()).length, 'both figures registered').toBe(2);
+
+    // Spend both budgets with the oscillator from the budget test, one per
+    // figure, then give both a new box.
+    await page.evaluate(() => {
+      // One per FIGURE: the first canvas inside each figure root, skipping the
+      // rubberband overlay beside it.
+      [...document.getElementById('graphic').children].forEach((root) => {
+        const canvas = root.querySelector('canvas');
+        if (!canvas) return;
+        const spacer = document.createElement('div');
+        spacer.style.height = '0px';
+        root.appendChild(spacer);
+        const threshold = canvas.clientWidth - 16;
+        new ResizeObserver(() => {
+          spacer.style.height = (canvas.clientWidth > threshold) ? '24px' : '0px';
+        }).observe(canvas);
+        spacer.style.height = '24px';
+      });
+      window.__trinketPaneFit.fit();
+    });
+    await page.waitForTimeout(6000);
+
+    // Vacuity guard: if the oscillator did not bite on BOTH figures, the refill
+    // assertion below is about nothing.
+    const spent = await budgets();
+    for (const fig of spent) {
+      expect(fig.refits, `figure ${fig.id} never spent its budget: ${JSON.stringify(spent)}`).toBe(2);
+    }
+
+    await page.setViewportSize({ width: 1480, height: 850 });
+    await page.waitForTimeout(5000);
+
+    const after = await budgets();
+    for (const fig of after) {
+      expect(fig.refits, `figure ${fig.id} did not refill: ${JSON.stringify(after)}`)
+        .toBeLessThan(2);
+    }
   });
 });
