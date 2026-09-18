@@ -3767,6 +3767,17 @@ function paneFit(figureId) {
   if (st.pointerDown) { st.deferred = true; return; }
   var box = paneFitBox(st.fig);
   if (!box) return;
+  // A fit that asks for the size the figure already has produces no size
+  // change, therefore no ResizeObserver delivery, therefore no echo -- and
+  // nothing to decrement the count below, which then leaks upward for the rest
+  // of the session. Skip it instead: no message, no count, one fewer round trip.
+  //
+  // Safe because the only things that change what the answer WOULD be are a new
+  // figure (new state, fresh box) and a corner drag (which bumps seq and resets
+  // the count on its way through the classifier).
+  var sig = box.w + 'x' + box.h + '@' + box.dpr;
+  if (sig === st.lastBoxSig) return;
+  st.lastBoxSig = sig;
   // A COUNT, not a flag. The worker's round trip is asynchronous, so two fits
   // issued before either echo (the wrap observer and a probe, or two window
   // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
@@ -3798,6 +3809,7 @@ function exposePaneFitProbe() {
         var st = paneFitState[id];
         out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pendingFits > 0,
                     pendingFits: st.pendingFits, awaitStartup: st.awaitStartup,
+                    lastBoxSig: st.lastBoxSig,
                     pointerDown: st.pointerDown, deferred: st.deferred,
                     generation: st.generation, chrome: mplFigureChrome(st.fig),
                     box: paneFitBox(st.fig) };
@@ -3875,7 +3887,7 @@ function armPaneFitClassifier() {
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
       return;
     }
-    if (st) st.pendingFits = 0;
+    if (st) { st.pendingFits = 0; st.lastBoxSig = null; }
     paneFitNote('drag', w, h);
     return orig.apply(fig, arguments);
   };
@@ -3892,7 +3904,7 @@ function registerPaneFit(fig) {
   if (paneFitState[fig.id]) return;
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
-    seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true,
+    seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true, lastBoxSig: null,
     pointerDown: false, deferred: false
   };
 
