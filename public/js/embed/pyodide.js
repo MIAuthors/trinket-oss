@@ -3782,7 +3782,17 @@ function paneFit(figureId) {
   // issued before either echo (the wrap observer and a probe, or two window
   // resizes 150 ms apart) produce two deliveries; a boolean is cleared by the
   // first and the second becomes a "drag" that recomputes figsize.
-  st.pendingFits += 1;
+  //
+  // CAPPED, because an echo is not guaranteed: Python always sends the resize,
+  // but if the size it asks for is the size the div already has, the browser
+  // delivers no ResizeObserver callback and there is nothing to decrement. The
+  // box-signature skip above catches the common form of that; it cannot catch
+  // the case where the box changed but the fitted size rounds to the same
+  // pixels, which is reachable on the main thread. Two is the largest number
+  // of genuinely outstanding fits; beyond that the count is stale, and a stale
+  // count only ever over-permits an echo, which a drag resets on its way
+  // through the classifier.
+  if (st.pendingFits < 2) st.pendingFits += 1;
   st.seqAtFit = st.seq;
   try {
     st.fig.send_message('trinket_pane_fit', box);
