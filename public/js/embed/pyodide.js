@@ -3784,7 +3784,20 @@ function ensureMplToolbarCss() {
   if (document.getElementById('trinket-mpl-toolbar-css')) return;
   var style = document.createElement('style');
   style.id = 'trinket-mpl-toolbar-css';
-  style.textContent = '#graphic select.mpl-widget { width: auto; }';
+  // width: Foundation's `select { width: 100% }`, undone -- see above.
+  // height + border-radius: once the dropdown sits BESIDE the toolbar buttons
+  // it has to look like one of them, and Foundation's padding made it 39 px
+  // against their 34, with square corners against their 6 px. Both values are
+  // matplotlib's own, read off a .mpl-widget button in the shipped wheel
+  // (height 34 px, radius 6 px, box-sizing border-box). margin-bottom matches
+  // the buttons' 20 px so the baselines line up rather than merely the boxes.
+  //
+  // Purely cosmetic, so if a future Pyodide changes those numbers the dropdown
+  // looks slightly off rather than anything breaking. Measured after: button
+  // and select both 34 px tall with their tops at the same pixel.
+  style.textContent = '#graphic select.mpl-widget {' +
+                      ' width: auto; height: 34px;' +
+                      ' border-radius: 6px; margin-bottom: 20px; }';
   document.head.appendChild(style);
 }
 
