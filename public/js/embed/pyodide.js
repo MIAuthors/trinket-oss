@@ -3752,6 +3752,7 @@ function resetMplFigures() {
   Object.keys(paneFitState).forEach(function(id) {
     var st = paneFitState[id];
     try { document.removeEventListener('pointerup', st.onPointerUp); } catch (e) {}
+    try { document.removeEventListener('pointercancel', st.onPointerUp); } catch (e) {}
   });
   paneFitState = Object.create(null);
 }
@@ -4138,6 +4139,7 @@ function registerPaneFit(fig) {
   if (prior) {
     if (prior.fig === fig) return;          // genuinely the same figure, twice
     try { document.removeEventListener('pointerup', prior.onPointerUp); } catch (e) {}
+    try { document.removeEventListener('pointercancel', prior.onPointerUp); } catch (e) {}
     delete paneFitState[fig.id];
   }
   var st = paneFitState[fig.id] = {
@@ -4179,7 +4181,16 @@ function registerPaneFit(fig) {
       paneFit(fig.id);
     }); });
   };
+  // pointercancel too, with the same teardown. A cancelled gesture -- touch
+  // scrolling taking over, or a lost pointer capture -- never delivers
+  // pointerup, so without this `pointerDown` stays true for the life of the
+  // figure and EVERY later fit is deferred and never sent: the figure stops
+  // following the pane entirely, with nothing in the log to say why. Flushing
+  // rather than discarding, because the browser has already applied whatever
+  // size the drag reached before it was cancelled, and that size is the
+  // figure's shape now.
   document.addEventListener('pointerup', st.onPointerUp);
+  document.addEventListener('pointercancel', st.onPointerUp);
 
   ensureMplToolbarCss();
   ensurePaneFitObserver();
