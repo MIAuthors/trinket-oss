@@ -3722,6 +3722,13 @@ function resetMplFigures() {
 var paneFitState    = Object.create(null);   // fig.id -> per-figure state
 var paneFitObserver = null;
 var PANE_FIT_DEBOUNCE_MS = 150;
+// Last few classifier decisions, for the probe below. Bounded: this must not
+// grow without limit in a long session.
+var paneFitLog = [];
+function paneFitNote(kind, w, h) {
+  paneFitLog.push({ kind: kind, w: w, h: h, t: Date.now() });
+  if (paneFitLog.length > 40) paneFitLog.shift();
+}
 
 // The figure's own furniture, measured LIVE rather than assumed: mpl.js wraps
 // the canvas in a root div carrying a title bar and a toolbar, and the toolbar
@@ -3773,6 +3780,30 @@ function paneFitAll() {
   Object.keys(paneFitState).forEach(paneFit);
 }
 
+// Read by the browser specs and by anyone driving this from a console, in the
+// same spirit as window.__trinketRuntime and window.__vpythonScene: the
+// classifier's decisions are otherwise unobservable, and a test that can only
+// see the resulting pixels cannot tell a correct fit from a lucky one.
+// `fit()` issues one on demand, which is how a spec avoids depending on
+// ResizeObserver timing.
+function exposePaneFitProbe() {
+  window.__trinketPaneFit = {
+    state: function() {
+      var out = {};
+      Object.keys(paneFitState).forEach(function(id) {
+        var st = paneFitState[id];
+        out[id] = { seq: st.seq, seqAtFit: st.seqAtFit, pending: st.pending,
+                    pointerDown: st.pointerDown, deferred: st.deferred,
+                    generation: st.generation, chrome: mplFigureChrome(st.fig),
+                    box: paneFitBox(st.fig) };
+      });
+      return out;
+    },
+    fit: paneFitAll,
+    classified: paneFitLog
+  };
+}
+
 // One observer for the pane, not one per figure: the thing that changed is the
 // pane, and every figure in it wants refitting.
 function ensurePaneFitObserver() {
@@ -3815,6 +3846,7 @@ function armPaneFitClassifier() {
     var st  = fig && paneFitState[fig.id];
     if (st && st.pending && st.seq === st.seqAtFit) {
       st.pending = false;
+      paneFitNote('echo', w, h);
       // Marked so Python drops it instead of recomputing figsize from twice-
       // truncated pixels -- which is the ratchet: measured 4.66 in -> 4.5682 in
       // over five fits at dpr 2, with the export moving 466x336 -> 463x333.
@@ -3822,6 +3854,7 @@ function armPaneFitClassifier() {
       return;
     }
     if (st) st.pending = false;
+    paneFitNote('drag', w, h);
     return orig.apply(fig, arguments);
   };
   window.mpl.figure.prototype.__trinketPaneFitClassified = true;
@@ -3855,6 +3888,7 @@ function registerPaneFit(fig) {
 
   ensurePaneFitObserver();
   armPaneFitClassifier();
+  exposePaneFitProbe();
   // The FIRST fit, issued from here so that mpl.js's own startup resize --
   // add_web_socket sizes the div from 300x150 to the figure's size -- is
   // classified as this fit's echo rather than as a student drag.
