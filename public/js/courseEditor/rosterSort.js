@@ -70,10 +70,30 @@
     return field === 'last' ? surnameKey(name) : givenKey(name);
   }
 
+  // The sort key for a roster ENTRY, preferring a surname we actually know.
+  //
+  // The LMS sends given/family parts on launch and we now store them, so where
+  // we have them the ordering is exact — including the cases derivation cannot
+  // get right, such as a family name written first. Where we have none (a user
+  // who predates that capture, or one added another way) it falls back to
+  // deriving from the display name, so no backfill is needed and the ordering
+  // simply becomes exact over time.
+  function keyFor(user, field) {
+    if (!user) return '';
+    if (field === 'last') {
+      var family = String(user.familyName == null ? '' : user.familyName).trim();
+      if (family) {
+        var given = String(user.givenName == null ? '' : user.givenName).trim();
+        return givenKey(given ? family + ' ' + given : family);
+      }
+    }
+    return key(user.displayName, field);
+  }
+
   var fields = [
     { value: 'last',  label: 'Last name'  },
     { value: 'first', label: 'First name' }
   ];
 
-  return { key: key, fields: fields };
+  return { key: key, keyFor: keyFor, fields: fields };
 }));

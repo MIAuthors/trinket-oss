@@ -37,7 +37,7 @@
       // derived from displayName rather than stored.
       $scope.rosterOrder = function(user) {
         return window.trinketRosterSort
-          ? window.trinketRosterSort.key(user && user.displayName, $scope.sort.field)
+          ? window.trinketRosterSort.keyFor(user, $scope.sort.field)
           : (user && user.displayName);
       };
 

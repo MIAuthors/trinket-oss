@@ -91,3 +91,40 @@ describe('rosterSort.fields — what the picker offers', () => {
     expect(rosterSort.fields[0].label).toMatch(/last/i);
   });
 });
+
+describe('rosterSort.keyFor — prefer a surname we actually know', () => {
+  // The LMS sends given/family parts on launch. Where we captured them the
+  // ordering is exact; where we did not (a user who predates that, or one
+  // added another way) it falls back to deriving from the display name.
+  it('uses the stored family name rather than guessing', () => {
+    const user = { displayName: 'Ana de la Cruz', givenName: 'Ana', familyName: 'de la Cruz' };
+    expect(rosterSort.keyFor(user, 'last')).toBe('de la cruz ana');
+  });
+
+  it('is exact for a name the heuristic would get wrong', () => {
+    // Family name written first, as many cultures do. Deriving from the
+    // display name would take "Wei" as the surname; the stored part knows.
+    const user = { displayName: 'Zhang Wei', givenName: 'Wei', familyName: 'Zhang' };
+    expect(rosterSort.keyFor(user, 'last')).toBe('zhang wei');
+    expect(rosterSort.key(user.displayName, 'last')).toBe('wei zhang');   // what guessing gives
+  });
+
+  it('falls back to deriving when no family name was captured', () => {
+    expect(rosterSort.keyFor({ displayName: 'Alexandra Brantley' }, 'last')).toBe('brantley alexandra');
+  });
+
+  it('falls back when the stored family name is blank', () => {
+    expect(rosterSort.keyFor({ displayName: 'Alexandra Brantley', familyName: '  ' }, 'last')).toBe('brantley alexandra');
+  });
+
+  it('uses the display name for given-name order even when parts exist', () => {
+    const user = { displayName: 'Ana de la Cruz', givenName: 'Ana', familyName: 'de la Cruz' };
+    expect(rosterSort.keyFor(user, 'first')).toBe('ana de la cruz');
+  });
+
+  it('never throws on a missing user', () => {
+    expect(rosterSort.keyFor(null, 'last')).toBe('');
+    expect(rosterSort.keyFor(undefined, 'first')).toBe('');
+    expect(rosterSort.keyFor({}, 'last')).toBe('');
+  });
+});
