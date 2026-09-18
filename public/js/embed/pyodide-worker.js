@@ -358,10 +358,25 @@
       'import matplotlib',
       "matplotlib.use('Agg')",              // a real canvas is never drawn here
       "matplotlib.rcParams['figure.autolayout'] = True",
-      'try:',
-      "    matplotlib.rcParams['figure.figsize'] = [__trinket_figw__, __trinket_figh__]",
-      'except NameError:',
-      '    pass',
+      // A FIXED default figure size, not one derived from the pane. Deriving it
+      // from the pane -- which is what this did until the dpi pane fit landed --
+      // makes figsize, and therefore every download, depend on how wide the
+      // output pane happened to be when Run was pressed: drag the divider,
+      // re-run, and the figure is RE-COMPOSED, because text is in absolute
+      // points and a smaller canvas gives the same label a larger share of the
+      // picture. Two students running identical code got different figures.
+      //
+      // 4.8 x 3.6 rather than matplotlib's 6.4 x 4.8: it is close to what the
+      // pane-derived default produced at a typical window (measured 4.66 x 3.36
+      // at a 482-px pane), so most students see no change, and the dpi floor
+      // engages far less often than 6.4 in would. The pane is fitted by scaling
+      // figure.dpi instead, which changes scale without touching composition.
+      "matplotlib.rcParams['figure.figsize'] = [4.8, 3.6]",
+      // savefig.dpi so a Download is print-usable rather than screen-sized, and
+      // so the toolbar never has to fall back to figure.dpi -- which one SVG or
+      // PDF export poisons, because print_figure builds a fresh canvas and its
+      // __init__ rewrites figure._original_dpi.
+      "matplotlib.rcParams['savefig.dpi'] = 300",
       'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
       // Figures belong to a RUN, and MPL_SETUP runs once per run (see the
       // loadPackagesFromImports chain below), so this sits exactly where
@@ -539,6 +554,61 @@
       "        return _nav_update_view(self)",
       "    _bb.NavigationToolbar2._update_view = _trinket_update_view",
       '',
+      "# ---- the dpi pane fit -------------------------------------------------------",
+      "#",
+      "# The pane sets SCALE, the student's corner drag sets SHAPE. Fitting the pane",
+      "# by figsize -- which is what matplotlib's own handle_resize does -- silently",
+      "# RE-COMPOSES the figure, because text is in absolute points: the same label on",
+      "# a smaller canvas takes a larger share of the picture, so the download ends up",
+      "# depending on the browser window. Scaling dpi changes scale only; the picture",
+      "# is identical, just bigger or smaller. This is matplotlib's own idiom --",
+      "# backend_bases._set_device_pixel_ratio is exactly dpi = ratio * _original_dpi.",
+      "if not getattr(_wac.FigureCanvasWebAggCore, '_trinket_panefit_patched', False):",
+      "    def _trinket_pane_fit(self, event):",
+      "        _f = self.figure",
+      "        _fw, _fh = _f.get_size_inches()",
+      "        _dpr = float(event.get('dpr') or 1) or 1.0",
+      "        _w = float(event.get('w') or 0)",
+      "        _h = float(event.get('h') or 0)",
+      "        if _fw <= 0 or _fh <= 0 or _w <= 0 or _h <= 0:",
+      "            return",
+      "        # The page sends the PANE, not a dpi, and the division happens here",
+      "        # against the figure's CURRENT size -- so a student writing",
+      "        # plt.figure(figsize=(10, 3)) is fitted rather than rendered at twice",
+      "        # the pane. Both dimensions bound it; the page has already subtracted",
+      "        # the figure's own title bar and toolbar from the height.",
+      "        _logical = min(_w / _fw, _h / _fh)",
+      "        # Floor the LOGICAL dpi and only then multiply. Legibility is a",
+      "        # function of dpi/dpr, because a device pixel is not a unit anyone",
+      "        # reads. Flooring the DEVICE dpi instead leaves the floor inactive",
+      "        # exactly where it is needed: at a 200-px pane on a retina screen it",
+      "        # lets 10 pt fall to 5.8 CSS px while reporting the floor satisfied.",
+      "        if _logical < 72:",
+      "            _logical = 72",
+      "        _f._set_dpi(_logical * _dpr, forward=False)",
+      "        # forward=False above means the browser has not been told; this is what",
+      "        # tells it, and it is what provokes the echo the page marks below.",
+      "        self.manager.resize(int(_fw * _f.dpi), int(_fh * _f.dpi))",
+      "        self._force_full = True",
+      "        self.draw_idle()",
+      "    _wac.FigureCanvasWebAggCore.handle_trinket_pane_fit = _trinket_pane_fit",
+      "",
+      "    _trinket_prev_resize = _wac.FigureCanvasWebAggCore.handle_resize",
+      "    def _trinket_handle_resize(self, event):",
+      "        # mpl.js's ResizeObserver cannot tell our fit from the student dragging",
+      "        # the figure's corner -- both arrive as {type:'resize'} -- so the PAGE",
+      "        # classifies them, by pointer order, and marks its own fit's echo.",
+      "        #",
+      "        # Without this the echo reaches handle_resize, which recomputes figsize",
+      "        # from twice-truncated pixels, and figsize RATCHETS DOWN on every fit:",
+      "        # measured 4.66 in -> 4.5682 in over five fits at dpr 2, with the",
+      "        # explicit-dpi export moving 466x336 -> 463x333. That is \"figsize",
+      "        # FIXED\" quietly broken, and quieter than the bug it replaced.",
+      "        if event.get('trinket_fit_echo'):",
+      "            return",
+      "        return _trinket_prev_resize(self, event)",
+      "    _wac.FigureCanvasWebAggCore.handle_resize = _trinket_handle_resize",
+      "    _wac.FigureCanvasWebAggCore._trinket_panefit_patched = True",
       '_plt.show = _trinket_show'
     ].join('\n');
 
@@ -657,17 +727,13 @@
           // interpreter, so the main thread's loadPackagesFromImports does not
           // help it.
           return pyodide.loadPackagesFromImports(src).then(function() {
-            if (mpl) {
-              installDomStubs();
-              // Default figure size chosen to fit the page's graphic pane. Only
-              // the DEFAULT — a program setting its own figsize still wins.
-              var gw = Number(msg.graphicWidth) || 0;
-              if (gw > 200) {
-                var inches = Math.max(2.4, (gw - 16) / 100);
-                pyodide.globals.set('__trinket_figw__', inches);
-                pyodide.globals.set('__trinket_figh__', Math.round(inches * 0.72 * 100) / 100);
-              }
-            }
+            // The figure size used to be computed here from msg.graphicWidth,
+            // once, before the program ran. The pane is now fitted by scaling
+            // figure.dpi after the figure exists (handle_trinket_pane_fit in
+            // MPL_SETUP), so the size is a fixed rcParam and the pane no longer
+            // reaches into it. graphicWidth is still sent -- the page uses it
+            // for the first fit -- but nothing in here reads it.
+            if (mpl) { installDomStubs(); }
             return mpl ? pyodide.runPythonAsync(MPL_SETUP).then(function() { return src; })
                        : src;
           });
