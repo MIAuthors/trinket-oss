@@ -101,6 +101,46 @@ describe('LTI 1.1 launch → trinket course role', () => {
     expect(role).toBe('course-student');
   });
 
+  it('does not demote an admin granted inside trinket', async () => {
+    // The owner adds a TA through the roster UI. That person is not an LMS
+    // teacher — and on an allowlist deploy would not be an instructor either —
+    // so the launch computes course-student. It must leave the grant alone.
+    const consumer = await seedConsumer();
+    const email = 'role-granted-admin@example.com';
+    const userId = 'u-granted-1';
+    await flow.switchUser('user');
+    await flow.createCourse({ name: 'Granted Course ' + Math.random().toString(36).slice(2, 7) });
+    const course = flow.lastResponse.body.course;
+
+    // First launch as a plain student, to create the user and enrol them.
+    flow.cookies = {};
+    await flow._inject('POST', 'http://' + AUTHORITY + LAUNCH, signedLaunch(consumer, {
+      user_id: userId, roles: 'Learner',
+      lis_person_contact_email_primary: email, lis_person_name_full: 'Granted Admin',
+      custom_trinket_course: course.id
+    }));
+    expect(await roleInCourse(email, course.id)).toBe('course-student');
+
+    // The owner grants admin in trinket.
+    const Course = require('../../../lib/models/course');
+    const granted = await User.findByLogin(email);
+    const courseDoc = await Course.findById(course.id);
+    await courseDoc.updateRole(granted, 'course-admin');
+    expect(await roleInCourse(email, course.id)).toBe('course-admin');
+
+    // They launch again, still a Learner as far as the LMS is concerned.
+    flow.cookies = {};
+    await flow._inject('POST', 'http://' + AUTHORITY + LAUNCH, signedLaunch(consumer, {
+      user_id: userId, roles: 'Learner',
+      lis_person_contact_email_primary: email, lis_person_name_full: 'Granted Admin',
+      custom_trinket_course: course.id
+    }));
+    expect(flow.lastResponse.statusCode).toBe(302);
+
+    expect(await roleInCourse(email, course.id),
+      'a launch must not take away a role the owner granted').toBe('course-admin');
+  });
+
   it('promotes on a LATER launch once the LMS reports the teacher role', async () => {
     // The real sequence: someone launches as a student, is added as a teacher
     // in the LMS, and launches again. The second launch must update the role,

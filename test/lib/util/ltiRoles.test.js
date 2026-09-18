@@ -77,3 +77,37 @@ describe('ltiRoles.isTeacherRole', () => {
     });
   });
 });
+
+describe('ltiRoles.shouldUpdateCourseRole — a launch promotes, it never demotes', () => {
+  // Both launch paths used to write the computed role whenever it differed from
+  // the stored one, in either direction. So a course-admin granted inside
+  // trinket — the owner adding a TA through the roster UI, which sets
+  // 'course-' + role — was silently demoted to course-student on that person's
+  // next launch, and lost grading rights. On a deploy whose instructor
+  // authority is an allowlist, that happens to anyone not on the list, however
+  // deliberately the owner granted it.
+  const should = ltiRoles.shouldUpdateCourseRole;
+
+  it('enrolls someone who has no role yet', () => {
+    expect(should(null, 'course-student')).toBe(true);
+    expect(should(undefined, 'course-admin')).toBe(true);
+  });
+
+  it('promotes a student the LMS now calls a teacher', () => {
+    expect(should('course-student', 'course-admin')).toBe(true);
+  });
+
+  it('does NOT demote an admin, however the role was granted', () => {
+    expect(should('course-admin', 'course-student')).toBe(false);
+  });
+
+  it('never touches a course owner', () => {
+    expect(should('course-owner', 'course-admin')).toBe(false);
+    expect(should('course-owner', 'course-student')).toBe(false);
+  });
+
+  it('does nothing when the role already matches', () => {
+    expect(should('course-admin', 'course-admin')).toBe(false);
+    expect(should('course-student', 'course-student')).toBe(false);
+  });
+});
