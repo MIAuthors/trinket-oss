@@ -92,10 +92,21 @@ function readProbe(page, py) {
 test.describe('pane fit + plot style panel', () => {
   // See the long note in panefit.spec.js. Same defect, same reason: the config
   // that owns this directory caps a test at 90_000 while runFigure waits up to
-  // 240_000. 660_000 because 'worker: the panel re-run comes back fitted' runs
-  // the program twice -- runFigure's 240 s wait, then another for the panel's
-  // own re-run -- and the value must exceed the largest of them, not equal it.
-  test.describe.configure({ timeout: 660_000 });
+  // 240_000.
+  //
+  // 360_000 for the block, and 660_000 raised on ONE test below. Only 'worker:
+  // the panel re-run comes back fitted' runs the program twice -- runFigure's
+  // 240 s wait, then another for the panel's own re-run -- so only that test can
+  // serialize two long waits. Derived per test: it needs 628 s worst case, the
+  // other four need 384-390 s, so a single 660 s block handed four tests 270 s
+  // of headroom they cannot use and doubled their exposure to an unbounded hang
+  // (see below) from 6 minutes to 11, again under `retries: 1`.
+  //
+  // This is NOT "lower the block and leave long assertions in it", which is the
+  // mistake refuted by measurement on feat/mathoutput-worker: the test with two
+  // long waits keeps the full 660 s, and 360 s still exceeds the 240 s largest
+  // assertion in the four that stay.
+  test.describe.configure({ timeout: 360_000 });
 
   // 1700x760 is deliberate: it is a shape where HEIGHT binds, so the fit gives
   // the figure the whole pane and there is no slack left to absorb anything.
@@ -212,6 +223,8 @@ test.describe('pane fit + plot style panel', () => {
   });
 
   test('worker: the panel re-run comes back fitted', async ({ page }) => {
+    // The only test here that runs the program twice; see the block note above.
+    test.setTimeout(660_000);
     await skipUnlessPlotStyle(page);
     await runFigure(page, '?runtime=worker', { width: 1280, height: 900 });
     const before = await readProbe(page);
