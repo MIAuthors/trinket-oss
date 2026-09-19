@@ -21,9 +21,15 @@ const { test, expect } = require('@playwright/test');
 // never made it out of that session's scratchpad, so this is a port onto the
 // repo's own helpers rather than a copy): drive the toolbar's own Download,
 // intercept the blob before it reaches the filesystem, and read the PNG's IHDR.
-// `savefig.dpi` is pinned to 300 by the setup block (pyodide.js:83), so
-// width_px / 300 IS figsize[0] in inches, straight from Agg. Python never has to
-// be asked.
+// `savefig.dpi` is pinned to 300, so width_px / 300 IS figsize[0] in inches,
+// straight from Agg. Python never has to be asked.
+//
+// TWO independent pins that happen to agree, and the WORKER's is the one this
+// file is named for: pyodide.js:83 for the main thread, pyodide-worker.js:379
+// for the worker, which carries its own setup string, its own
+// _trinket_savefig_dpi() and its own save path. Mutating only the main-thread
+// pin moves main and leaves the worker at 1440x1080, which looks exactly like
+// "the worker ignores savefig.dpi" and is not.
 //
 // 660_000: see the note in panefit.spec.js. runFigure waits up to 240_000 and
 // the slower test then walks five download cycles behind it (a baseline plus
@@ -144,18 +150,24 @@ function readProbe(page) {
 // A drag of the figure's own corner handle: hold ~150 ms, then steps ~40 ms
 // apart, matching panefit.spec.js.
 //
-// The reason usually given for the hold is that `resize: both` is handled by the
-// browser's own UI layer and a fast synthetic drag never engages it, leaving the
-// classifier log empty while the test passes. That is a real observation from
-// the headed `viewport: null` probes in harness/pw, and it is why the guard
-// below exists -- but it does NOT reproduce here, and saying otherwise would put
-// a false claim in a comment. Mutation-tested in this file's own context
-// (headless, the deploy config's Desktop Chrome): dropping the hold and the step
-// delays, and then collapsing the whole gesture to a single instantaneous jump,
-// BOTH still landed a `drag` entry and both tests passed.
+// The hold is usually justified by "a fast synthetic drag never engages
+// `resize: both`". Measured here rather than repeated, three gestures on the
+// same page on main:
 //
-// So the hold is belt-and-braces here, kept because it costs 400 ms and matches
-// the sibling spec, and the guard below is what actually protects the test.
+//   A  this drag (80 + 150 + 6x40 ms)      559 ms   +6 drag entries  395 -> 275
+//   B  the same with every wait removed     59 ms   +1 drag entry    515 -> 395
+//   C  the whole gesture inside one evaluate, synthetic MouseEvents
+//                                          5.9 ms    0 drag entries  div UNMOVED
+//
+// So the fact holds at the limit (C) and not at B: four CDP round trips still
+// leave ~15 ms between mousedown and mousemove, and 15 ms is enough to engage
+// the native resizer. Removing the explicit waits is a mutation of the waits,
+// not of the timing.
+//
+// The hold stays, for a reason the old comment did not give: B lands ONE drag
+// sample and A lands SIX. The guard below is `> 0`, so both pass, but a
+// one-sample drag exercises neither the classifier's repeat handling nor the
+// 150 ms fit debounce -- and on a faster machine CDP latency shrinks toward C.
 async function slowCornerDrag(page, dx, dy) {
   const c = await page.evaluate(() => {
     const r = document.querySelector('#graphic canvas').parentNode.getBoundingClientRect();
@@ -197,14 +209,26 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
       expect(first.png, `the download is a PNG: ${JSON.stringify(first)}`).toBe(true);
       expect(first.px[0], `IHDR width looks like a figure: ${JSON.stringify(first)}`)
         .toBeGreaterThan(300);
-      // 300 dpi is the setup block's pinned savefig.dpi (pyodide.js:83). If that
-      // ever changes, every figsize here is wrong by the ratio and the walk still
-      // passes, because it only ever compares figsizes to each other. So pin the
-      // divisor against matplotlib's default figure, which the program does not
-      // resize: 6.4 x 4.8 in at 300 dpi is 1920 x 1440 px.
+      // PIN THE DIVISOR. If the effective savefig.dpi is not 300, every figsize
+      // here is wrong by that ratio and the walk still passes, because it only
+      // ever compares figsizes to each other -- invariance and change are both
+      // ratios. What a wrong divisor corrupts is every number printed in a
+      // failure message, which is what a person debugging acts on.
+      //
+      // The figure is 4.8 x 3.6 in: BOTH setup strings set figure.figsize
+      // (pyodide.js:78, pyodide-worker.js:374), so at 300 dpi this is
+      // 1440 x 1080 px on both runtimes, measured. An earlier version of this
+      // comment said "matplotlib's default figure, which the program does not
+      // resize: 6.4 x 4.8 in ... 1920 x 1440" -- wrong on both counts, and that
+      // error is how the bounds came to be 3..20, a window admitting 187 to
+      // 1250 dpi. Verified: at those bounds, mutating either setup string to
+      // savefig.dpi = 600 gave 2880 x 2160 and the guard said nothing.
+      //
+      // +/-10% of the true figure, which is a guard rather than a sanity check.
       expect(first.figsize[0], `figsize from a ${SAVEFIG_DPI} dpi PNG: ${JSON.stringify(first)}`)
-        .toBeGreaterThan(3);
-      expect(first.figsize[0]).toBeLessThan(20);
+        .toBeGreaterThan(4.3);
+      expect(first.figsize[0], `figsize from a ${SAVEFIG_DPI} dpi PNG: ${JSON.stringify(first)}`)
+        .toBeLessThan(5.3);
 
       // THE WALK. Fits only -- four different pane widths, no drags. Every one
       // of these must leave the downloaded file byte-identical in composition.
@@ -268,6 +292,16 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
       // genuine drag and the next echo arrives on its heels.
       await page.setViewportSize({ width: 1000, height: 900 });
       await page.waitForTimeout(3500);
+
+      // VACUITY GUARD for this clause, and it was missing: with paneFit disabled
+      // outright the assertion below passes, because "the fit preserved the
+      // shape" and "no fit happened" are the same pixels. Test 1's guard caught
+      // that mutation and this one did not.
+      const afterProbe = await readProbe(page);
+      expect(afterProbe.kinds.filter(k => k === 'echo').length,
+        `the post-drag fit never reached Python: ${afterProbe.log.join(' ')}`)
+        .toBeGreaterThan(probe.kinds.filter(k => k === 'echo').length);
+
       const refit = await downloadFigsize(page);
       expect(refit.px, `a fit after a drag moved figsize: ${after.px} -> ${refit.px}`)
         .toEqual(after.px);
