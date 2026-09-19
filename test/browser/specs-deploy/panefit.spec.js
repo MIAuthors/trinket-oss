@@ -21,6 +21,32 @@ const { test, expect } = require('@playwright/test');
 // Chrome on a retina panel -- the assertions here are written to hold at any
 // density rather than to pin one.
 
+// THE ENCLOSING TEST BUDGET. `playwright.deploy.config.js` -- the config that
+// owns this directory -- caps a test at 90_000, and every `runFigure` here waits
+// up to 240_000 for the program to finish. Without this line the TEST dies at
+// 90 s and a cold Pyodide download is reported as "the figure never appeared":
+// the assertion that names what a student did not see never gets to run.
+//
+// Never measured here, and said plainly: this suite passes under the 90 s cap on
+// a warm local stack in 2.8 minutes, slowest test 23.9 s, and a deliberate 20 s
+// cap did not kill it either. localhost serves Pyodide from cache. The 240 s
+// waits exist for the REMOTE baseURL this config actually defaults to, on a cold
+// server, which is the case no run on this machine can produce.
+//
+// 360_000 and not 240_000: the value has to EXCEED the largest assertion timeout
+// in the tests it covers, not equal it. At an equal budget the test cap fires at
+// the same instant and you get "Test timeout of 240000ms exceeded" instead of
+// the message naming the symptom -- the same defect in weak form.
+//
+// Two blocks below raise it further because they run the program TWICE, so two
+// 240 s waits can serialize inside one test. Lowering either of those back to
+// this value would put them exactly where this line found them.
+//
+// Cost: `retries: 1` makes a genuine failure cost 2x the budget. That is the
+// right trade for a suite no workflow runs (#293). Repo-wide version is #302;
+// the same fix landed on feat/mathoutput-worker in 4a31d33.
+test.describe.configure({ timeout: 360_000 });
+
 const PROG = [
   'import matplotlib.pyplot as plt',
   'import numpy as np',
@@ -186,6 +212,10 @@ test.describe('pane fit: the figure gets the whole pane', () => {
 // document. The worker was unaffected -- it tore its state down per run -- so
 // this needs both runtimes to be worth anything.
 test.describe('pane fit: the second run', () => {
+  // Runs the program twice: two 240 s waits can serialize in one test, so the
+  // file-level 360_000 above is not enough here.
+  test.describe.configure({ timeout: 660_000 });
+
   for (const [label, query] of RUNTIMES) {
     test(`${label}: a re-run's figure is the one that gets fitted`, async ({ page }) => {
       await runFigure(page, query, { width: 1600, height: 900 });
@@ -429,6 +459,10 @@ test.describe('pane fit: more than one figure', () => {
 // the tight-layout patch, the nav restore, the resize echo guard and the save
 // dpi normalisation together -- they all had the same shape.
 test.describe('pane fit: after Clear memory', () => {
+  // Runs the program twice: two 240 s waits can serialize in one test, so the
+  // file-level 360_000 above is not enough here.
+  test.describe.configure({ timeout: 660_000 });
+
   test('main: the figure toolbar still works on the next run', async ({ page }) => {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));

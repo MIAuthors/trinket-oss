@@ -90,6 +90,13 @@ function readProbe(page, py) {
 }
 
 test.describe('pane fit + plot style panel', () => {
+  // See the long note in panefit.spec.js. Same defect, same reason: the config
+  // that owns this directory caps a test at 90_000 while runFigure waits up to
+  // 240_000. 660_000 because 'worker: the panel re-run comes back fitted' runs
+  // the program twice -- runFigure's 240 s wait, then another for the panel's
+  // own re-run -- and the value must exceed the largest of them, not equal it.
+  test.describe.configure({ timeout: 660_000 });
+
   // 1700x760 is deliberate: it is a shape where HEIGHT binds, so the fit gives
   // the figure the whole pane and there is no slack left to absorb anything.
   for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=main']]) {
