@@ -30,7 +30,7 @@ const { test, expect } = require('@playwright/test');
 // lacked; both runtimes set figure.autolayout and both had the #283 drift.
 //
 // Read that as a statement about the CODE, not about this file's scope: the
-// skip at :94 means only the worker is ever exercised here, so the main
+// skip at :99 means only the worker is ever exercised here, so the main
 // thread's #283 fix is asserted by nothing. Deliberate, not an oversight --
 // see R7-C2 in harness/panefit-coverage-round7.md.
 

@@ -59,8 +59,9 @@ test.describe('step-through debugger', () => {
   // worker-figure-toolbar.spec.js keep their long wait in a runProgram() helper
   // outside any test() block, which a per-test parser silently clears:
   //
-  //   raised:     step-debugger (180 s -> 240 s), panefit and
-  //               panefit-plotstyle (240 s -> 360/660 s),
+  //   raised:     step-debugger (180 s -> 240 s),
+  //               panefit (240 s -> 360 s, two blocks at 660 s),
+  //               panefit-plotstyle (240 s -> 420 s, one test at 660 s),
   //               worker-figsize-ratchet (240 s -> 660 s)
   //   NOT raised: math-output (180 s), matplotlib-figures (180 s),
   //               worker-figure-toolbar (180 s), console-status (120 s),

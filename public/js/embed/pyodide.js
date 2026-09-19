@@ -4051,7 +4051,6 @@ function armPaneFitClassifier() {
       clearTimeout(st.startupTimer);
       st.startupTimer = setTimeout(function() {
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
-        st.awaitStartup = false;
         st.startupTimer = null;
       // Deferred two frames rather than issued here. showGraphic() has just set
       // #graphic-wrap's height as a PERCENTAGE, and at this point the browser
@@ -4070,6 +4069,29 @@ function armPaneFitClassifier() {
         // build-list item 6, and same-id re-registration stopped being
         // impossible when registerPaneFit learned to replace a stale state.
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
+        // CLEARED HERE, not in the 50 ms timer, and the two frames between them
+        // are why. A delivery arriving after the timer fired but before this
+        // callback runs would find awaitStartup already false and pendingFits
+        // still 0, fall through to the drag branch below, and recompute figsize
+        // from startup pixels -- which is the doubling bug this whole block
+        // exists to prevent, reachable for ~2 frames on every load. The 50 ms
+        // gap decides when boot noise has stopped; it cannot also stand in for
+        // "the first fit is in flight", because nothing has been sent yet.
+        //
+        // Clearing it immediately before paneFit, in the same synchronous tick,
+        // leaves no window: paneFit refuses to fit while awaitStartup is true
+        // (see its guard), so it has to be false by the time that call is made
+        // and there is nowhere earlier that is safe.
+        //
+        // If the identity guard above returned, awaitStartup stays true on a
+        // state that is already detached or superseded -- deliberate, and
+        // harmless: that state is no longer in paneFitState or its generation
+        // has moved, so nothing will ever fit it again either way.
+        //
+        // Found by Copilot on fork PR #10; it is the same shape as c0f671c
+        // itself, a boot-order race that leaves a real delivery classified as a
+        // drag.
+        st.awaitStartup = false;
         // By now the toolbar has laid out and its icons have loaded, which is
         // what makes a button's height worth reading.
         matchMplDropdownToButtons(fig);

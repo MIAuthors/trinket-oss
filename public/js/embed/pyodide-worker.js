@@ -495,7 +495,7 @@
       '    #',
       '    # The dpi is resolved rather than left to matplotlib: see',
       '    # _trinket_savefig_dpi, defined below in this same setup string',
-      '    # (pyodide-worker.js:623) -- not above it.',
+      '    # (pyodide-worker.js:627) -- not above it.',
       "    if _evt.get('type') == 'save':",
       "        _fmt = str(_evt.get('format') or 'png')",
       '        try:',
