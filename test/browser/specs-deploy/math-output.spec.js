@@ -7,6 +7,19 @@ const { test, expect } = require('@playwright/test');
 // becomes rendered mathematics in a browser, in order with print output. That
 // needs Pyodide, SymPy and KaTeX all actually loading.
 //
+// NO SPEC IN THIS FILE PINS A RUNTIME. Every navigation goes to a bare
+// /embed/python3, so the suite exercises whichever runtime the deploy defaults
+// to, and one CI deploy proves one side. The specs that say "on both runtimes"
+// are claims earned across two runs, neither of which proves them alone. Both
+// were done by hand on 2026-09-18: this file as committed against a worker
+// deploy (6 passed), and the same assertions against ?runtime=main by
+// TEMPORARILY pointing these navigations at it (6 passed). The second is
+// evidence about the assertions, not about this file as CI would run it --
+// nobody has run it against a main-thread deploy. Note also that the `worker`
+// flag below is read
+// from the served HTML, so it reports the DEPLOY's default and would still say
+// "WORKER deploy" for a spec that forced ?runtime=main.
+//
 // Skips unless features.mathOutput is on, so it is inert on deploys that have
 // not enabled it. It NO LONGER skips on worker deploys: #288 implemented the
 // worker half, and this spec is the positive control for it. Before #288 the
@@ -256,5 +269,43 @@ test.describe('typeset SymPy output', () => {
     expect(await page.locator('#graphic canvas').count(),
       'the VPython path must actually have run — no scene means no test')
       .toBeGreaterThan(0);
+  });
+
+  // Deliberately fixme, not an assertion on what happens today.
+  //
+  // A display() card carries a source echo -- "N  <the line that produced it>"
+  // -- set by _trinket_display.set_source(), which is called ONLY from
+  // runProgram(). Both runtimes bypass runProgram for VPython, so neither sets
+  // it, and the card echoes whatever was left over: on the main thread, line N
+  // of the LAST PLAIN PROGRAM that ran (measured: a card reading
+  // "5  ZZZ_STALE_ECHO_MARKER = 42" beside a correct integral); on the worker,
+  // nothing at all, because discardWorker() gives every worker VPython run a
+  // fresh interpreter.
+  //
+  // This predates the worker feature -- the main-thread half is on origin/main
+  // today and reaches any deploy with mathOutput on. Asserting either current
+  // behaviour would lock the bug in and go red the day it is fixed, so this
+  // states the CONTRACT and stays out of the way until then.
+  //
+  // ONE run, not two. Reproducing the STALE variant needs two runs in one page
+  // session AND a first program at least as long as the display() line number,
+  // and editorRun() begins with page.goto() -- a page load destroys the
+  // interpreter holding _source_lines, so a two-call version would set up
+  // nothing and quietly assert the blank case instead. The blank echo is enough
+  // to state the contract; the stale variant belongs in the bug report.
+  test.fixme('a VPython display() card echoes the line that produced it', async ({ page }) => {
+    await editorRun(page, '/embed/python3',
+      'from vpython import *\n' +
+      'from sympy import symbols, Integral\n' +
+      'x = symbols("x")\n' +
+      'sphere(radius=1)\n' +
+      'display(Integral(x, x))\n' +
+      'print("VPY-DONE")\n');
+    await expect(page.locator('#console-output .katex').first())
+      .toBeVisible({ timeout: 240_000 });
+
+    const card = await page.locator('#console-output .math-card').first().textContent();
+    expect(card, 'the echo must name the line the student actually ran')
+      .toContain('display(Integral(x, x))');
   });
 });

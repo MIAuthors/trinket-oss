@@ -541,7 +541,9 @@ describe('createWorkerClient and the `rich` message', () => {
     // fails this test with "opts.onRich is not a function", raised at the call
     // below. A process/window error listener would observe nothing, because
     // nothing on this path is ever async.
-    made[0].onmessage({ data: { type: 'rich', json: '{}' }, target: made[0] });
+    expect(() =>
+      made[0].onmessage({ data: { type: 'rich', json: '{}' }, target: made[0] })
+    ).not.toThrow();
     await tick();
   });
 });
