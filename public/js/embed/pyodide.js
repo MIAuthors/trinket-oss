@@ -4028,6 +4028,7 @@ function armPaneFitClassifier() {
     // drag: figsize 4.8x3.6 -> 9.82x7.37 in, floored, overflowing every pane.
     if (st && st.awaitStartup) {
       paneFitNote('startup', w, h);
+      st.lastDelivered = w + 'x' + h;
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
       // The boot burst is not always ONE delivery. Most loads deliver a single
       // startup resize (the div going from the canvas's 300x150 default to the
@@ -4137,8 +4138,75 @@ function armPaneFitClassifier() {
       }, 50);
       return;
     }
-    if (st && st.pendingFits > 0 && st.seq === st.seqAtFit) {
-      st.pendingFits -= 1;
+    // A DELIVERY EQUAL TO THE PREVIOUS ONE IS A RE-SHOW, NOT A SIZE CHANGE.
+    //
+    // Hiding the output pane (the Instructions and Variables tabs, and the
+    // narrow-width editor toggle, all add `hide` to #outputContainer) drives
+    // canvas_div to 0x0; showing it drives it back. mpl.js RESETS THE CANVAS
+    // BITMAP on the way back -- setAttribute('width', ...) in its observer
+    // handler -- and then calls request_resize with the size it already had.
+    // No pointer, nothing in flight.
+    //
+    // Untreated that is a one-click student-visible bug on both runtimes,
+    // measured: the figure alternates between ratcheting (the delivery is read
+    // as a drag, figsize 3.6 -> 3.59 in, repainted) and going BLANK (read as an
+    // echo, which Python drops, so the reset bitmap is never repainted). Two
+    // clicks on the output tab and the figure is gone.
+    //
+    // WHY DROPPING IT IS SAFE, and the obvious argument for this is WRONG.
+    // "ResizeObserver only reports changes, so two equal deliveries cannot both
+    // be real" is false: mpl.js suppresses deliveries of its own, gating on
+    // `width != 0 && height != 0`, so the hide (to 0x0) is swallowed and the
+    // show arrives looking identical to what came before. Hide/show MID-DRAG
+    // demonstrates it -- a genuine drag delivery followed by an equal one:
+    //
+    //   drag:509x381 ... drag:489x366  reshow:489x366  echo:513x383
+    //
+    // The argument that does hold is about information, not about counting:
+    // two consecutive deliveries can only be equal if something between them
+    // was suppressed, so the PREDECESSOR carried the identical size and already
+    // told Python everything this one would. Dropping it loses nothing. That
+    // also covers dpr 2, where two device sizes can round to one CSS size --
+    // the information went in the rounding, not here.
+    //
+    // It relies on lastDelivered describing a REAL delivery, which is why a
+    // reshow returns without updating it. Load-bearing: a reshow is not a
+    // predecessor.
+    //
+    // ABOVE the drag branch deliberately. Below it, a re-show following a drag
+    // whose pointerup fit was skipped by the box-signature check has
+    // seq !== seqAtFit, lands in the drag branch and ratchets.
+    if (st && st.lastDelivered === w + 'x' + h) {
+      paneFitNote('reshow', w, h);
+      // mpl.js's own refresh: Python sets _force_full and draw_idle ships a
+      // fresh image. One Agg render, on a path where the figure is being looked
+      // at again.
+      try { fig.send_message('refresh', {}); } catch (e) {}
+      return;
+    }
+    if (st) st.lastDelivered = w + 'x' + h;
+    // GESTURE, NOT COUNT. This used to require `st.pendingFits > 0`, and the
+    // count cannot answer the question being asked. paneFit caps it at 2 and
+    // sends unconditionally, so with three fits in flight the third echo
+    // arrived at 0 and was classified a drag -- the ratchet this file exists to
+    // prevent, measured at 4.8x3.6 in -> 4.8x3.5933 in. Removing the count from
+    // the condition also removes the stall that gating the SEND would cause,
+    // because nothing here gates the send.
+    //
+    // `st.seq === st.seqAtFit` means no gesture has begun since we last asked
+    // Python for a size, and an interlock makes that exact: paneFit returns at
+    // `if (st.pointerDown)` BEFORE it stamps seqAtFit, and the one pointerdown
+    // listener sets `st.seq++; st.pointerDown = true;` in a single synchronous
+    // statement -- so no fit can stamp seqAtFit mid-gesture.
+    //
+    // The cost, owned rather than inherited: a delivery with no gesture behind
+    // it is now ALWAYS treated as ours, where the stale count used to let one
+    // through. Anything resizing canvas_div without a pointer stops reaching
+    // Python. That is the right answer for a resize nobody gestured at.
+    //
+    // pendingFits survives as bookkeeping and for the probe, not as a decision.
+    if (st && st.seq === st.seqAtFit) {
+      if (st.pendingFits > 0) st.pendingFits -= 1;
       paneFitNote('echo', w, h);
       // Marked so Python drops it instead of recomputing figsize from twice-
       // truncated pixels -- which is the ratchet: measured 4.66 in -> 4.5682 in
@@ -4230,6 +4298,7 @@ function registerPaneFit(fig) {
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
     seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true, lastBoxSig: null,
+    lastDelivered: null,
     chromeAtFit: null, chromeRefits: 0, startupTimer: null,
     pointerDown: false, deferred: false
   };
