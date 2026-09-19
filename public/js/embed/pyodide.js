@@ -3753,6 +3753,7 @@ function resetMplFigures() {
     var st = paneFitState[id];
     try { document.removeEventListener('pointerup', st.onPointerUp); } catch (e) {}
     try { document.removeEventListener('pointercancel', st.onPointerUp); } catch (e) {}
+    clearTimeout(st.startupTimer);
   });
   paneFitState = Object.create(null);
 }
@@ -4026,9 +4027,32 @@ function armPaneFitClassifier() {
     // the startup resize consumed `pending` so that echo was classified a
     // drag: figsize 4.8x3.6 -> 9.82x7.37 in, floored, overflowing every pane.
     if (st && st.awaitStartup) {
-      st.awaitStartup = false;
       paneFitNote('startup', w, h);
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
+      // The boot burst is not always ONE delivery. Most loads deliver a single
+      // startup resize (the div going from the canvas's 300x150 default to the
+      // figure's size), and this used to consume the marker on it. Measured 1
+      // load in 8 on the worker, the ResizeObserver's guaranteed INITIAL
+      // observation arrives first instead:
+      //
+      //   startup:300x155  drag:300x160  drag:480x360
+      //
+      // -- the phantom consumed the marker and the two real deliveries were
+      // classified as drags, so handle_resize recomputed figsize from raw
+      // pixels. It ended at 4.8x3.6 by luck, because 480 CSS px at dpi 100 is
+      // 4.8 in at ratio 1; at dpr 2 the same arithmetic gives 9.6 in, which is
+      // the startup doubling that struck build-list item 6.
+      //
+      // So coalesce instead of consuming: every delivery in the burst is marked
+      // and dropped, and the marker is consumed only once deliveries stop.
+      // paneFit already refuses to fit while awaitStartup is true, so nothing
+      // can fit mid-burst. The size in the last delivery is not used -- the fit
+      // measures the pane itself -- so this only decides WHEN boot noise ends.
+      clearTimeout(st.startupTimer);
+      st.startupTimer = setTimeout(function() {
+        if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
+        st.awaitStartup = false;
+        st.startupTimer = null;
       // Deferred two frames rather than issued here. showGraphic() has just set
       // #graphic-wrap's height as a PERCENTAGE, and at this point the browser
       // has not resolved it -- so fitting now measures a pane that is about to
@@ -4036,7 +4060,7 @@ function armPaneFitClassifier() {
       // visible flicker on first draw (746 px then 722 px on the worker). Two
       // frames of settling make it one fit. If the pane still moves afterwards
       // the wrap observer catches it, so this is only ever as good as before.
-      requestAnimationFrame(function() { requestAnimationFrame(function() {
+        requestAnimationFrame(function() { requestAnimationFrame(function() {
         // The same guard the echo branch carries. Teardown was already covered
         // by luck -- paneFit looks the state up by id and returns once
         // resetMplFigures() has emptied the map -- but a NEW figure registering
@@ -4050,7 +4074,8 @@ function armPaneFitClassifier() {
         // what makes a button's height worth reading.
         matchMplDropdownToButtons(fig);
         paneFit(fig.id);
-      }); });
+        }); });
+      }, 50);
       return;
     }
     if (st && st.pendingFits > 0 && st.seq === st.seqAtFit) {
@@ -4140,12 +4165,13 @@ function registerPaneFit(fig) {
     if (prior.fig === fig) return;          // genuinely the same figure, twice
     try { document.removeEventListener('pointerup', prior.onPointerUp); } catch (e) {}
     try { document.removeEventListener('pointercancel', prior.onPointerUp); } catch (e) {}
+    clearTimeout(prior.startupTimer);
     delete paneFitState[fig.id];
   }
   var st = paneFitState[fig.id] = {
     fig: fig, generation: mplGeneration,
     seq: 0, seqAtFit: -1, pendingFits: 0, awaitStartup: true, lastBoxSig: null,
-    chromeAtFit: null, chromeRefits: 0,
+    chromeAtFit: null, chromeRefits: 0, startupTimer: null,
     pointerDown: false, deferred: false
   };
 
