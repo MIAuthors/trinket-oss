@@ -704,7 +704,14 @@
       // `Integral(x, x)` at the prompt prints plain repr on BOTH runtimes,
       // because the hook wraps module-level statements in run_program and the
       // REPL does not go through it. Only display() differs, and only here.
-      prepareDisplay().then(function() { evaluateRepl(msg); });
+      // Both arms evaluate. A failed install must not stop the statement
+      // running -- the student loses typeset output, not their console. Stated
+      // HERE rather than relied on from ensureDisplay's catch 400 lines away:
+      // without the second arm a rejected promise posts neither `done` nor
+      // `error`, and the console is dead with no message and no prompt. run()'s
+      // chain already ends in a catch for the same reason.
+      prepareDisplay().then(function() { evaluateRepl(msg); },
+                            function() { evaluateRepl(msg); });
     }
 
     function evaluateRepl(msg) {
@@ -778,16 +785,22 @@
           })
         : Promise.resolve(source); };
 
-      // A VPython run is NOT routed through the display hook, matching
-      // runVpython() on the page (pyodide.js), which says so in as many words:
-      // typeset output covers the plain run and worker paths in slice 1 only.
-      // Without this the worker composed the hook's AST wrap on top of the
-      // vpython async transform while the main thread did not, so the same
-      // program behaved differently on the two runtimes -- the exact class of
-      // divergence this feature exists to remove. Gated on msg.vpython and not
-      // on displayReady, because a plain run earlier in the same worker has
-      // already installed the helper.
-      var wantsDisplay = !msg.vpython;
+      // A VPython run is not routed through the AST WRAP, matching runVpython()
+      // on the page (pyodide.js), which says so in as many words: typeset
+      // output covers the plain run and worker paths in slice 1 only. Without
+      // this the worker wrapped module-level expressions on top of the vpython
+      // async transform while the main thread did not.
+      //
+      // The WRAP only. prepareDisplay() below stays unconditional, because it
+      // does two separable things: it installs builtins.display, and it flips
+      // displayReady so runProgram() applies the wrap. Gating both removed
+      // `display` from VPython programs entirely -- and the main thread installs
+      // at boot for every run, VPython included, so that was a NameError on one
+      // runtime and a rendered card on the other. It is not rescued by an
+      // earlier plain run in the same worker: the page calls discardWorker()
+      // for every worker VPython run (worker-client.js), so msg.vpython is true
+      // on the first run of that worker, always.
+      var wantsWrap = !msg.vpython;
 
       var mpl = usesMatplotlib(source);
 
@@ -795,7 +808,7 @@
       // it resolves, so micropip's runPythonAsync never interleaves with the
       // transform's.
       return (msg.vpython ? ensureVPython(msg.wheelUrl) : Promise.resolve())
-        .then(function() { return wantsDisplay ? prepareDisplay() : null; })
+        .then(prepareDisplay)
         .then(prepare)
         .then(function(src) {
           // Pyodide-bundled packages the program imports (numpy, matplotlib,
@@ -819,8 +832,8 @@
           });
         })
         .then(function(src) {
-          return wantsDisplay ? runProgram(src, source)
-                              : pyodide.runPythonAsync(src);
+          return wantsWrap ? runProgram(src, source)
+                           : pyodide.runPythonAsync(src);
         })
         .then(function() {
           return mpl ? pyodide.runPythonAsync(MPL_FLUSH) : null;

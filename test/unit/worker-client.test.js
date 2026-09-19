@@ -534,15 +534,14 @@ describe('createWorkerClient and the `rich` message', () => {
     createWorkerClient({ workerUrl: '/w.js', pyodideUrl: '/p.js', WorkerCtor: FakeWorker });
     made[0].onmessage({ data: { type: 'ready', v: 1 } });
     await tick();
-    // Asserted on a WINDOW error listener rather than .not.toThrow(): a
-    // listener's exception is reported, not rethrown, so not.toThrow() passes
-    // even with the guard deleted.
-    const seen = [];
-    const onErr = (e) => seen.push(e);
-    process.on('uncaughtException', onErr);
+    // A real Worker DISPATCHES to onmessage, so a handler's exception is
+    // reported to the global rather than rethrown. The fake calls onmessage
+    // directly, so an exception lands HERE and fails the test -- which is the
+    // assertion. Verified by mutation: dropping the `if (opts.onRich)` guard
+    // fails this test with "opts.onRich is not a function", raised at the call
+    // below. A process/window error listener would observe nothing, because
+    // nothing on this path is ever async.
     made[0].onmessage({ data: { type: 'rich', json: '{}' }, target: made[0] });
     await tick();
-    process.removeListener('uncaughtException', onErr);
-    expect(seen).toEqual([]);
   });
 });

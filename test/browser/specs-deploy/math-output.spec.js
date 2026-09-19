@@ -219,4 +219,42 @@ test.describe('typeset SymPy output', () => {
       'a VPython run must not typeset: the main thread does not, so neither may the worker')
       .toBe(0);
   });
+
+  test('display() still works INSIDE a VPython program (#294 review, round 1)', async ({ page }) => {
+    // The other half, and the first attempt at the test above could not see it.
+    // Skipping the AST wrap for VPython must not also skip INSTALLING the
+    // helper: the main thread installs at boot for every run, VPython included,
+    // so gating both left display() raising NameError on the worker and
+    // rendering on the main thread -- and the program died at that line.
+    //
+    // "No bare-expression card" is satisfied by both the correct gate and the
+    // over-gate, which is why this assertion has to exist separately.
+    const cfg = page.__mathCfg || {};
+    test.skip(cfg.worker && !cfg.wvpy,
+      'worker deploy without features.workerVPython — the divergence is unreachable');
+
+    await editorRun(page, '/embed/python3',
+      'from vpython import *\n' +
+      'from sympy import symbols, Integral\n' +
+      'x = symbols("x")\n' +
+      'sphere(pos=vector(0,0,0), radius=1)\n' +
+      'display(Integral(x, x))\n' +
+      'print("VPY-DISPLAY-DONE")\n');
+
+    // Symptom first: the student asked for a formula and must get one.
+    await expect(page.locator('#console-output .katex').first(),
+      'display() must typeset inside a VPython program on BOTH runtimes')
+      .toBeVisible({ timeout: 240_000 });
+
+    const text = await consoleTextContent(page);
+    expect(text, 'display() must not raise inside a VPython program')
+      .not.toContain('NameError');
+    expect(text, 'the program must survive past the display() call')
+      .toContain('VPY-DISPLAY-DONE');
+
+    // Vacuity guard last: without a scene this was never a VPython run.
+    expect(await page.locator('#graphic canvas').count(),
+      'the VPython path must actually have run — no scene means no test')
+      .toBeGreaterThan(0);
+  });
 });
