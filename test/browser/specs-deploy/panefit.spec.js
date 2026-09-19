@@ -121,19 +121,26 @@ test.describe('pane fit: startup', () => {
       // every pane. It did not show at every window size, nor on main, whose
       // synchronous round trip coalesces the two resizes.
       //
-      // AT LEAST one, not exactly one, and c0f671c is why. paneFitNote('startup')
-      // sits ABOVE the coalescing block (pyodide.js:4030), so every delivery in a
-      // boot burst is noted -- and the whole point of that commit is that the
-      // burst is not always a single delivery. Measured there at 1 worker load in
-      // 8; measured 0 in 8 by the round-7 coverage probe at dpr 1 headless, so it
-      // is rare rather than gone. `toHaveLength(1)` therefore went red on exactly
-      // the load the fix exists for, while a REVERT goes red on the `drag`
-      // assertion below -- a flake detector that punished the fixed behaviour.
-      // The invariant that survived c0f671c is not the note count: it is that no
-      // delivery is misread as a drag, and that awaitStartup is consumed once.
-      // Both are asserted below.
-      expect(kinds.filter(k => k === 'startup').length,
-        `at least one startup: ${got.classified}`).toBeGreaterThanOrEqual(1);
+      // THERE IS DELIBERATELY NO ASSERTION ON THE STARTUP-NOTE COUNT. This used
+      // to be `toHaveLength(1)`, and c0f671c made that false:
+      // paneFitNote('startup') sits ABOVE the coalescing block
+      // (pyodide.js:4030), so every delivery in a boot burst is noted, and the
+      // point of that commit is that the burst is not always one delivery. So
+      // the old assertion went red on exactly the load the fix exists for,
+      // while a REVERT goes red on the `drag` assertion below -- a flake
+      // detector that punished the fixed behaviour.
+      //
+      // Weakening it to `toBeGreaterThanOrEqual(1)` was the first repair and it
+      // was a tautology: `awaitStartup = false` is written at exactly one place
+      // (pyodide.js:4115), inside the rAF callback, which is only ever scheduled
+      // from the branch whose first statement IS paneFitNote('startup'). So
+      // awaitStartup === false implies at least one startup note, and that is
+      // asserted below. No mutation could turn the weakened line red. The
+      // 40-entry log cap does not rescue it either -- a burst would need 40+
+      // deliveries to evict the first note.
+      //
+      // The invariants that survived c0f671c are the two below: no delivery is
+      // misread as a drag, and the startup marker is consumed.
 
       // Nobody dragged anything, so nothing may be classified as a drag. A drag
       // is what recomputes figsize, and a misclassified one is the ratchet.

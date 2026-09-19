@@ -68,6 +68,18 @@ test.describe('step-through debugger', () => {
   //               deploy-smoke (120 s)
   //   marginal:   plotstyle.spec.js, largest wait exactly 90 s, i.e. the cap
   //
+  // THE TABLE ABOVE IS specs-deploy ONLY, AND IT IS NOT THE WORST CASE. The
+  // worst is in ../specs, the directory browser-smoke.yml actually runs:
+  // worker-runtime.spec.js has 240 s assertions across 15 tests with NOTHING
+  // raising the budget, and share-runtime-option.spec.js has three tests
+  // exceeding via its runInEmbed helper. A green run of the CI-facing suite is
+  // therefore saying less than it appears to. Both are in #302.
+  //
+  // Counting trap, which is why two independent sweeps disagreed: a per-`test(`
+  // grep undercounts. matplotlib-figures.spec.js builds its tests in a
+  // `for...of CASES` loop (:58-59), so it greps as one test and is four, all
+  // four inheriting runProgram()'s 180 s wait.
+  //
   // Those five have not hit it because nothing has been slow enough yet. That
   // is luck, not design. math-output.spec.js is fixed on feat/mathoutput-worker
   // (4a31d33) and still unfixed here, so expect these two branches to collide

@@ -4048,6 +4048,27 @@ function armPaneFitClassifier() {
       // paneFit already refuses to fit while awaitStartup is true, so nothing
       // can fit mid-burst. The size in the last delivery is not used -- the fit
       // measures the pane itself -- so this only decides WHEN boot noise ends.
+      // RE-ENTRY IS POSSIBLE HERE, BY DESIGN, and bounded. Since ec7e7dc the
+      // flag outlives the timer -- it is cleared two frames later, beside the
+      // fit -- so a delivery arriving after the timer fired still lands in this
+      // branch. This `clearTimeout` is then a no-op (the timer nulled
+      // startupTimer on its way out), and a SECOND 50 ms timer is scheduled
+      // while the first one's rAF pair is still pending: two paneFit calls from
+      // one boot.
+      //
+      // Measured by forcing a delivery on the exact edge (round 8): on main the
+      // second fit is dropped at paneFit's box-signature check, unchanged at
+      // 513x476@1. On the worker it IS sent, because chrome settles 64 -> 82
+      // across that interval -- but it SUBSTITUTES for the chrome refit rather
+      // than adding to it, so the log reads
+      // `startup startup echo` instead of `startup echo chrome`. Final state is
+      // byte-identical either way (canvas 513x384, box 513x480, pendingFits 1)
+      // and pendingFits never exceeded 1.
+      //
+      // So no guard. A guard would have to tell a burst delivery from a late
+      // one, which is the judgement the 50 ms gap already makes, and clearing
+      // the flag any earlier reopens the two-frame drag misclassification that
+      // ec7e7dc closed and that round 8 reproduced.
       clearTimeout(st.startupTimer);
       st.startupTimer = setTimeout(function() {
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
@@ -4908,7 +4929,10 @@ function runInWorker(program, files, serialized, decision) {
   // MEASURED, because the obvious guess is wrong: Pyodide's own artifacts (2.4 MB
   // stdlib, 2.7 MB wasm, 3.1 MB numpy) come from jsdelivr and are served from the
   // browser cache on run 2, but OUR wheel is refetched in full — all 3,516,355
-  // bytes — because app.js:65 puts `no-store` on every response trinket sends.
+  // bytes — because the server's root app.js:314 (and :300 for Boom errors)
+  // puts `no-store` on every response trinket sends, via
+  // cacheControl.headersFor. NOTE the path: this repo has six app.js files and
+  // only the one at the root is the server.
   // It carries an etag, so exempting /components/ from that blanket policy would
   // make it a 304. See the spec (V7a) for that and the standby-worker lever.
   // python3 runs never take this branch.
