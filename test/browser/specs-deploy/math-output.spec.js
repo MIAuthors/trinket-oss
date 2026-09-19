@@ -23,6 +23,45 @@ async function editorRun(page, path, code) {
 const consoleText = (page) =>
   page.evaluate(() => document.querySelector('#console-output')?.innerText || '');
 
+// textContent, NOT innerText. Below about 1100 px the embed makes the output
+// pane tabbed, so #console-output is in the DOM with the run's text in it while
+// innerText returns '' — a finished run reads as one that never started, and the
+// wait burns its full timeout before failing for the wrong reason.
+const consoleTextContent = (page) =>
+  page.evaluate(() => document.querySelector('#console-output')?.textContent || '');
+
+// Open the interactive console WITHOUT running anything first. At narrow widths
+// Run is a split button and clicking `.run-it` opens its menu instead, so this
+// goes at the Console entry directly.
+async function openConsole(page, path) {
+  await page.goto(path);
+  await expect(page.locator('.ace_editor').first()).toBeVisible();
+  await page.evaluate(() => {
+    const a = Array.from(document.querySelectorAll('a.menu-button'))
+      .find(e => /^\s*Console\s*$/.test(e.textContent || ''));
+    window.jQuery(a).trigger('click');
+  });
+  await expect(async () => {
+    expect(await consoleTextContent(page)).toContain('>>>');
+  }).toPass({ timeout: 180_000 });
+}
+
+// Push one statement at the jqconsole prompt and wait for the prompt to return.
+async function replPush(page, statement) {
+  const before = await page.evaluate(() =>
+    (document.querySelector('#console-output')?.textContent || '').length);
+  await page.evaluate((s) => {
+    const jq = window.jQuery('#console-output').data('jqconsole');
+    jq.SetPromptText(s);
+    jq._HandleEnter();
+  }, statement);
+  await expect(async () => {
+    const t = await consoleTextContent(page);
+    expect(t.length).toBeGreaterThan(before);
+    expect(t.trimEnd().endsWith('>>>')).toBe(true);
+  }).toPass({ timeout: 180_000 });
+}
+
 test.describe('typeset SymPy output', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/embed/python3');
@@ -33,8 +72,12 @@ test.describe('typeset SymPy output', () => {
     const html = await page.content();
     const cfg = {
       math:   /mathOutput\s*:\s*true/.test(html),
-      worker: /workerRuntime\s*:\s*true/.test(html)
+      worker: /workerRuntime\s*:\s*true/.test(html),
+      wvpy:   /workerVPython\s*:\s*true/.test(html)
     };
+    // Stashed so the VPython parity test below can gate on it without reading
+    // the served page a second time.
+    page.__mathCfg = cfg;
     // Say WHY out loud. A silent skip is indistinguishable from a pass in the
     // summary line, and this spec did exactly that: it skipped on a deploy where
     // mathOutput was demonstrably ON, because the detection probed the wrong
@@ -105,6 +148,31 @@ test.describe('typeset SymPy output', () => {
       .toContain('AFTER');
   });
 
+  test('display() works at the console BEFORE any Run (#294 review)', async ({ page }) => {
+    // The main thread installs the display helper during boot, ahead of its
+    // Clear-memory snapshot, so `display` is a builtin the moment a trinket
+    // opens. The worker installed it only inside run(), so typing this at a
+    // fresh prompt raised NameError there and worked on the main thread —
+    // opening a trinket and typing at the console is ordinary student
+    // behaviour, and `Clear memory` returns a student to exactly this state.
+    await openConsole(page, '/embed/python3');
+    await replPush(page, 'from sympy import symbols, Integral; x = symbols("x")');
+
+    // Vacuity guard: the import really landed, so a NameError below would be
+    // about `display` and not about `Integral`.
+    expect(await consoleTextContent(page), 'the sympy import must have succeeded')
+      .not.toContain('ModuleNotFoundError');
+
+    await replPush(page, 'display(Integral(x, x))');
+
+    // Symptom first: what the student sees is a rendered formula.
+    await expect(page.locator('#console-output .katex').first(),
+      'display() at a fresh prompt should typeset on BOTH runtimes')
+      .toBeVisible({ timeout: 180_000 });
+    expect(await consoleTextContent(page), 'display must be installed before the first Run')
+      .not.toContain('NameError');
+  });
+
   test('a non-typesettable value stays silent, as a script does', async ({ page }) => {
     // The compatibility guarantee: existing trinkets behave identically.
     await editorRun(page, '/embed/python3', '42\n"a string"\nprint("ONLY THIS")\n');
@@ -113,5 +181,42 @@ test.describe('typeset SymPy output', () => {
     }).toPass({ timeout: 180_000 });
     expect(await page.locator('#console-output .katex').count(),
       'ints and strings must not typeset').toBe(0);
+  });
+
+  test('a VPython program does NOT typeset, on either runtime (#294 review)', async ({ page }) => {
+    // runVpython() on the page says in as many words that VPython is
+    // deliberately not routed through the display hook — typeset output is
+    // slice 1, the plain run and worker paths. The worker prepared and applied
+    // the hook for every run including VPython, so the same program produced a
+    // card on a worker deploy and none on the main thread.
+    //
+    // Gated on workerVPython for the same reason the suite is gated on
+    // mathOutput: on a deploy without it, a worker VPython run is not the thing
+    // under test.
+    const cfg = page.__mathCfg || {};
+    test.skip(cfg.worker && !cfg.wvpy,
+      'worker deploy without features.workerVPython — the divergence is unreachable');
+
+    await editorRun(page, '/embed/python3',
+      'from vpython import *\n' +
+      'from sympy import symbols, Integral\n' +
+      'x = symbols("x")\n' +
+      'sphere(pos=vector(0,0,0), radius=1)\n' +
+      'Integral(x, x)\n' +
+      'print("VPY-DONE")\n');
+
+    await expect(async () => {
+      expect(await consoleTextContent(page)).toContain('VPY-DONE');
+    }).toPass({ timeout: 240_000 });
+
+    // Vacuity guard, and it is the whole test: without a scene this program did
+    // not take the VPython path at all, and "no cards" would prove nothing.
+    expect(await page.locator('#graphic canvas').count(),
+      'the VPython path must actually have run — no scene means no test')
+      .toBeGreaterThan(0);
+
+    expect(await page.locator('#console-output .katex').count(),
+      'a VPython run must not typeset: the main thread does not, so neither may the worker')
+      .toBe(0);
   });
 });

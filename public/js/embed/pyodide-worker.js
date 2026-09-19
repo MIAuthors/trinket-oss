@@ -271,6 +271,19 @@
       return displayLoading;
     }
 
+    // Memoized, so only the first caller in a flag-on worker pays the fetch; an
+    // empty displayUrl is the flag being off and skips it entirely.
+    //
+    // Module scope, not local to run(), because the REPL needs it too: the main
+    // thread installs the helper during its boot, ahead of the Clear-memory
+    // snapshot, so `display` is a builtin before the student has pressed
+    // anything. A worker that installed only inside run() left the console
+    // raising NameError until the first Run, and `Clear memory` put a student
+    // who had been using the feature straight back into that state.
+    function prepareDisplay() {
+      return displayUrl ? ensureDisplay(displayUrl) : Promise.resolve();
+    }
+
     // The worker's half of the page's runProgram().
     //
     // `src` is what executes — already async-transformed where that applies.
@@ -679,6 +692,22 @@
 
     function pushRepl(msg) {
       currentRunId = msg.id;
+      // The display helper must be installed before the statement is evaluated,
+      // not only before a Run: on the main thread `display` is a builtin from
+      // boot, so typing display(Integral(x)) at a fresh prompt works there and
+      // raised NameError here. prepareDisplay is memoized, so only the first
+      // statement of a flag-on worker waits on the fetch, and a failed load
+      // resolves rather than rejects -- the console still evaluates, with the
+      // same NameError the main thread gives when its own install failed.
+      //
+      // Bare expressions are NOT affected either way: measured on 2026-09-18,
+      // `Integral(x, x)` at the prompt prints plain repr on BOTH runtimes,
+      // because the hook wraps module-level statements in run_program and the
+      // REPL does not go through it. Only display() differs, and only here.
+      prepareDisplay().then(function() { evaluateRepl(msg); });
+    }
+
+    function evaluateRepl(msg) {
       var console_;
       try {
         console_ = ensureReplConsole();
@@ -749,11 +778,16 @@
           })
         : Promise.resolve(source); };
 
-      // Memoized, so only the first run of a flag-on worker pays the fetch; an
-      // empty displayUrl is the flag being off and skips it entirely.
-      var prepareDisplay = function() {
-        return displayUrl ? ensureDisplay(displayUrl) : Promise.resolve();
-      };
+      // A VPython run is NOT routed through the display hook, matching
+      // runVpython() on the page (pyodide.js), which says so in as many words:
+      // typeset output covers the plain run and worker paths in slice 1 only.
+      // Without this the worker composed the hook's AST wrap on top of the
+      // vpython async transform while the main thread did not, so the same
+      // program behaved differently on the two runtimes -- the exact class of
+      // divergence this feature exists to remove. Gated on msg.vpython and not
+      // on displayReady, because a plain run earlier in the same worker has
+      // already installed the helper.
+      var wantsDisplay = !msg.vpython;
 
       var mpl = usesMatplotlib(source);
 
@@ -761,7 +795,7 @@
       // it resolves, so micropip's runPythonAsync never interleaves with the
       // transform's.
       return (msg.vpython ? ensureVPython(msg.wheelUrl) : Promise.resolve())
-        .then(prepareDisplay)
+        .then(function() { return wantsDisplay ? prepareDisplay() : null; })
         .then(prepare)
         .then(function(src) {
           // Pyodide-bundled packages the program imports (numpy, matplotlib,
@@ -784,7 +818,10 @@
                        : src;
           });
         })
-        .then(function(src) { return runProgram(src, source); })
+        .then(function(src) {
+          return wantsDisplay ? runProgram(src, source)
+                              : pyodide.runPythonAsync(src);
+        })
         .then(function() {
           return mpl ? pyodide.runPythonAsync(MPL_FLUSH) : null;
         })
