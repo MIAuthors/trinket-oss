@@ -135,9 +135,17 @@ test.describe('pane fit: startup', () => {
       // (pyodide.js:4115), inside the rAF callback, which is only ever scheduled
       // from the branch whose first statement IS paneFitNote('startup'). So
       // awaitStartup === false implies at least one startup note, and that is
-      // asserted below. No mutation could turn the weakened line red. The
-      // 40-entry log cap does not rescue it either -- a burst would need 40+
-      // deliveries to evict the first note.
+      // asserted below.
+      //
+      // Two overstatements in that argument, corrected by round 9 without
+      // changing its conclusion. "No mutation could turn the weakened line red"
+      // is false: deleting paneFitNote('startup') would. It is caught anyway,
+      // by the second-run test at :297 -- which is the 660 s two-run one, so if
+      // that test is ever skipped the mutation goes invisible. And the 40-entry
+      // log-cap reasoning was backwards: every burst delivery IS a startup
+      // note, so 40+ deliveries give 40 startup notes rather than none; evicting
+      // the first would need 40 consecutive NON-startup entries, which is
+      // unreachable.
       //
       // The invariants that survived c0f671c are the two below: no delivery is
       // misread as a drag, and the startup marker is consumed.

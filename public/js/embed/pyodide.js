@@ -4048,27 +4048,43 @@ function armPaneFitClassifier() {
       // paneFit already refuses to fit while awaitStartup is true, so nothing
       // can fit mid-burst. The size in the last delivery is not used -- the fit
       // measures the pane itself -- so this only decides WHEN boot noise ends.
-      // RE-ENTRY IS POSSIBLE HERE, BY DESIGN, and bounded. Since ec7e7dc the
-      // flag outlives the timer -- it is cleared two frames later, beside the
-      // fit -- so a delivery arriving after the timer fired still lands in this
-      // branch. This `clearTimeout` is then a no-op (the timer nulled
-      // startupTimer on its way out), and a SECOND 50 ms timer is scheduled
-      // while the first one's rAF pair is still pending: two paneFit calls from
-      // one boot.
+      // RE-ENTRY IS POSSIBLE HERE, BY DESIGN, and the COUNT IS NOT BOUNDED.
+      // Since ec7e7dc the flag outlives the timer -- it is cleared two frames
+      // later, beside the fit -- so a delivery arriving after the timer fired
+      // still lands in this branch. This `clearTimeout` is then a no-op (the
+      // timer nulled startupTimer on its way out), so that delivery's timer is
+      // ADDITIVE rather than a replacement: each fired timer gets its own rAF
+      // chain and its own paneFit call.
       //
-      // Measured by forcing a delivery on the exact edge (round 8): on main the
-      // second fit is dropped at paneFit's box-signature check, unchanged at
-      // 513x476@1. On the worker it IS sent, because chrome settles 64 -> 82
-      // across that interval -- but it SUBSTITUTES for the chrome refit rather
-      // than adding to it, so the log reads
-      // `startup startup echo` instead of `startup echo chrome`. Final state is
-      // byte-identical either way (canvas 513x384, box 513x480, pendingFits 1)
-      // and pendingFits never exceeded 1.
+      // Re-entries therefore track late deliveries one for one, and the only
+      // thing that stops them is boot noise stopping. Measured (round 9) by
+      // delaying rAF 2000 ms and delivering 12 real ResizeObserver callbacks
+      // 100 ms apart: 12 re-entries on both runtimes, and the shipped timing
+      // with the same 12 gives 0. A slow rAF relative to setTimeout is exactly
+      // a backgrounded tab, so this is a real condition, not an invented one.
       //
-      // So no guard. A guard would have to tell a burst delivery from a late
-      // one, which is the judgement the 50 ms gap already makes, and clearing
-      // the flag any earlier reopens the two-frame drag misclassification that
-      // ec7e7dc closed and that round 8 reproduced.
+      // WHAT MAKES IT HARMLESS IS NOT THIS BLOCK. It is paneFit's box-signature
+      // skip (`if (sig === st.lastBoxSig) return;`, pyodide.js:3915): of those
+      // 13 paneFit calls, 1 sent and 12 were
+      // dropped because the box had not moved. Final state was correct on both
+      // runtimes -- canvas 513 inside box 513, pendingFits 0, zero drags. An
+      // earlier version of this comment said "two calls from one boot" and
+      // "bounded", and credited the 50 ms gap. All three were wrong: it is ~13,
+      // nothing bounds the count, and the gap PERMITS the re-entries rather
+      // than limiting them. The thing doing the work was in another function
+      // and went unmentioned for a commit.
+      //
+      // RESIDUAL, read not measured: those 12 were dropped because the box was
+      // constant. A pane genuinely moving while backgrounded gives each late
+      // delivery a different box, so each one sends -- N late deliveries, N Agg
+      // renders. pendingFits caps the counter, not the sends. That is cost, not
+      // correctness, and nothing here addresses it.
+      //
+      // So still no guard, but for a narrower reason than the one given before:
+      // a guard would have to tell a burst delivery from a late one, which is
+      // the judgement the 50 ms gap is already making and getting right -- and
+      // clearing the flag any earlier reopens the two-frame drag
+      // misclassification that ec7e7dc closed and round 8 reproduced.
       clearTimeout(st.startupTimer);
       st.startupTimer = setTimeout(function() {
         if (paneFitState[fig.id] !== st || st.generation !== mplGeneration) return;
@@ -4929,7 +4945,7 @@ function runInWorker(program, files, serialized, decision) {
   // MEASURED, because the obvious guess is wrong: Pyodide's own artifacts (2.4 MB
   // stdlib, 2.7 MB wasm, 3.1 MB numpy) come from jsdelivr and are served from the
   // browser cache on run 2, but OUR wheel is refetched in full — all 3,516,355
-  // bytes — because the server's root app.js:314 (and :300 for Boom errors)
+  // bytes — because the server's root ./app.js:314 (and :300 for Boom errors)
   // puts `no-store` on every response trinket sends, via
   // cacheControl.headersFor. NOTE the path: this repo has six app.js files and
   // only the one at the root is the server.
