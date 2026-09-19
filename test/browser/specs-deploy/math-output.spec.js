@@ -91,15 +91,22 @@ test.describe('typeset SymPy output', () => {
   // `.ace_editor` visibility checks in editorRun() and openConsole() -- want the
   // page's JS bundle, not Pyodide, and land well inside 20 s.
   //
-  // 240_000 uniform, and deliberately not lower for the fast tests: it must
-  // exceed the LARGEST assertion timeout in any test it covers, and four of
-  // these carry 180 s waits. A 120 s block with per-test raises on the two slow
-  // ones would put those four back exactly where this line found them. The cost
-  // is that `retries: 1` makes a genuine failure cost 2 x 240 s -- measured at
-  // 8:02 for one failing test -- which is the right trade for a suite no
-  // workflow runs (#293) and which has, for that reason, never executed under
-  // this config at all.
-  test.describe.configure({ timeout: 240_000 });
+  // 300_000, and the value has to EXCEED the largest assertion timeout in any
+  // test it covers -- not equal it. Three tests here wait 240 s, and at a 240 s
+  // block the TEST cap fires at the same moment, so the assertion still never
+  // reports on its own terms: you get "Test timeout of 240000ms exceeded"
+  // instead of the message naming what the student did not see. That is the
+  // same defect this line exists to fix, in weak form. Measured.
+  //
+  // Not lower for the fast tests either: four of these carry 180 s waits, so a
+  // 120 s block with per-test raises on the slow ones would put those four back
+  // exactly where this line found them.
+  //
+  // The cost is that `retries: 1` makes a genuine failure cost 2 x the block --
+  // measured at 8:02 for one failing test at 240 s -- which is the right trade
+  // for a suite no workflow runs (#293) and which has, for that reason, never
+  // executed under this config at all. See #302 for the repo-wide version.
+  test.describe.configure({ timeout: 300_000 });
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/embed/python3');
