@@ -16,8 +16,8 @@ const { test, expect } = require('@playwright/test');
 // TEMPORARILY pointing these navigations at it (6 passed). The second is
 // evidence about the assertions, not about this file as CI would run it --
 // nobody has run it against a main-thread deploy. Note also that the `worker`
-// flag below is read
-// from the served HTML, so it reports the DEPLOY's default and would still say
+// flag below is read from the served HTML, so it reports the DEPLOY's default
+// and would still say
 // "WORKER deploy" for a spec that forced ?runtime=main.
 //
 // Skips unless features.mathOutput is on, so it is inert on deploys that have
@@ -76,6 +76,31 @@ async function replPush(page, statement) {
 }
 
 test.describe('typeset SymPy output', () => {
+  // The per-assertion timeouts below are 180-240 s because Pyodide, SymPy and
+  // KaTeX all have to load, and on the worker a cold interpreter boots first.
+  // None of them can be reached without raising the ENCLOSING test timeout.
+  // test/browser/playwright.deploy.config.js -- the config that owns this
+  // directory (testDir: './specs-deploy') -- sets timeout: 90_000, so without
+  // this line the test is killed at 90 s and a matcher waiting 180 or 240 never
+  // gets there. A slow Pyodide download then reports as a failure rather than
+  // as a slow download. specs-deploy/step-debugger.spec.js:59 raises it for the
+  // same reason and says so at :50-58.
+  //
+  // That config also sets expect: { timeout: 20_000 }, which is why every long
+  // wait here passes its own timeout explicitly. The two that do not -- the
+  // `.ace_editor` visibility checks in editorRun() and openConsole() -- want the
+  // page's JS bundle, not Pyodide, and land well inside 20 s.
+  //
+  // 240_000 uniform, and deliberately not lower for the fast tests: it must
+  // exceed the LARGEST assertion timeout in any test it covers, and four of
+  // these carry 180 s waits. A 120 s block with per-test raises on the two slow
+  // ones would put those four back exactly where this line found them. The cost
+  // is that `retries: 1` makes a genuine failure cost 2 x 240 s -- measured at
+  // 8:02 for one failing test -- which is the right trade for a suite no
+  // workflow runs (#293) and which has, for that reason, never executed under
+  // this config at all.
+  test.describe.configure({ timeout: 240_000 });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/embed/python3');
     // Read the SERVED page, not a guessed JS object path: the embed config is a
@@ -274,8 +299,9 @@ test.describe('typeset SymPy output', () => {
   // Deliberately fixme, not an assertion on what happens today.
   //
   // A display() card carries a source echo -- "N  <the line that produced it>"
-  // -- set by _trinket_display.set_source(), which is called ONLY from
-  // runProgram(). Both runtimes bypass runProgram for VPython, so neither sets
+  // -- set by _trinket_display.set_source(), which runs inside runProgram()
+  // (and once at install(), with an empty source). Both runtimes bypass
+  // runProgram for VPython, so neither sets
   // it, and the card echoes whatever was left over: on the main thread, line N
   // of the LAST PLAIN PROGRAM that ran (measured: a card reading
   // "5  ZZZ_STALE_ECHO_MARKER = 42" beside a correct integral); on the worker,
@@ -283,7 +309,10 @@ test.describe('typeset SymPy output', () => {
   // fresh interpreter.
   //
   // This predates the worker feature -- the main-thread half is on origin/main
-  // today and reaches any deploy with mathOutput on. Asserting either current
+  // today and reaches any deploy with mathOutput on. The stale variant also
+  // needs the previous program to be at least as long as the display() line
+  // number -- otherwise _source_at()'s `lineno > len(_source_lines)` guard
+  // returns '' and the echo is blank instead. Asserting either current
   // behaviour would lock the bug in and go red the day it is fixed, so this
   // states the CONTRACT and stays out of the way until then.
   //
