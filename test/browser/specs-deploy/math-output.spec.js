@@ -316,13 +316,17 @@ test.describe('typeset SymPy output', () => {
   // behaviour would lock the bug in and go red the day it is fixed, so this
   // states the CONTRACT and stays out of the way until then.
   //
+  // Tracked as #303. Un-skip this as the verification when that lands -- it
+  // fails today in about 6 s on the blank echo, not by timeout, so it costs
+  // seconds if it is ever un-skipped early.
+  //
   // ONE run, not two. Reproducing the STALE variant needs two runs in one page
   // session AND a first program at least as long as the display() line number,
   // and editorRun() begins with page.goto() -- a page load destroys the
   // interpreter holding _source_lines, so a two-call version would set up
   // nothing and quietly assert the blank case instead. The blank echo is enough
   // to state the contract; the stale variant belongs in the bug report.
-  test.fixme('a VPython display() card echoes the line that produced it', async ({ page }) => {
+  test.fixme('a VPython display() card echoes the line that produced it (#303)', async ({ page }) => {
     await editorRun(page, '/embed/python3',
       'from vpython import *\n' +
       'from sympy import symbols, Integral\n' +
