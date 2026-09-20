@@ -153,13 +153,21 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   function submission(extra) {
     return Object.assign({
       id: 'sub-mark-1', _creator: USER, courseId: 'course-1', materialId: MATERIAL,
-      submittedOn: new Date('2026-09-10T00:00:00Z'),
-      save: function () { saved.push({ sourcedId: this.ltiReportedSourcedId, at: this.ltiReportedAt }); return Promise.resolve(this); }
+      submittedOn: new Date('2026-09-10T00:00:00Z')
     }, extra || {});
   }
 
   beforeEach(() => {
     posted11 = []; saved = [];
+    // The marker is written with an atomic partial update now, not save(), so a
+    // whole-row overwrite cannot revert a concurrent resubmission. See
+    // test/lib/models/trinket-mark-reported.test.js for that guarantee against
+    // the real backends -- mongo alone cannot show it.
+    vi.spyOn(Trinket, 'findByIdAndUpdate').mockImplementation((id, update) => {
+      var set = (update && update.$set) || {};
+      saved.push({ id: id, sourcedId: set.ltiReportedSourcedId, at: set.ltiReportedAt });
+      return Promise.resolve({ id: id });
+    });
     vi.spyOn(lti11Outcomes, 'postSubmission').mockImplementation((a) => { posted11.push(a); return Promise.resolve({ ok: true }); });
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation((p, r, cb) => cb(null, assignmentLink));
     vi.spyOn(LtiResourceLink, 'findAssignmentLink').mockImplementation((c, m, cb) => cb(null, assignmentLink));
