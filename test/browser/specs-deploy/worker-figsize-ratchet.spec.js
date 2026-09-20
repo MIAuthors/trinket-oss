@@ -375,6 +375,15 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
       // Four triples, each one a different span, so no cycle repeats another's
       // box signatures -- a repeat would be dropped by the signature check at
       // pyodide.js:3915 and the cycle would send fewer than three.
+      //
+      // THE THINNEST CONSTANT IN THIS TEST is the 600px in cycle 1. dpi =
+      // min(w/4.8, h/3.6), and at this viewport width stops binding at a pane
+      // of about 634px, so 600 sits roughly 27px of pane height from the point
+      // where HEIGHT becomes the bound dimension -- at which case varying width
+      // would stop changing the fitted size and the cycle would send three and
+      // echo fewer. It fails loudly rather than silently (the delivery guard
+      // below catches it), but anyone widening these numbers should know the
+      // ceiling is there.
       const CYCLES = [
         ['498px', '448px', '398px'],
         ['600px', '540px', '480px'],
@@ -426,7 +435,13 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
         // signature check dropped one of the three, or the cap moved, this says
         // so rather than quietly measuring two fits.
         expect(out.sentWhileHeld, `${where}: three fits sent while echoes were held`).toBe(3);
-        expect(out.pendingAtRelease, `${where}: pendingFits pinned at its cap`).toBe(2);
+        // This one pins BOOKKEEPING, not a decision: 7d57c8f deliberately
+        // demoted pendingFits out of the discriminator, and `sentWhileHeld`
+        // above already establishes the precondition on its own. It is kept as
+        // documentation of the state that used to break the classifier. If
+        // pendingFits is ever retired, this is the assertion that will look
+        // like a real regression and is not one.
+        expect(out.pendingAtRelease, `${where}: pendingFits pinned at its cap (bookkeeping)`).toBe(2);
 
         // VACUITY GUARD, COUNTING DELIVERIES AND NOT ECHOES.
         //
@@ -442,7 +457,15 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
         // it: three held fits released 120 ms apart give three deliveries
         // whatever the classifier calls them, verified on both runtimes against
         // both versions of the classifier.
-        expect(out.log.length, `${where}: each released fit must produce a delivery -- ${out.log.join(' ')}`)
+        // 'chrome' is EXCLUDED because it is a note without a delivery behind
+        // it: paneFitNote('chrome', ...) is appended from the echo's own rAF
+        // (pyodide.js:4257) when the chrome is re-measured, so two real
+        // deliveries plus one chrome note would satisfy a raw log count. The
+        // test would still go red on the echo count below, but it would go red
+        // with the wrong message -- which is the same class of defect this
+        // guard was rewritten to avoid, one step further along.
+        expect(out.log.filter(s => !s.startsWith('chrome')).length,
+          `${where}: each released fit must produce a delivery -- ${out.log.join(' ')}`)
           .toBeGreaterThanOrEqual(3);
 
         // MECHANISM. Nobody touched the figure, so nothing here may be read as
