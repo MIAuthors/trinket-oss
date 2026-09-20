@@ -413,8 +413,32 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
           const pendingAtRelease = stMid[Object.keys(stMid)[0]].pendingFits;
           proto.send_message = orig;
           for (const [fig, type, payload] of held) {
+            const before = window.__trinketPaneFit.classified.length;
             orig.call(fig, type, payload);
-            await new Promise(r => setTimeout(r, 120));
+            // WAIT FOR THE DELIVERY, do not sleep a fixed gap. This used to be
+            // `setTimeout(120)`, which is only 3 ms beyond the measured
+            // 104-117 ms main-thread round trip: under load the previous
+            // release could still be in flight when the next one went out,
+            // both deliveries would land in one animation frame, and the
+            // ResizeObserver would coalesce them. The delivery guard below
+            // then FAILS -- so the failure mode is a flake, not a false pass,
+            // which in this file is the worse of the two. Its own header says
+            // a flaky test here reads as the ratchet coming back.
+            //
+            // This does NOT weaken the precondition. All three fits left
+            // paneFit while the messages were held, so they are already in
+            // flight by every measure the classifier uses -- `sentWhileHeld`
+            // and `pendingAtRelease` are both captured above, before the first
+            // release. The spacing exists only to stop the browser merging
+            // three deliveries into one, so pacing it on the delivery itself
+            // is strictly more faithful than pacing it on a clock.
+            const deadline = Date.now() + 5000;
+            while (window.__trinketPaneFit.classified.length === before &&
+                   Date.now() < deadline) {
+              await new Promise(r => setTimeout(r, 20));
+            }
+            // A frame after it lands, so the next release starts its own.
+            await new Promise(r => setTimeout(r, 40));
           }
           await new Promise(r => setTimeout(r, 4000));
           return {
