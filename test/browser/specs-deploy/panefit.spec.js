@@ -630,3 +630,102 @@ test.describe('pane fit: a cancelled gesture', () => {
     });
   }
 });
+
+test.describe('pane fit: the output tab goes away and comes back', () => {
+  // THE RE-SHOW BRANCH (pyodide.js:4179), which shipped in 7d57c8f with no test.
+  //
+  // Hiding the output pane drives canvas_div to 0x0. mpl.js suppresses that
+  // delivery itself -- it gates on `width != 0 && height != 0` -- so nothing
+  // reaches the classifier. Showing the pane again resets the bitmap and
+  // re-delivers the SAME size as before the hide. Without a branch for it that
+  // delivery is handled as an ordinary one, and the student is left looking at
+  // a blank figure: two clicks and the plot is gone.
+  //
+  // WHAT DETECTS IT, AND IT IS NOT THE CLASSIFICATION. Measured by deleting the
+  // branch from the served tree: the re-delivery is classified `echo`, not
+  // `drag`, on BOTH runtimes -- so a test asserting "nothing was read as a
+  // drag" passes with the bug present. The observable is the figure itself.
+  //
+  //   with the branch      ink 196992, 196992, 196992   reshow:513x384 each time
+  //   branch deleted       ink 196992, 0, 0             echo:513x384 each time
+  //
+  // Hence `ink`: a count of non-transparent pixels on the mpl canvas, which a
+  // reset bitmap reads as exactly 0. Symptom first; the reshow note is asserted
+  // second, as the mechanism behind it.
+  //
+  // TWICE, not once. The shipped behaviour before 7d57c8f ALTERNATED between
+  // ratcheting and blanking, so a single switch can land on the good half of an
+  // alternation and report nothing wrong.
+  //
+  // TWO INVARIANTS OF THE BRANCH ARE NOT PINNED HERE, and saying which matters
+  // more than the one that is.
+  //
+  // (1) A reshow must not update `lastDelivered`, because lastDelivered has to
+  // go on describing a REAL delivery (pyodide.js:4173). Unobservable from
+  // outside: a reshow only fires when `lastDelivered === w + 'x' + h` already,
+  // so assigning it again writes the value it holds. No black-box test can
+  // distinguish the two.
+  //
+  // (2) The branch's PLACEMENT above the drag branch. The comment at
+  // pyodide.js:4176 says that below it, a re-show following a drag whose
+  // pointerup fit was skipped by the box-signature check has seq !== seqAtFit,
+  // lands in the drag branch and ratchets. I tried to observe that and could
+  // not. Moving the block down so it is tested after the echo branch and
+  // before the drag note is behaviourally IDENTICAL -- a post-drag re-show has
+  // seq !== seqAtFit, misses the echo branch, and still reaches the reshow test
+  // before the drag note. Measured, corner drag then tab away and back:
+  // figsize 1440x1080 before and after on both runtimes, ink intact, and a
+  // reshow note still emitted. The only placement that would ratchet is below
+  // the drag note, where the block is dead code rather than misplaced. So the
+  // comment's warning is about an ordering no plausible edit produces, and this
+  // test does not pretend to pin it.
+  test.describe.configure({ timeout: 360_000 });
+
+  for (const [label, query] of RUNTIMES) {
+    test(`${label}: switching the output tab away and back leaves the figure drawn`, async ({ page }) => {
+      await runFigure(page, query, { width: 1280, height: 900 });
+
+      const ink = () => page.evaluate(() => {
+        const c = document.querySelector('#graphic canvas.mpl-canvas')
+               || document.querySelector('#graphic canvas');
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) n++;
+        return n;
+      });
+      const notes = () => page.evaluate(() =>
+        window.__trinketPaneFit.classified.map(e => `${e.kind}:${e.w}x${e.h}`));
+
+      // VACUITY GUARD. Everything below compares against a figure that was
+      // drawn in the first place; if the run produced an empty canvas, "still
+      // blank" and "blanked by the switch" are the same number. Measured at
+      // 196992 non-transparent pixels for this program at this viewport, so the
+      // bar is set well under that rather than at `> 0`, which a stray
+      // antialiased edge could satisfy.
+      const drawn = await ink();
+      expect(drawn, 'the figure was drawn before any tab switch').toBeGreaterThan(10_000);
+
+      for (const pass of [1, 2]) {
+        const before = (await notes()).length;
+        await page.evaluate(() => { $(document).trigger('trinket.instructions.view'); });
+        await page.waitForTimeout(1200);
+        await page.evaluate(() => { $(document).trigger('trinket.output.view'); });
+        await page.waitForTimeout(2500);
+        const added = (await notes()).slice(before);
+
+        // SYMPTOM FIRST: what the student sees. Exactly the ink it had -- the
+        // figure is neither blanked nor redrawn at a different size.
+        expect(await ink(), `pass ${pass}: the tab switch blanked the figure. Notes: ${added.join(' ')}`)
+          .toBe(drawn);
+
+        // MECHANISM SECOND: the re-delivery took the reshow branch. Without
+        // this the test still catches a deleted branch via the ink, but it
+        // would not catch the branch being reached by some other route, and
+        // the failure message would not say what broke.
+        expect(added.filter(s => s.startsWith('reshow')).length,
+          `pass ${pass}: the re-show was not classified as one. Notes: ${added.join(' ')}`)
+          .toBe(1);
+      }
+    });
+  }
+});
