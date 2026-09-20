@@ -140,6 +140,11 @@ function readProbe(page) {
     return {
       box: one.box,
       pendingFits: one.pendingFits,
+      // seq/seqAtFit are what the classifier actually decides on since
+      // 7d57c8f. Exposed here for the interlock test below, which is the only
+      // thing in the suite that reads them.
+      seq: one.seq,
+      seqAtFit: one.seqAtFit,
       canvas: { w: c.clientWidth, h: c.clientHeight },
       kinds: window.__trinketPaneFit.classified.map(e => e.kind),
       log: window.__trinketPaneFit.classified.map(e => `${e.kind}:${e.w}x${e.h}`),
@@ -514,6 +519,139 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
       expect(after.png, `post-provocation download is a PNG: ${JSON.stringify(after)}`).toBe(true);
       expect(after.px, `in-flight fits ratcheted figsize: ${before.px} -> ${after.px}\n${every.join('\n')}`)
         .toEqual(before.px);
+    });
+
+    test(`${label}: a tab switch after a corner drag is a re-show, not a drag`, async ({ page }) => {
+      // THE ONE STATE NOTHING ELSE IN THE SUITE ENTERS: seq !== seqAtFit.
+      //
+      // Found by an adversarial mutation pass, not by reading. Subordinating
+      // the re-show test to the gesture test -- so a re-delivery only reaches
+      // it when seq === seqAtFit -- leaves every other test in this file and
+      // in panefit.spec.js GREEN, including both corner-drag tests and the
+      // re-show test itself. The re-show test only ever exercises an ORDINARY
+      // re-show, where no gesture has happened and seq === seqAtFit, so the
+      // echo branch would have caught it anyway.
+      //
+      // The uncovered path is the one a student actually walks: resize the
+      // figure by its corner, click to Instructions and back. A corner drag
+      // bumps seq and does NOT change #graphic-wrap's box, so the pointerup
+      // fit is skipped by the box-signature check (pyodide.js:3937) before it
+      // can stamp seqAtFit -- leaving seq ahead of seqAtFit indefinitely. The
+      // re-delivery on show then misses the echo branch, and if the re-show
+      // test is not above the drag branch it lands in the drag branch and
+      // handle_resize recomputes figsize from CSS pixels. That is the ratchet,
+      // reached without a single fit being misclassified.
+      //
+      // So this test exists because `fd5fbf7`'s claim that the placement
+      // invariant was pinned was true only for the ordinary case.
+      await runFigure(page, query, { width: 1280, height: 900 });
+
+      await slowCornerDrag(page, -140, -90);
+
+      const dragged = await downloadFigsize(page);
+      expect(dragged.png, `post-drag download is a PNG: ${JSON.stringify(dragged)}`).toBe(true);
+
+      // PRECONDITION, asserted rather than assumed, because the whole test is
+      // about a state and a test that never reaches it proves nothing. If the
+      // pointerup fit were NOT skipped it would stamp seqAtFit, the two would
+      // agree, and everything below would be a duplicate of the ordinary
+      // re-show test at three times the runtime.
+      const before = await readProbe(page);
+      expect(before.seq, `the drag never bumped seq: ${JSON.stringify(before)}`).toBeGreaterThan(0);
+      expect(before.seqAtFit,
+        `the pointerup fit was not skipped, so this is not the state under test: ${JSON.stringify(before)}`)
+        .not.toBe(before.seq);
+
+      const n = before.kinds.length;
+      await page.evaluate(() => { $(document).trigger('trinket.instructions.view'); });
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => { $(document).trigger('trinket.output.view'); });
+      await page.waitForTimeout(2500);
+
+      const after = await readProbe(page);
+      const added = after.log.slice(n);
+
+      // MECHANISM. With seq ahead of seqAtFit the echo branch cannot catch
+      // this, so the re-show branch is the only thing standing between the
+      // student and a recomputed figsize.
+      expect(added.filter(s => s.startsWith('reshow')).length,
+        `the post-drag re-show was not classified as one: ${added.join(' ')}`).toBe(1);
+      expect(added.filter(s => s.startsWith('drag')),
+        `the post-drag re-show was read as a drag: ${added.join(' ')}`).toHaveLength(0);
+
+      // SYMPTOM. The shape the student chose with the corner drag survives the
+      // tab switch, in the file they download.
+      const reshown = await downloadFigsize(page);
+      expect(reshown.px,
+        `a tab switch after a drag moved figsize: ${dragged.px} -> ${reshown.px}. Notes: ${added.join(' ')}`)
+        .toEqual(dragged.px);
+    });
+
+    test(`${label}: a fit during a held gesture never stamps seqAtFit`, async ({ page }) => {
+      // THE INTERLOCK, which 7d57c8f leans on and nothing asserted.
+      //
+      // The classifier's whole question is `st.seq === st.seqAtFit` -- has a
+      // gesture begun since we last asked Python for a size. That is only
+      // exact because paneFit returns at `if (st.pointerDown)` BEFORE it
+      // stamps seqAtFit, and the single pointerdown listener does
+      // `st.seq++; st.pointerDown = true;` in one synchronous statement. Move
+      // the stamp above the guard and the interlock is gone.
+      //
+      // THE FIRST VERSION OF THIS TEST WAS VACUOUS AND IS WORTH RECORDING. It
+      // did a six-sample corner drag and asserted seqAtFit had not moved --
+      // which passes with the stamp moved above the guard, because a plain
+      // corner drag never calls paneFit AT ALL. canvas_div is what resizes,
+      // #graphic-wrap is what the observer watches, so no fit is issued during
+      // the gesture and there is nothing for the guard to stop. The assertion
+      // held for a reason unrelated to the thing it claimed to pin.
+      //
+      // The provocation has to CALL paneFit while the pointer is down, which
+      // `__trinketPaneFit.fit()` does directly and deterministically -- no
+      // viewport race, no reliance on the native resizer.
+      //
+      // If this breaks, a real drag gets classified as an echo: Python drops
+      // the resize and the student's corner drag does nothing at all.
+      await runFigure(page, query, { width: 1280, height: 900 });
+
+      const before = await readProbe(page);
+      // Boot leaves the two agreeing -- the startup fit stamps seqAtFit. Said
+      // out loud because the comparison below is only meaningful if they
+      // started equal.
+      expect(before.seqAtFit, `boot should leave the two agreeing: ${JSON.stringify(before)}`)
+        .toBe(before.seq);
+
+      const held = await page.evaluate(() => {
+        const div = document.querySelector('#graphic canvas').parentNode;
+        const opts = { bubbles: true, composed: true, pointerId: 1, pointerType: 'touch', isPrimary: true };
+        div.dispatchEvent(new PointerEvent('pointerdown', opts));
+        // The box must CHANGE, or paneFit returns at the signature check
+        // (pyodide.js:3937) on its way past and the guard is never the thing
+        // that stopped it -- the same vacuity as the drag version, one step
+        // further in.
+        document.getElementById('graphic-wrap').style.width = '470px';
+        window.__trinketPaneFit.fit();
+        const st = window.__trinketPaneFit.state();
+        const one = st[Object.keys(st)[0]];
+        const out = { seq: one.seq, seqAtFit: one.seqAtFit, pointerDown: one.pointerDown, deferred: one.deferred };
+        div.dispatchEvent(new PointerEvent('pointercancel', opts));
+        return out;
+      });
+
+      // VACUITY GUARDS. The gesture has to be live and the fit has to have
+      // reached the guard, or seqAtFit standing still proves nothing.
+      expect(held.pointerDown, `the synthetic pointerdown did not register: ${JSON.stringify(held)}`)
+        .toBe(true);
+      expect(held.seq, `pointerdown did not bump seq: ${JSON.stringify(held)}`)
+        .toBeGreaterThan(before.seq);
+      expect(held.deferred, `the fit did not reach the pointerDown guard: ${JSON.stringify(held)}`)
+        .toBe(true);
+
+      // THE INVARIANT. paneFit returned at the guard without stamping, so
+      // seqAtFit still holds the value boot left it with and the classifier
+      // can still tell a gesture from an echo.
+      expect(held.seqAtFit,
+        `a fit stamped seqAtFit mid-gesture: ${JSON.stringify(held)}`)
+        .toBe(before.seqAtFit);
     });
   });
 }
