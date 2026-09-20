@@ -4184,27 +4184,37 @@ function armPaneFitClassifier() {
     // the information went in the rounding, not here.
     //
     // It relies on lastDelivered describing a REAL delivery, which is why a
-    // reshow returns without updating it. Load-bearing: a reshow is not a
-    // predecessor.
+    // reshow returns without updating it.
     //
-    // ABOVE the drag branch deliberately -- but the reason given here for two
-    // commits was wrong, and the corrected one is weaker. It used to say that
-    // below the drag branch, a re-show following a drag whose pointerup fit was
-    // skipped by the box-signature check has seq !== seqAtFit, lands in the
-    // drag branch and ratchets. That ordering is not reachable by any
-    // plausible edit: everything between this test and the drag note IS the
-    // echo branch, so moving this block down past it is behaviourally
-    // IDENTICAL -- a post-drag re-show has seq !== seqAtFit, misses the echo
-    // branch, and still arrives here before the drag note. Measured with the
-    // block moved: corner drag then tab away and back leaves figsize 1440x1080
-    // on both runtimes, ink intact, and a re-show still noted.
+    // WHAT IS LOAD-BEARING HERE IS THE `return`, NOT THE NON-ASSIGNMENT. An
+    // earlier version of this comment had that backwards. The branch only
+    // fires when `lastDelivered === w + 'x' + h` already, so assigning it again
+    // would write the value it holds -- a no-op, and unobservable from outside.
+    // The `return` is the whole mechanism: without it a re-show falls into the
+    // echo branch below, the resize goes out marked trinket_fit_echo, Python
+    // drops it, nothing repaints, and the figure is blank.
     //
-    // The only placement that breaks anything is BELOW the drag note, where
-    // this block is dead code rather than misplaced, and the tab switch blanks
-    // the figure. That is what the test pins -- by measuring the figure, not
-    // the classification, because a deleted branch is classified `echo` and not
-    // `drag`. See the re-show test in
-    // test/browser/specs-deploy/panefit.spec.js.
+    // ABOVE THE ECHO BRANCH, which matters more than being above the drag
+    // branch and is the part two earlier versions of this comment got wrong.
+    //
+    // For an ordinary re-show -- no gesture, which is the common case -- the
+    // state is seq === seqAtFit, so if this test sat below the echo branch the
+    // echo branch would catch the re-delivery first, mark it trinket_fit_echo,
+    // and Python would drop it: nothing repaints and the figure is BLANK.
+    // Measured, block moved below the echo branch and the re-show test run
+    // unmodified: ink 196992 -> 0 at the first tab switch, both runtimes,
+    // identical to deleting the branch outright.
+    //
+    // A previous version of this comment claimed the opposite -- that moving it
+    // down was behaviourally identical and only "below the drag note" broke
+    // anything. That was generalised from a single measurement that began with
+    // a CORNER DRAG, the one path where seq !== seqAtFit and the echo branch
+    // therefore does not catch it. The drag case is the narrow one; the no-drag
+    // case is the common one, and it is the one that blanks.
+    //
+    // Pinned by the re-show test in test/browser/specs-deploy/panefit.spec.js,
+    // which measures the FIGURE rather than the classification -- a
+    // mis-ordered branch is still classified `echo`, not `drag`.
     if (st && st.lastDelivered === w + 'x' + h) {
       paneFitNote('reshow', w, h);
       // mpl.js's own refresh: Python sets _force_full and draw_idle ships a

@@ -459,7 +459,7 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
         // both versions of the classifier.
         // 'chrome' is EXCLUDED because it is a note without a delivery behind
         // it: paneFitNote('chrome', ...) is appended from the echo's own rAF
-        // (pyodide.js:4286) when the chrome is re-measured, so two real
+        // (pyodide.js:4296) when the chrome is re-measured, so two real
         // deliveries plus one chrome note would satisfy a raw log count. The
         // test would still go red on the echo count below, but it would go red
         // with the wrong message -- which is the same class of defect this

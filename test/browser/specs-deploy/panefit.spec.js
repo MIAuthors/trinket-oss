@@ -132,7 +132,7 @@ test.describe('pane fit: startup', () => {
       //
       // Weakening it to `toBeGreaterThanOrEqual(1)` was the first repair and it
       // was a tautology: `awaitStartup = false` is written at exactly one place
-      // (pyodide.js:4129), inside the rAF callback, which is only ever scheduled
+      // (pyodide.js:4146), inside the rAF callback, which is only ever scheduled
       // from the branch whose first statement IS paneFitNote('startup'). So
       // awaitStartup === false implies at least one startup note, and that is
       // asserted below.
@@ -632,7 +632,7 @@ test.describe('pane fit: a cancelled gesture', () => {
 });
 
 test.describe('pane fit: the output tab goes away and comes back', () => {
-  // THE RE-SHOW BRANCH (pyodide.js:4208), which shipped in 7d57c8f with no test.
+  // THE RE-SHOW BRANCH (pyodide.js:4218), which shipped in 7d57c8f with no test.
   //
   // Hiding the output pane drives canvas_div to 0x0. mpl.js suppresses that
   // delivery itself -- it gates on `width != 0 && height != 0` -- so nothing
@@ -657,28 +657,28 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
   // ratcheting and blanking, so a single switch can land on the good half of an
   // alternation and report nothing wrong.
   //
-  // TWO INVARIANTS OF THE BRANCH ARE NOT PINNED HERE, and saying which matters
-  // more than the one that is.
+  // THIS TEST PINS THE BRANCH'S PLACEMENT AS WELL AS ITS EXISTENCE, and an
+  // earlier version of this comment claimed it did not. Moving the block below
+  // the echo branch and running this test unmodified gives ink 196992 -> 0 at
+  // the first tab switch on both runtimes -- identical to deleting the branch.
+  // The reason is that an ordinary re-show has no gesture behind it, so
+  // seq === seqAtFit and the echo branch would catch the re-delivery first,
+  // mark it trinket_fit_echo and have Python drop it.
   //
-  // (1) A reshow must not update `lastDelivered`, because lastDelivered has to
-  // go on describing a REAL delivery (pyodide.js:4187). Unobservable from
-  // outside: a reshow only fires when `lastDelivered === w + 'x' + h` already,
-  // so assigning it again writes the value it holds. No black-box test can
-  // distinguish the two.
+  // The claim that it was unpinnable came from one measurement that began with
+  // a CORNER DRAG -- the single path where seq !== seqAtFit, so the echo branch
+  // does not catch it and the move really is harmless. Generalising from the
+  // narrow case to the common one is the whole of that error, and the data
+  // refuting it was already in this file's own mutation run.
   //
-  // (2) The branch's PLACEMENT above the drag branch. The comment at
-  // pyodide.js:4190 says that below it, a re-show following a drag whose
-  // pointerup fit was skipped by the box-signature check has seq !== seqAtFit,
-  // lands in the drag branch and ratchets. I tried to observe that and could
-  // not. Moving the block down so it is tested after the echo branch and
-  // before the drag note is behaviourally IDENTICAL -- a post-drag re-show has
-  // seq !== seqAtFit, misses the echo branch, and still reaches the reshow test
-  // before the drag note. Measured, corner drag then tab away and back:
-  // figsize 1440x1080 before and after on both runtimes, ink intact, and a
-  // reshow note still emitted. The only placement that would ratchet is below
-  // the drag note, where the block is dead code rather than misplaced. So the
-  // comment's warning is about an ordering no plausible edit produces, and this
-  // test does not pretend to pin it.
+  // ONE INVARIANT IS GENUINELY NOT PINNED, and it is not the one previously
+  // named either. That a re-show must not update `lastDelivered` is
+  // unobservable from outside: the branch only fires when lastDelivered
+  // already equals the delivered size, so re-assigning writes the value it
+  // holds. What is actually load-bearing there is the `return`, and the
+  // `return` IS pinned -- removing it drops the re-delivery into the echo
+  // branch, which is the same blank this test catches.
+
   test.describe.configure({ timeout: 360_000 });
 
   for (const [label, query] of RUNTIMES) {
@@ -702,6 +702,18 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
       // 196992 non-transparent pixels for this program at this viewport, so the
       // bar is set well under that rather than at `> 0`, which a stray
       // antialiased edge could satisfy.
+      //
+      // WHY THE COMPARISON BELOW IS EXACT AND NOT A FLOOR. Agg is a
+      // deterministic software rasteriser and the re-show path re-renders an
+      // unchanged figure at an unchanged dpi, so the two bitmaps should be
+      // byte-identical rather than merely close -- exact equality is the
+      // stronger assertion and it is not a flake risk. What WOULD make it flake
+      // is anything that changes the BOX across the switch, since that is a
+      // real re-fit and a different render; the known candidate is scrollbar
+      // behaviour off macOS, which is reasoned rather than measured on this
+      // branch. If this ever goes red with a non-zero received value, suspect
+      // the box, not the rasteriser -- the `added` notes in the message say
+      // which.
       const drawn = await ink();
       expect(drawn, 'the figure was drawn before any tab switch').toBeGreaterThan(10_000);
 
