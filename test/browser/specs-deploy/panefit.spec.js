@@ -124,7 +124,7 @@ test.describe('pane fit: startup', () => {
       // THERE IS DELIBERATELY NO ASSERTION ON THE STARTUP-NOTE COUNT. This used
       // to be `toHaveLength(1)`, and c0f671c made that false:
       // paneFitNote('startup') sits ABOVE the coalescing block
-      // (pyodide.js:4030), so every delivery in a boot burst is noted, and the
+      // (pyodide.js:4052), so every delivery in a boot burst is noted, and the
       // point of that commit is that the burst is not always one delivery. So
       // the old assertion went red on exactly the load the fix exists for,
       // while a REVERT goes red on the `drag` assertion below -- a flake
@@ -132,7 +132,7 @@ test.describe('pane fit: startup', () => {
       //
       // Weakening it to `toBeGreaterThanOrEqual(1)` was the first repair and it
       // was a tautology: `awaitStartup = false` is written at exactly one place
-      // (pyodide.js:4146), inside the rAF callback, which is only ever scheduled
+      // (pyodide.js:4168), inside the rAF callback, which is only ever scheduled
       // from the branch whose first statement IS paneFitNote('startup'). So
       // awaitStartup === false implies at least one startup note, and that is
       // asserted below.
@@ -632,7 +632,7 @@ test.describe('pane fit: a cancelled gesture', () => {
 });
 
 test.describe('pane fit: the output tab goes away and comes back', () => {
-  // THE RE-SHOW BRANCH (pyodide.js:4246), which shipped in 7d57c8f with no test.
+  // THE RE-SHOW BRANCH (pyodide.js:4269), which shipped in 7d57c8f with no test.
   //
   // Hiding the output pane drives canvas_div to 0x0. mpl.js suppresses that
   // delivery itself -- it gates on `width != 0 && height != 0` -- so nothing
@@ -744,7 +744,7 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
 
         // EXACTLY ONE NOTE, which pins the branch's `return` and nothing else
         // does. Deleting the return does NOT blank the figure -- `refresh` is
-        // sent on the line BEFORE it (pyodide.js:4251), so Python has already
+        // sent on the line BEFORE it (pyodide.js:4274), so Python has already
         // been told to repaint -- control simply falls through and the same
         // delivery is noted a second time as an echo. Measured with the return
         // deleted: ink 196992 unchanged, reshow count still 1, notes

@@ -3868,6 +3868,28 @@ function paneFitBox(fig) {
   return { w: w, h: h, dpr: window.devicePixelRatio || 1 };
 }
 
+// The identity of a DELIVERY, used only by the re-show test. CSS size alone is
+// not enough: paneFit's own signature is `w x h @ dpr` (see paneFit below) and
+// Python applies that dpr to figure.dpi, so two deliveries can carry identical
+// CSS dimensions and mean different things. Comparing CSS only would let a
+// genuine fit echo across a dpr change be read as a re-show, refreshed rather
+// than applied, and the new dpi silently dropped.
+//
+// Reachability is narrow and is NOT the reason this is here: a dpr change that
+// leaves the fitted CSS size untouched produces no ResizeObserver delivery at
+// all, so the branch is not obviously entered. The reason is that the two
+// identities have to agree. One of them including dpr and the other not is the
+// kind of asymmetry that is correct today by accident and wrong after the next
+// edit, and it cost a reviewer a finding to notice.
+//
+// Narrowing only: this can make FEWER deliveries count as re-shows, never
+// more, so it cannot reintroduce the ratchet. The one thing it could cost is a
+// missed re-show, which needs an actual dpr change between two consecutive
+// deliveries of the same CSS size.
+function paneFitDeliveryId(w, h) {
+  return w + 'x' + h + '@' + (window.devicePixelRatio || 1);
+}
+
 // `fromChromeRefit` is set only by the echo branch's chrome re-measure. Every
 // other caller is a NEW reason to fit -- a window resize, a drag's flush, a
 // probe -- and refills the refit budget; a chrome refit must not refill the
@@ -4028,7 +4050,7 @@ function armPaneFitClassifier() {
     // drag: figsize 4.8x3.6 -> 9.82x7.37 in, floored, overflowing every pane.
     if (st && st.awaitStartup) {
       paneFitNote('startup', w, h);
-      st.lastDelivered = w + 'x' + h;
+      st.lastDelivered = paneFitDeliveryId(w, h);
       try { fig.send_message('resize', { width: w, height: h, trinket_fit_echo: true }); } catch (e) {}
       // The boot burst is not always ONE delivery. Most loads deliver a single
       // startup resize (the div going from the canvas's 300x150 default to the
@@ -4065,7 +4087,7 @@ function armPaneFitClassifier() {
       // a backgrounded tab, so this is a real condition, not an invented one.
       //
       // WHAT MAKES IT HARMLESS IS NOT THIS BLOCK. It is paneFit's box-signature
-      // skip (`if (sig === st.lastBoxSig) return;`, pyodide.js:3915): of those
+      // skip (`if (sig === st.lastBoxSig) return;`, pyodide.js:3937): of those
       // 13 paneFit calls, 1 sent and 12 were
       // dropped because the box had not moved. Final state was correct on both
       // runtimes -- canvas 513 inside box 513, pendingFits 0, zero drags. An
@@ -4204,9 +4226,10 @@ function armPaneFitClassifier() {
     //       pendingFits out of the classifier; it would not have been before.
     //
     // The non-assignment of lastDelivered is a no-op and not a mechanism at
-    // all: the branch only fires when `lastDelivered === w + 'x' + h` already,
-    // and nothing can mutate st between the comparison and the assignment, so
-    // assigning would write the value it holds.
+    // all: the branch only fires when lastDelivered already equals
+    // paneFitDeliveryId(w, h), and nothing can mutate st between the
+    // comparison and the assignment, so assigning would write the value it
+    // holds.
     //
     // ABOVE THE ECHO BRANCH, which matters more than being above the drag
     // branch and is the part two earlier versions of this comment got wrong.
@@ -4243,7 +4266,7 @@ function armPaneFitClassifier() {
     // Pinned by the re-show test in test/browser/specs-deploy/panefit.spec.js,
     // which measures the FIGURE rather than the classification -- a
     // mis-ordered branch is still classified `echo`, not `drag`.
-    if (st && st.lastDelivered === w + 'x' + h) {
+    if (st && st.lastDelivered === paneFitDeliveryId(w, h)) {
       paneFitNote('reshow', w, h);
       // mpl.js's own refresh: Python sets _force_full and draw_idle ships a
       // fresh image. One Agg render, on a path where the figure is being looked
@@ -4251,7 +4274,7 @@ function armPaneFitClassifier() {
       try { fig.send_message('refresh', {}); } catch (e) {}
       return;
     }
-    if (st) st.lastDelivered = w + 'x' + h;
+    if (st) st.lastDelivered = paneFitDeliveryId(w, h);
     // GESTURE, NOT COUNT. This used to require `st.pendingFits > 0`, and the
     // count cannot answer the question being asked. paneFit caps it at 2 and
     // sends unconditionally, so with three fits in flight the third echo

@@ -310,7 +310,7 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
     test(`${label}: three fits in flight, four times over, never ratchet figsize`, async ({ page }) => {
       // THE RATCHET COPILOT FOUND ON #305, as a test rather than as an argument.
       //
-      // paneFit caps `pendingFits` at 2 (pyodide.js:3932) and sends
+      // paneFit caps `pendingFits` at 2 (pyodide.js:3954) and sends
       // unconditionally two lines later, so with THREE fits in flight the
       // counter reads 2, three echoes come back, and the third finds the
       // counter at 0. Under the old classifier -- `st.pendingFits > 0 &&
@@ -374,7 +374,7 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
 
       // Four triples, each one a different span, so no cycle repeats another's
       // box signatures -- a repeat would be dropped by the signature check at
-      // pyodide.js:3915 and the cycle would send fewer than three.
+      // pyodide.js:3937 and the cycle would send fewer than three.
       //
       // THE THINNEST CONSTANT IN THIS TEST is the 600px in cycle 1. dpi =
       // min(w/4.8, h/3.6), and at this viewport width stops binding at a pane
@@ -459,7 +459,7 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
         // both versions of the classifier.
         // 'chrome' is EXCLUDED because it is a note without a delivery behind
         // it: paneFitNote('chrome', ...) is appended from the echo's own rAF
-        // (pyodide.js:4324) when the chrome is re-measured, so two real
+        // (pyodide.js:4347) when the chrome is re-measured, so two real
         // deliveries plus one chrome note would satisfy a raw log count. The
         // test would still go red on the echo count below, but it would go red
         // with the wrong message -- which is the same class of defect this
