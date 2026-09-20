@@ -5150,10 +5150,24 @@ function runInWorker(program, files, serialized, decision) {
   // Trinket's fake socket had no readyState, so the message was never SENT.
   // Fixed in #279; the figure is now fitted after it exists, by scaling dpi.
   //
-  // This width survives for one job only: the pane fit's own first measurement
-  // needs a number before #graphic is visible. #graphic is still HIDDEN at this
-  // point (showGraphic() runs when the first figure arrives), so its
-  // clientWidth is 0. Measure a visible ancestor.
+  // DEAD PAYLOAD, kept only because removing it is a protocol change. Nothing
+  // reads this. It is computed here, passed to workerClient.run below, carried
+  // across by worker-client.js and destructured in pyodide-worker.js -- and no
+  // code on either side consumes the value.
+  //
+  // Both comments that used to describe it named a consumer, and they named
+  // DIFFERENT ones: this one said the pane fit's first measurement needed it,
+  // the worker's said "the page uses it for the first fit". Neither was true.
+  // The pane fit's first measurement is paneFitBox(), which reads
+  // #graphic-wrap / #graphic live from the DOM at the moment of the fit. This
+  // value predates that design and outlived it.
+  //
+  // The measurement below is still correct for what it does -- #graphic is
+  // HIDDEN at this point (showGraphic() runs when the first figure arrives) so
+  // its clientWidth is 0, hence the visible-ancestor walk -- it simply has no
+  // consumer. Left in place rather than removed because the worker message
+  // shape is shared with other branches in flight; deleting it belongs in its
+  // own change.
   var graphicWidth = 0;
   ['graphic', 'outputContainer', 'codeOutput'].forEach(function(id) {
     if (graphicWidth) return;
