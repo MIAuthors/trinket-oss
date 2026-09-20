@@ -306,5 +306,167 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
       expect(refit.px, `a fit after a drag moved figsize: ${after.px} -> ${refit.px}`)
         .toEqual(after.px);
     });
+
+    test(`${label}: three fits in flight, four times over, never ratchet figsize`, async ({ page }) => {
+      // THE RATCHET COPILOT FOUND ON #305, as a test rather than as an argument.
+      //
+      // paneFit caps `pendingFits` at 2 (pyodide.js:3932) and sends
+      // unconditionally two lines later, so with THREE fits in flight the
+      // counter reads 2, three echoes come back, and the third finds the
+      // counter at 0. Under the old classifier -- `st.pendingFits > 0 &&
+      // st.seq === st.seqAtFit` -- that third echo fell through to the drag
+      // branch and handle_resize recomputed figsize from CSS pixels.
+      //
+      // WHY THE OTHER TWO TESTS IN THIS FILE CANNOT SEE IT. Both walk the pane
+      // one width at a time with a 3.5 s settle between, which produces one fit
+      // at a time by construction; the state is never reached. And the only
+      // thing either asserts about the counter is `toBeLessThanOrEqual(2)`,
+      // which is satisfied by the 0 that IS the defect. An upper bound cannot
+      // detect an undercount, so the counter is not the observable -- the
+      // CLASSIFICATION of the third echo is.
+      //
+      // THE LEVER, ported from harness/pw/ratchet-repro.js. Wrap
+      // `mpl.figure.prototype.send_message` and hold outgoing
+      // 'trinket_pane_fit' messages, change the box three times, then release
+      // them spaced apart. The page's own logic is untouched: the same three
+      // messages are sent, just delivered late, which is what a slow worker
+      // does. Holding is what makes "three in flight" deterministic rather than
+      // a race against the round trip (9-12 ms worker, 104-117 ms main), and a
+      // race is not something to ship in a spec.
+      //
+      // Two properties of that rig are load-bearing and were both learned by
+      // getting them wrong:
+      //
+      //   WIDTH, not height. dpi = min(w/4.8, h/3.6). At a width-bound
+      //   viewport, varying the wrap's HEIGHT gives three distinct box
+      //   signatures that all fit to ONE size -- zero div resizes, zero echoes,
+      //   and a green test that provoked nothing.
+      //
+      //   SPACED on release, not released together. Three resizes inside one
+      //   animation frame coalesce into a single ResizeObserver delivery, so
+      //   three sends produce one echo and the third -- the only one under
+      //   test -- never exists.
+      //
+      // WHY FOUR CYCLES AND NOT ONE, which is the part that makes this a
+      // ratchet test rather than a classifier test. Measured against the
+      // defective classifier, one provocation moves figsize by NOTHING: the
+      // phantom drag recomputes figsize from a canvas size the fit itself just
+      // asked for, so at dpr 1 it round-trips back to 4.8 x 3.6 in exactly and
+      // the downloaded PNG is still 1440 x 1080. A single cycle is therefore
+      // invisible in the file, and a one-cycle version of this test would have
+      // shipped a download assertion that cannot fail. Four cycles at different
+      // widths accumulate the truncation, monotonically and in one direction --
+      // which is what the word ratchet means:
+      //
+      //   cycle 0  echo:496x372 echo:446x334 drag:396x297   1440x1080
+      //   cycle 1  echo:598x448 echo:538x403 drag:478x358   1440x1078
+      //   cycle 2  echo:518x387 echo:468x350 drag:418x313   1440x1078
+      //   cycle 3  echo:558x417 echo:498x372 drag:438x327   1440x1075
+      //
+      // Identical on both runtimes. Height only: width is the bound dimension
+      // here, so 1440 never moves and only the free dimension drifts. Five
+      // pixels at 300 dpi is 0.0167 in -- invisible on screen, permanent in
+      // every file the student downloads afterwards.
+      await runFigure(page, query, { width: 1280, height: 900 });
+
+      const before = await downloadFigsize(page);
+      expect(before.png, `baseline is a PNG: ${JSON.stringify(before)}`).toBe(true);
+
+      // Four triples, each one a different span, so no cycle repeats another's
+      // box signatures -- a repeat would be dropped by the signature check at
+      // pyodide.js:3915 and the cycle would send fewer than three.
+      const CYCLES = [
+        ['498px', '448px', '398px'],
+        ['600px', '540px', '480px'],
+        ['520px', '470px', '420px'],
+        ['560px', '500px', '440px'],
+      ];
+      const every = [];
+
+      for (let cycle = 0; cycle < CYCLES.length; cycle++) {
+        const out = await page.evaluate(async (widths) => {
+          const held = [];
+          const proto = window.mpl.figure.prototype;
+          const orig = proto.send_message;
+          proto.send_message = function (type, payload) {
+            if (type === 'trinket_pane_fit') { held.push([this, type, payload]); return; }
+            return orig.call(this, type, payload);
+          };
+          const wrap = document.getElementById('graphic-wrap');
+          const start = window.__trinketPaneFit.classified.length;
+          for (const w of widths) {
+            wrap.style.width = w;
+            window.__trinketPaneFit.fit();
+            await new Promise(r => setTimeout(r, 30));
+          }
+          const sentWhileHeld = held.length;
+          const stMid = window.__trinketPaneFit.state();
+          const pendingAtRelease = stMid[Object.keys(stMid)[0]].pendingFits;
+          proto.send_message = orig;
+          for (const [fig, type, payload] of held) {
+            orig.call(fig, type, payload);
+            await new Promise(r => setTimeout(r, 120));
+          }
+          await new Promise(r => setTimeout(r, 4000));
+          return {
+            sentWhileHeld,
+            pendingAtRelease,
+            log: window.__trinketPaneFit.classified.slice(start).map(e => `${e.kind}:${e.w}x${e.h}`),
+          };
+        }, CYCLES[cycle]);
+
+        const where = `cycle ${cycle} (${CYCLES[cycle].join(' ')})`;
+        every.push(`[${where}] ${out.log.join(' ')}`);
+        const kinds = out.log.map(s => s.split(':')[0]);
+
+        // PRECONDITION, asserted EXACTLY. Three fits left paneFit while their
+        // echoes were held, and the counter stopped at its cap -- which is the
+        // undercount itself, pinned in the direction the six existing
+        // `toBeLessThanOrEqual(2)` assertions on this branch cannot pin. If the
+        // signature check dropped one of the three, or the cap moved, this says
+        // so rather than quietly measuring two fits.
+        expect(out.sentWhileHeld, `${where}: three fits sent while echoes were held`).toBe(3);
+        expect(out.pendingAtRelease, `${where}: pendingFits pinned at its cap`).toBe(2);
+
+        // VACUITY GUARD, COUNTING DELIVERIES AND NOT ECHOES.
+        //
+        // The design note for this test (harness/panefit-coverage-round7.md,
+        // the addendum) prescribed guarding on the ECHO count, reasoning that
+        // `pendingFits` is the broken quantity and cannot witness its own
+        // failure. That is right and it does not go far enough: on the defect
+        // the third delivery is classified a DRAG, so the echo count drops to
+        // 2 and an echo-based guard fires FIRST -- reporting "the releases
+        // coalesced" for a run in which nothing coalesced. A vacuity guard must
+        // not be computed from the quantity under test, and here the
+        // classification is that quantity. The delivery count is independent of
+        // it: three held fits released 120 ms apart give three deliveries
+        // whatever the classifier calls them, verified on both runtimes against
+        // both versions of the classifier.
+        expect(out.log.length, `${where}: each released fit must produce a delivery -- ${out.log.join(' ')}`)
+          .toBeGreaterThanOrEqual(3);
+
+        // MECHANISM. Nobody touched the figure, so nothing here may be read as
+        // a drag. `st.seq === st.seqAtFit` asks the question the count was
+        // standing in for -- has a gesture begun since we last asked Python for
+        // a size -- and no gesture began.
+        expect(kinds.filter(k => k === 'drag'), `${where}: a fit was read as a drag -- ${out.log.join(' ')}`)
+          .toHaveLength(0);
+        // The same fact from the other side, EXACTLY rather than as a bound,
+        // because an undercount is the failure this test exists for.
+        expect(kinds.filter(k => k === 'echo').length,
+          `${where}: every released fit came back as an echo -- ${out.log.join(' ')}`).toBe(3);
+      }
+
+      // SYMPTOM, and it is an independent detector rather than decoration:
+      // with the two mechanism assertions above removed and the classifier
+      // reverted, this one still fails, 1440x1080 -> 1440x1075 on both
+      // runtimes. Compared in whole PIXELS, not rounded inches -- the drift is
+      // hundredths of an inch and invisible on screen, because a figure 1%
+      // shorter in inches and 1% denser in dpi occupies the same pixels.
+      const after = await downloadFigsize(page);
+      expect(after.png, `post-provocation download is a PNG: ${JSON.stringify(after)}`).toBe(true);
+      expect(after.px, `in-flight fits ratcheted figsize: ${before.px} -> ${after.px}\n${every.join('\n')}`)
+        .toEqual(before.px);
+    });
   });
 }
