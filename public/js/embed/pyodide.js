@@ -4078,8 +4078,22 @@ function armPaneFitClassifier() {
       // RESIDUAL, read not measured: those 12 were dropped because the box was
       // constant. A pane genuinely moving while backgrounded gives each late
       // delivery a different box, so each one sends -- N late deliveries, N Agg
-      // renders. pendingFits caps the counter, not the sends. That is cost, not
-      // correctness, and nothing here addresses it.
+      // renders. pendingFits caps the counter, not the sends.
+      //
+      // THAT IS COST RATHER THAN CORRECTNESS ONLY SINCE 7d57c8f, and the
+      // distinction is the whole history of this file. When this sentence was
+      // first written (270d56f) it was FALSE: the classifier still read
+      // `pendingFits > 0`, so a capped counter with three fits in flight had
+      // the third echo classified a drag and figsize recomputed -- capping the
+      // counter while sending unconditionally was the ratchet, not a cost.
+      // 7d57c8f made the sentence true by taking the count out of the
+      // discriminator, and did not come back to reword it.
+      //
+      // So do not read this as a general principle. A capped counter is only
+      // harmless while NOTHING DECIDES ANYTHING ON IT. If any future reader
+      // reintroduces a count into the classifier, this paragraph goes back to
+      // being wrong. Covered by the three-fit test in
+      // test/browser/specs-deploy/worker-figsize-ratchet.spec.js.
       //
       // So still no guard, but for a narrower reason than the one given before:
       // a guard would have to tell a burst delivery from a late one, which is
@@ -4173,9 +4187,24 @@ function armPaneFitClassifier() {
     // reshow returns without updating it. Load-bearing: a reshow is not a
     // predecessor.
     //
-    // ABOVE the drag branch deliberately. Below it, a re-show following a drag
-    // whose pointerup fit was skipped by the box-signature check has
-    // seq !== seqAtFit, lands in the drag branch and ratchets.
+    // ABOVE the drag branch deliberately -- but the reason given here for two
+    // commits was wrong, and the corrected one is weaker. It used to say that
+    // below the drag branch, a re-show following a drag whose pointerup fit was
+    // skipped by the box-signature check has seq !== seqAtFit, lands in the
+    // drag branch and ratchets. That ordering is not reachable by any
+    // plausible edit: everything between this test and the drag note IS the
+    // echo branch, so moving this block down past it is behaviourally
+    // IDENTICAL -- a post-drag re-show has seq !== seqAtFit, misses the echo
+    // branch, and still arrives here before the drag note. Measured with the
+    // block moved: corner drag then tab away and back leaves figsize 1440x1080
+    // on both runtimes, ink intact, and a re-show still noted.
+    //
+    // The only placement that breaks anything is BELOW the drag note, where
+    // this block is dead code rather than misplaced, and the tab switch blanks
+    // the figure. That is what the test pins -- by measuring the figure, not
+    // the classification, because a deleted branch is classified `echo` and not
+    // `drag`. See the re-show test in
+    // test/browser/specs-deploy/panefit.spec.js.
     if (st && st.lastDelivered === w + 'x' + h) {
       paneFitNote('reshow', w, h);
       // mpl.js's own refresh: Python sets _force_full and draw_idle ships a

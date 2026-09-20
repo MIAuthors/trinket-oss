@@ -132,7 +132,7 @@ test.describe('pane fit: startup', () => {
       //
       // Weakening it to `toBeGreaterThanOrEqual(1)` was the first repair and it
       // was a tautology: `awaitStartup = false` is written at exactly one place
-      // (pyodide.js:4115), inside the rAF callback, which is only ever scheduled
+      // (pyodide.js:4129), inside the rAF callback, which is only ever scheduled
       // from the branch whose first statement IS paneFitNote('startup'). So
       // awaitStartup === false implies at least one startup note, and that is
       // asserted below.
@@ -632,7 +632,7 @@ test.describe('pane fit: a cancelled gesture', () => {
 });
 
 test.describe('pane fit: the output tab goes away and comes back', () => {
-  // THE RE-SHOW BRANCH (pyodide.js:4179), which shipped in 7d57c8f with no test.
+  // THE RE-SHOW BRANCH (pyodide.js:4208), which shipped in 7d57c8f with no test.
   //
   // Hiding the output pane drives canvas_div to 0x0. mpl.js suppresses that
   // delivery itself -- it gates on `width != 0 && height != 0` -- so nothing
@@ -661,13 +661,13 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
   // more than the one that is.
   //
   // (1) A reshow must not update `lastDelivered`, because lastDelivered has to
-  // go on describing a REAL delivery (pyodide.js:4173). Unobservable from
+  // go on describing a REAL delivery (pyodide.js:4187). Unobservable from
   // outside: a reshow only fires when `lastDelivered === w + 'x' + h` already,
   // so assigning it again writes the value it holds. No black-box test can
   // distinguish the two.
   //
   // (2) The branch's PLACEMENT above the drag branch. The comment at
-  // pyodide.js:4176 says that below it, a re-show following a drag whose
+  // pyodide.js:4190 says that below it, a re-show following a drag whose
   // pointerup fit was skipped by the box-signature check has seq !== seqAtFit,
   // lands in the drag branch and ratchets. I tried to observe that and could
   // not. Moving the block down so it is tested after the echo branch and
