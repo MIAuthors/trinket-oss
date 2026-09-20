@@ -721,6 +721,17 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
       const drawn = await ink();
       expect(drawn, 'the figure was drawn before any tab switch').toBeGreaterThan(10_000);
 
+      // The canvas box, captured so the assertion below can say WHICH thing
+      // moved. This is a diagnostic precondition, not a detector: on this
+      // machine it never fires, because macOS uses overlay scrollbars and the
+      // box cannot move across a tab switch.
+      const boxOf = () => page.evaluate(() => {
+        const c = document.querySelector('#graphic canvas.mpl-canvas')
+               || document.querySelector('#graphic canvas');
+        return c.clientWidth + 'x' + c.clientHeight;
+      });
+      const box0 = await boxOf();
+
       for (const pass of [1, 2]) {
         const before = (await notes()).length;
         await page.evaluate(() => { $(document).trigger('trinket.instructions.view'); });
@@ -729,7 +740,24 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
         await page.waitForTimeout(2500);
         const added = (await notes()).slice(before);
 
-        // SYMPTOM FIRST: what the student sees. Exactly the ink it had -- the
+        // THE BOX FIRST, so a scrollbar cannot be mistaken for a blank.
+        // `#graphic-wrap` is `overflow: auto` (static/scss/embed/_python.scss:180),
+        // so on a CLASSIC-scrollbar platform -- Windows, most Linux -- showing
+        // a long Instructions pane can change the available client width, and
+        // then a CORRECT re-fit produces a different bitmap. Without this line
+        // that lands as "the tab switch blanked the figure", which is the
+        // wrong diagnosis and would send the next reader after the classifier
+        // instead of after the layout.
+        //
+        // It cannot fire here: macOS uses overlay scrollbars, so the box does
+        // not move. That is exactly why it is worth writing down -- the
+        // scrollbar behaviour of other platforms is reasoned on this branch,
+        // not measured, and this is where that assumption would first bite.
+        expect(await boxOf(),
+          `pass ${pass}: the tab switch changed the canvas box, so the ink comparison below is not meaningful -- suspect scrollbar geometry, not the classifier. Notes: ${added.join(' ')}`)
+          .toBe(box0);
+
+        // SYMPTOM: what the student sees. Exactly the ink it had -- the
         // figure is neither blanked nor redrawn at a different size.
         expect(await ink(), `pass ${pass}: the tab switch blanked the figure. Notes: ${added.join(' ')}`)
           .toBe(drawn);
