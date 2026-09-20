@@ -271,6 +271,35 @@
       }
     });
 
+    // Same reason as the re-run listener above, and the same shape. Save PNG
+    // goes through matplotlib's savefig in a backend, and on the worker runtime
+    // the panel has no backend -- so from plotpolish v0.3.5 it emits a
+    // cancelable request instead of answering "Run your code first", which is
+    // what it used to do forever on this runtime (plotpolish #30).
+    //
+    // preventDefault() is the contract: it is how the panel learns the ask was
+    // heard, and it is what makes it say "Saved" rather than "Saving isn't
+    // available here". So it is called ONLY when the host really took the
+    // request -- `saveFigure` returns false when there is no figure to send and
+    // no fallback image, and then the panel's honest message is the right one.
+    //
+    // The delivery is the host's, not ours: ctx.saveFigure sends the same
+    // {type:'save'} the mpl toolbar sends, and pyodide.js downloads the savefig
+    // bytes the worker replies with. That is why the Save tab's savefig.dpi,
+    // transparent and bbox apply here -- a canvas grab in this file would have
+    // silently dropped all three.
+    panel.addEventListener('plotpolish-save-requested', function(e) {
+      var detail = e.detail || {};
+      var took   = false;
+      try {
+        took = !!(ctx && typeof ctx.saveFigure === 'function'
+                  && ctx.saveFigure(detail.format || 'png'));
+      } catch (err) {
+        took = false;
+      }
+      if (took) e.preventDefault();
+    });
+
     wrap.appendChild(panel);
     mounted = true;
     return true;

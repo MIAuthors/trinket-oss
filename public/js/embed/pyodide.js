@@ -5095,6 +5095,68 @@ function handleWorkerFigure(msg) {
   }
 }
 
+/**
+ * Save the worker run's figure, for the plot-style panel's Save PNG button.
+ *
+ * The panel cannot do this itself on the worker runtime: it has no backend
+ * there (nothing on this page to run savefig in), so from plotpolish v0.3.5 it
+ * emits a cancelable `plotpolish-save-requested` and asks the host instead.
+ * This is the host's answer, handed to the adapter through its init context
+ * the same way getPyodide and isBusy are.
+ *
+ * It sends the SAME message the mpl toolbar's own Save button sends -- the
+ * `{type:'save'}` the worker swallows and answers with real savefig bytes,
+ * which `handleWorkerFigure`'s `kind === 'save'` branch then downloads. So the
+ * panel's button and the toolbar's button end at one implementation, and the
+ * Save tab's savefig.dpi / transparent / bbox actually apply. A canvas grab
+ * here would honor none of them: it is on-screen pixels at screen dpi, which
+ * is exactly the substitution the comment at the ondownload callback above
+ * refuses for the toolbar.
+ *
+ * Returns true only when a request was actually sent, so the panel can tell
+ * the student the truth when there is nothing to save.
+ *
+ * The last figure, not the first: several show() calls stack canvases, and the
+ * one the student means is the one most recently drawn. `mplFigures` is keyed
+ * by figure id, so this reads the last key rather than assuming there is one.
+ */
+function requestWorkerFigureSave(format) {
+  var fmt  = /^[a-z0-9]{1,5}$/.test(String(format || 'png').toLowerCase())
+           ? String(format).toLowerCase() : 'png';
+  var ids  = Object.keys(mplFigures);
+  if (ids.length) {
+    var id    = ids[ids.length - 1];
+    var entry = mplFigures[id];
+    if (entry && entry.socket && typeof entry.socket.send === 'function') {
+      try {
+        entry.socket.send({ type: 'save', figure_id: id, format: fmt });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+  }
+
+  // Fallback path only: mpl.js never came up, so the worker painted a static
+  // <img> instead (see `kind === 'png'`) and there is no socket to ask. That
+  // image is a base64 PNG the worker already rendered, so downloading it is a
+  // real save of what the student is looking at -- but it is whatever dpi the
+  // worker chose for the preview, NOT what the Save tab asks for. Better than
+  // refusing; not the same thing as the route above, which is why it is last.
+  var img = document.querySelector('#graphic img.worker-figure');
+  if (img && img.src) {
+    var dl = document.createElement('a');
+    dl.href = img.src;
+    dl.download = 'plot.png';
+    document.body.appendChild(dl);
+    dl.click();
+    document.body.removeChild(dl);
+    return true;
+  }
+
+  return false;
+}
+
 // `decision` is the runtime-router result for this program; `decision.vpython`
 // marks the opt-in worker VPython path so the kernel can install the wheel.
 function runInWorker(program, files, serialized, decision) {
@@ -5874,6 +5936,7 @@ window.TrinketAPI = {
         trinketPlotpolish.init({
             api        : api
           , getPyodide : function() { return pyodideReady ? pyodide : null; }
+          , saveFigure : function(format) { return requestWorkerFigureSave(format); }
           , isBusy     : function() {
               // replEvaluating, not replActive: see its declaration. clearMemory()
               // uses the same three-way test and then handles the REPL separately

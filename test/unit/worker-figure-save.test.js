@@ -126,3 +126,48 @@ describe('worker figure save — the page half', () => {
     expect(code).not.toContain('toDataURL');
   });
 });
+
+// The plot-style panel's Save PNG reaches the SAME savefig round trip, because
+// on the worker runtime it has no backend of its own and asks the host instead
+// (plotpolish #30, answered from v0.3.5). The one thing that must not happen
+// here is the substitution the describe above exists to prevent: if this
+// reached for the canvas or the <img> first, the Save tab's savefig.dpi,
+// transparent and bbox would stop applying on the runtime the panel is FOR.
+describe('worker figure save — the plot-style panel reaches the same route', () => {
+  const src  = fs.readFileSync(PAGE, 'utf8');
+  const body = src.slice(src.indexOf('function requestWorkerFigureSave'),
+                         src.indexOf('function runInWorker'));
+
+  it('defines the entry point the adapter is handed', () => {
+    expect(body.length).toBeGreaterThan(0);
+    expect(src).toContain('saveFigure :');
+    expect(src).toContain('requestWorkerFigureSave(format)');
+  });
+
+  it('sends the same {type:\'save\'} message the mpl toolbar sends', () => {
+    expect(body).toContain("type: 'save'");
+    expect(body).toContain('figure_id');
+  });
+
+  // Order is the load-bearing part, exactly as it is in the worker: the socket
+  // is a real savefig, the <img> is the mpl.js-never-loaded fallback at
+  // whatever dpi the preview used. If the fallback were reached first, every
+  // save would silently become a preview-resolution PNG.
+  it('prefers the live figure socket over the fallback <img>', () => {
+    const socketAt = body.indexOf("type: 'save'");
+    const imgAt    = body.indexOf('img.worker-figure');
+    expect(socketAt).toBeGreaterThan(-1);
+    expect(imgAt).toBeGreaterThan(-1);
+    expect(socketAt).toBeLessThan(imgAt);
+  });
+
+  // The panel calls preventDefault() only on a true return, so a false here is
+  // what makes it tell the student the truth rather than claim a save.
+  it('falls through to false when there is nothing to save', () => {
+    // The LAST return in the function, not merely a `return false` somewhere:
+    // the early ones are the socket's catch. If the fall-through ever becomes
+    // `return true`, the panel claims a save on a run that produced no figure.
+    const lastReturn = body.slice(body.lastIndexOf('return '));
+    expect(lastReturn.startsWith('return false;')).toBe(true);
+  });
+});
