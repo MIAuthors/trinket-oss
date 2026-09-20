@@ -4186,13 +4186,27 @@ function armPaneFitClassifier() {
     // It relies on lastDelivered describing a REAL delivery, which is why a
     // reshow returns without updating it.
     //
-    // WHAT IS LOAD-BEARING HERE IS THE `return`, NOT THE NON-ASSIGNMENT. An
-    // earlier version of this comment had that backwards. The branch only
-    // fires when `lastDelivered === w + 'x' + h` already, so assigning it again
-    // would write the value it holds -- a no-op, and unobservable from outside.
-    // The `return` is the whole mechanism: without it a re-show falls into the
-    // echo branch below, the resize goes out marked trinket_fit_echo, Python
-    // drops it, nothing repaints, and the figure is blank.
+    // THREE SEPARATE THINGS, and two earlier versions of this comment merged
+    // them. Written out because each is pinned by something different, and one
+    // is not pinned at all:
+    //
+    //   (a) The branch EXISTING and sending `refresh` is what prevents the
+    //       blank. Delete the whole block and the tab switch leaves ink 0 on
+    //       both runtimes.
+    //   (b) Its placement ABOVE THE ECHO BRANCH is what stops the echo branch
+    //       getting there first. See below.
+    //   (c) The `return` prevents only a SPURIOUS SECOND CLASSIFICATION. It is
+    //       not what prevents the blank, because `refresh` is sent on the line
+    //       before it -- Python has already been told to repaint, so control
+    //       falling through changes nothing a student sees. Measured, return
+    //       deleted: ink 196992 unchanged, notes `reshow:513x384
+    //       echo:513x384`, both runtimes. Harmless since 7d57c8f demoted
+    //       pendingFits out of the classifier; it would not have been before.
+    //
+    // The non-assignment of lastDelivered is a no-op and not a mechanism at
+    // all: the branch only fires when `lastDelivered === w + 'x' + h` already,
+    // and nothing can mutate st between the comparison and the assignment, so
+    // assigning would write the value it holds.
     //
     // ABOVE THE ECHO BRANCH, which matters more than being above the drag
     // branch and is the part two earlier versions of this comment got wrong.
@@ -4211,6 +4225,20 @@ function armPaneFitClassifier() {
     // a CORNER DRAG, the one path where seq !== seqAtFit and the echo branch
     // therefore does not catch it. The drag case is the narrow one; the no-drag
     // case is the common one, and it is the one that blanks.
+    //
+    // AND THE ORIGINAL COMMENT'S CASE WAS REAL -- reinstated here, because it
+    // was described in 7d57c8f, wrongly denied in e7dd94d, and then dropped
+    // rather than corrected in fd5fbf7. Below the DRAG NOTE the failure
+    // depends on gesture state: an ordinary re-show blanks, as above, but a
+    // re-show following a drag whose pointerup fit was SKIPPED by the
+    // box-signature check has seq !== seqAtFit, misses the echo branch,
+    // reaches the drag note, and sends an unmarked resize -- handle_resize
+    // then recomputes figsize, which ratchets. Two different failures from one
+    // mis-ordering, and the narrow one is the one that corrupts the download.
+    //
+    // "Above the echo branch" is still the complete rule, because the echo
+    // branch is the only code between this test and the drag note, so nothing
+    // can satisfy the weaker constraint and violate the stronger one.
     //
     // Pinned by the re-show test in test/browser/specs-deploy/panefit.spec.js,
     // which measures the FIGURE rather than the classification -- a

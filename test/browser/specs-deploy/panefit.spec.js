@@ -632,7 +632,7 @@ test.describe('pane fit: a cancelled gesture', () => {
 });
 
 test.describe('pane fit: the output tab goes away and comes back', () => {
-  // THE RE-SHOW BRANCH (pyodide.js:4218), which shipped in 7d57c8f with no test.
+  // THE RE-SHOW BRANCH (pyodide.js:4246), which shipped in 7d57c8f with no test.
   //
   // Hiding the output pane drives canvas_div to 0x0. mpl.js suppresses that
   // delivery itself -- it gates on `width != 0 && height != 0` -- so nothing
@@ -671,13 +671,17 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
   // narrow case to the common one is the whole of that error, and the data
   // refuting it was already in this file's own mutation run.
   //
-  // ONE INVARIANT IS GENUINELY NOT PINNED, and it is not the one previously
-  // named either. That a re-show must not update `lastDelivered` is
-  // unobservable from outside: the branch only fires when lastDelivered
-  // already equals the delivered size, so re-assigning writes the value it
-  // holds. What is actually load-bearing there is the `return`, and the
-  // `return` IS pinned -- removing it drops the re-delivery into the echo
-  // branch, which is the same blank this test catches.
+  // WHAT EACH ASSERTION BELOW PINS, since the three mechanisms in that branch
+  // are separable and two earlier versions of this comment ran them together:
+  // the ink pins the branch EXISTING and sending refresh; the reshow count
+  // plus the ink pin its PLACEMENT above the echo branch; and the total note
+  // count pins the `return`, which nothing else here can see.
+  //
+  // ONE THING IS NOT PINNED AND CANNOT BE. That a re-show must not update
+  // `lastDelivered` is unobservable from outside: the branch only fires when
+  // lastDelivered already equals the delivered size, and nothing can mutate st
+  // between the comparison and the assignment, so assigning would write the
+  // value it holds. That is a no-op rather than a mechanism.
 
   test.describe.configure({ timeout: 360_000 });
 
@@ -736,6 +740,23 @@ test.describe('pane fit: the output tab goes away and comes back', () => {
         // the failure message would not say what broke.
         expect(added.filter(s => s.startsWith('reshow')).length,
           `pass ${pass}: the re-show was not classified as one. Notes: ${added.join(' ')}`)
+          .toBe(1);
+
+        // EXACTLY ONE NOTE, which pins the branch's `return` and nothing else
+        // does. Deleting the return does NOT blank the figure -- `refresh` is
+        // sent on the line BEFORE it (pyodide.js:4251), so Python has already
+        // been told to repaint -- control simply falls through and the same
+        // delivery is noted a second time as an echo. Measured with the return
+        // deleted: ink 196992 unchanged, reshow count still 1, notes
+        // `reshow:513x384 echo:513x384`, both runtimes. So the ink assertion
+        // and the reshow count are both green and only the total catches it.
+        //
+        // It earns its place twice: it also turns a real fit arriving during
+        // the switch into a failure that says a third size appeared, rather
+        // than into `the tab switch blanked the figure`, which would be the
+        // wrong diagnosis.
+        expect(added.length,
+          `pass ${pass}: the re-show produced more than one note. Notes: ${added.join(' ')}`)
           .toBe(1);
       }
     });
