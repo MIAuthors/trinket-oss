@@ -53,10 +53,42 @@ test.describe('step-through debugger', () => {
   // timeout before its own assertion ever gave up, and report as a failure
   // rather than as the slow download it is. Raise it for this block only.
   //
-  // math-output.spec.js in this directory had the same shape and no raise
-  // until #294, which gave it one. Several other specs still have none --
-  // worker-runtime.spec.js in ../specs is the worst, with 240 s assertions
-  // across 15 tests and no raise at all, in the directory CI actually runs.
+  // Worth knowing: this is a repo-wide shape, not a quirk of this file, and
+  // issue #302 is the sweep for it. Re-derived on feat/mpl-figures by reading
+  // each file whole -- NOT per test, because matplotlib-figures.spec.js and
+  // worker-figure-toolbar.spec.js keep their long wait in a runProgram() helper
+  // outside any test() block, which a per-test parser silently clears:
+  //
+  //   raised:     step-debugger (180 s -> 240 s),
+  //               panefit (240 s -> 360 s, two blocks at 660 s),
+  //               panefit-plotstyle (240 s -> 420 s, one test at 660 s),
+  //               worker-figsize-ratchet (240 s -> 660 s)
+  //   NOT raised: math-output (180 s), matplotlib-figures (180 s),
+  //               worker-figure-toolbar (180 s), console-status (120 s),
+  //               deploy-smoke (120 s)
+  //   marginal:   plotstyle.spec.js, largest wait exactly 90 s, i.e. the cap
+  //
+  // THE TABLE ABOVE IS specs-deploy ONLY, AND IT IS NOT THE WORST CASE. The
+  // worst is in ../specs, the directory browser-smoke.yml actually runs:
+  // worker-runtime.spec.js has 240 s assertions across 15 tests with NOTHING
+  // raising the budget, and share-runtime-option.spec.js has three tests
+  // exceeding via its runInEmbed helper. A green run of the CI-facing suite is
+  // therefore saying less than it appears to. Both are in #302.
+  //
+  // Counting trap, which is why two independent sweeps disagreed: a per-`test(`
+  // grep undercounts. matplotlib-figures.spec.js builds its tests in a
+  // `for...of CASES` loop (:58-59), so it greps as one test and is four, all
+  // four inheriting runProgram()'s 180 s wait.
+  //
+  // Those five have not hit it because nothing has been slow enough yet. That
+  // is luck, not design. math-output.spec.js is fixed on feat/mathoutput-worker
+  // (4a31d33) and still unfixed here, so expect these two branches to collide
+  // on this paragraph; the list above is the one to keep.
+  //
+  // [integration 2026-09-21] Resolved in favour of the #305 text, per its own
+  // instruction. One line of the table above is stale HERE and nowhere else:
+  // #294 is merged into this integration branch, so math-output.spec.js DOES
+  // raise its budget and should read as 'raised', not 'NOT raised'.
   test.describe.configure({ timeout: 240_000 });
 
   test.beforeEach(async ({ page }) => {
