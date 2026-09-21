@@ -316,8 +316,12 @@
   function hasFigure() {
     var fig = document.getElementById('graphic');
     if (!fig) return false;
-    // DEAD, and kept only because deleting it is a behaviour change nobody has
-    // asked for: `img.worker-figure` is posted by `self.__trinket_worker_figure`
+    // DEAD, and kept because it is re-needed the day the orphan sender is
+    // revived -- removing it belongs with that cleanup, not ahead of it. (An
+    // earlier version of this comment said deleting it would be "a behaviour
+    // change nobody has asked for", which is wrong: a branch whose condition
+    // can never be true has no behaviour to change. Right fact, wrong reason.)
+    // `img.worker-figure` is posted by `self.__trinket_worker_figure`
     // in pyodide-worker.js, which has no caller in this repository, so a worker
     // run never produces one. It used to read "a worker run posts the figure
     // back as an image", which is what this check was written against.

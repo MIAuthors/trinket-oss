@@ -157,8 +157,11 @@ describe('worker figure save — the plot-style panel reaches the same route', (
   // sender, revive the fallback deliberately rather than by accident.
   it('builds no download of its own -- the socket route is the only route', () => {
     const code = body.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    // The mechanics of a download, not the WORD: the watchdog's message to the
+    // student legitimately contains "download", and matching on that made this
+    // fail on a string change. An anchor needs these.
     expect(code).not.toContain('createElement');
-    expect(code).not.toContain('download');
+    expect(code).not.toMatch(/\.download\s*=/);
     expect(code).not.toContain('img.worker-figure');
   });
 
@@ -254,6 +257,8 @@ describe('worker figure save — the chain, executed', () => {
   });
 
   // --- LINK 3 + the in-flight state, which lives in this file now --------
+  const TIMEOUT_MS = Number(/MPL_SAVE_TIMEOUT_MS\s*=\s*(\d+)/.exec(fs.readFileSync(SRC, 'utf8'))[1]);
+
   function sandbox(sendResult) {
     const sent = [];
     const out = [];
@@ -281,12 +286,14 @@ describe('worker figure save — the chain, executed', () => {
 
   it('takes the save, and answers a second request while one is out', () => {
     const { api, sent } = sandbox(true);
+    try {
     expect(api.save('png')).toBe(true);
     expect(api.inFlight()).toBe(true);
     // True, not suppressed-and-lied-about: the student's request is satisfied
     // by the save already running, and the worker is asked only once.
     expect(api.save('png')).toBe(true);
     expect(sent.length).toBe(1);
+    } finally { api.clear(); }   // or the 10s watchdog outlives the test
   });
 
   it('is askable again once the reply has cleared the wait', () => {
@@ -296,6 +303,7 @@ describe('worker figure save — the chain, executed', () => {
     expect(api.inFlight()).toBe(false);
     api.save('png');
     expect(sent.length).toBe(2);
+    api.clear();
   });
 
   // The default figure choice: the LAST key, not the first. Round 1 flagged
@@ -308,17 +316,151 @@ describe('worker figure save — the chain, executed', () => {
   // never be answered, and the panel says "Saved".
   it('a Stop clears the save wait, before it terminates the worker', () => {
     const page = fs.readFileSync(PAGE, 'utf8');
-    const stop = page.slice(page.indexOf('function stopCode('));
-    const clearAt = stop.indexOf('clearMplSaveWait()');
-    const stopAt  = stop.indexOf('workerClient.stop()');
+    const from = page.indexOf('function stopCode(');
+    // BOUNDED to stopCode, and COMMENT-STRIPPED. Unbounded it sliced to end of
+    // file and asserted over the wrong region; uncommented, the ordering could
+    // be satisfied by a *comment* mentioning the call while the real one moved
+    // below stop() -- the same trap the orphan-sender test fell into.
+    const stop = page.slice(from, page.indexOf('\n}', from));
+    const code = stop.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    const clearAt = code.indexOf('clearMplSaveWait()');
+    const stopAt  = code.indexOf('workerClient.stop()');
     expect(clearAt).toBeGreaterThan(-1);
     expect(stopAt).toBeGreaterThan(-1);
     expect(clearAt).toBeLessThan(stopAt);
+    // What this CANNOT see: a dead branch. `if (false) { clearMplSaveWait(); }`
+    // passes. stopCode() reaches half the module's state and cannot be lifted
+    // and run, so that gap is stated rather than papered over.
+  });
+
+  // The watchdog is the backstop for a reply that never comes. Three things
+  // have to hold: it releases the button, it says so exactly once, and a reply
+  // disarms it so nothing is written after a save that worked.
+  it('releases the button when the reply never comes, and says so once', () => {
+    vi.useFakeTimers();
+    try {
+      const { api, out } = sandbox(true);
+      api.save('png');
+      expect(api.inFlight()).toBe(true);
+      vi.advanceTimersByTime(TIMEOUT_MS + 50);
+      expect(api.inFlight()).toBe(false);
+      expect(out.length).toBe(1);
+      // And askable again, rather than wedged.
+      api.save('png');
+      expect(api.inFlight()).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a reply disarms the watchdog, so no line follows a save that worked', () => {
+    vi.useFakeTimers();
+    try {
+      const { api, out } = sandbox(true);
+      api.save('png');
+      api.clear();                       // what the 'save' branch does
+      vi.advanceTimersByTime(TIMEOUT_MS * 2);
+      expect(out).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('arms the watchdog at the timeout the source declares', () => {
+    // Read from source rather than duplicated: retuning the constant is a
+    // legitimate change and must not fail a test that asserts no timing.
+    expect(TIMEOUT_MS).toBeGreaterThan(0);
+    expect(fs.readFileSync(SRC, 'utf8')).toContain('MPL_SAVE_TIMEOUT_MS');
   });
 
   it('asks the last figure, not the first', () => {
     const { api, sent } = sandbox(true);
     api.save('png');
     expect(sent[0].figure_id).toBe('fig2');
+    api.clear();
+  });
+});
+
+/**
+ * The invariant the save design rests on is "mplSaveInFlight is always
+ * eventually cleared" -- and a round-3 review found EIGHT one-line reverts to
+ * it that passed the whole green suite. Dropping the clear from the SUCCESS
+ * branch is the worst: the button wedges for ten seconds, answers every click
+ * "Saved", sends nothing, and then prints a failure line about a save that
+ * worked. Strictly worse than the bug this branch started by fixing.
+ *
+ * So the clear sites are executed, not counted.
+ */
+describe('worker figure save — the wait is always released', () => {
+  const SRC = path.join(ROOT, 'public/js/embed/pyodide.js');
+  function extract(name) {
+    const src = fs.readFileSync(SRC, 'utf8');
+    const start = src.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error(name + ' not found');
+    let depth = 0;
+    for (let j = src.indexOf('{', start); j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
+    }
+    throw new Error('unbalanced braces extracting ' + name);
+  }
+
+  /** handleWorkerFigure, with just enough of its world to drive the replies. */
+  function figureHandler(overdue) {
+    const cleared = [];
+    const downloads = [];
+    const out = [];
+    const doc = {
+      getElementById: () => ({ appendChild() {} }),
+      createElement: () => ({
+        set download(v) { downloads.push(v); },
+        get download() { return downloads[downloads.length - 1]; },
+        href: '', click() {}, style: {},
+      }),
+      body: { appendChild() {}, removeChild() {} },
+    };
+    const fn = new Function(
+      'document', 'writeOut', 'clearMplSaveWait', 'takeMplSaveOverdue', 'ensureMplAssets',
+      'mplFigures', 'mplLoaded', 'atob', 'URL', 'Blob', 'setTimeout',
+      extract('handleWorkerFigure') + 'return handleWorkerFigure;'
+    )(doc, (t) => out.push(t), () => cleared.push(1), () => !!overdue, () => {},
+      {}, false, (b) => Buffer.from(b, 'base64').toString('binary'),
+      { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
+      function Blob() {}, setTimeout);
+    return { fn, cleared, downloads, out };
+  }
+
+  it("the 'save' branch clears the wait before it downloads", () => {
+    const h = figureHandler();
+    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    expect(h.cleared.length).toBe(1);
+    expect(h.downloads).toEqual(['plot.png']);
+  });
+
+  // The watchdog reports rather than diagnoses, so the reply has to answer it:
+  // a save that arrives late must retract the warning, not leave the student
+  // with a failure line and a file.
+  it('a late arrival retracts the overdue warning', () => {
+    const h = figureHandler(true);
+    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    expect(h.out.join('')).toContain('after all');
+    expect(h.downloads).toEqual(['plot.png']);
+  });
+
+  it('says nothing extra when the save was never overdue', () => {
+    const h = figureHandler(false);
+    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    expect(h.out).toEqual([]);
+  });
+
+  it("the 'save-error' branch clears the wait and tells the student", () => {
+    const h = figureHandler();
+    h.fn({ kind: 'save-error', data: 'boom' });
+    expect(h.cleared.length).toBe(1);
+    expect(h.out.join('')).toContain('boom');
+  });
+
+  it('a new run cancels a save that can never be answered', () => {
+    const calls = [];
+    const fn = new Function('clearMplSaveWait', 'mplFigures', 'mplGeneration',
+      extract('resetMplFigures') + 'return resetMplFigures;')(() => calls.push(1), {}, 0);
+    fn();
+    expect(calls.length).toBe(1);
   });
 });

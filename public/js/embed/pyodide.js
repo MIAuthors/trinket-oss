@@ -4476,11 +4476,20 @@ function registerPaneFit(fig) {
  */
 var mplSaveInFlight = false;
 var mplSaveWatchdog = null;
+var mplSaveOverdue = false;   // the watchdog spoke; the reply must answer it
 var MPL_SAVE_TIMEOUT_MS = 10000;
 
 function clearMplSaveWait() {
   mplSaveInFlight = false;
+  mplSaveOverdue = false;
   if (mplSaveWatchdog !== null) { clearTimeout(mplSaveWatchdog); mplSaveWatchdog = null; }
+}
+
+/** True exactly once, for the reply that arrives after the watchdog spoke. */
+function takeMplSaveOverdue() {
+  var was = mplSaveOverdue;
+  mplSaveOverdue = false;
+  return was;
 }
 
 function ensureMplAssets(msg) {
@@ -5048,7 +5057,12 @@ function handleWorkerFigure(msg) {
   // bytes, and sends them across for this side to download -- same <a download>
   // shape embed.js already uses, and no form, so the embed CSP contract holds.
   if (msg.kind === 'save') {
+    // Before clearMplSaveWait(), which resets the flag it reads: if the
+    // watchdog already told the student this was overdue, the arrival has to
+    // retract that rather than leaving a stale failure line on screen.
+    var wasOverdue = takeMplSaveOverdue();
     clearMplSaveWait();
+    if (wasOverdue) writeOut('[The figure answered after all -- saving it now.]\n');
     var saved = null;
     try { saved = JSON.parse(msg.data); } catch (e) { saved = null; }
     // Do not fail the way this button used to. A reply this side cannot read is
@@ -5166,8 +5180,17 @@ function requestWorkerFigureSave(format) {
     if (entry && entry.socket && typeof entry.socket.send === 'function') {
       // A save is already out. The student's request WILL be satisfied by it,
       // so this is a true answer, not a suppression dressed up as one -- and
-      // it costs the worker nothing. Judged here, after the worker check
-      // above, so a click after a Stop still reaches the no-worker path.
+      // it costs the worker nothing.
+      //
+      // What the answer does NOT mean: that THIS call's arguments were used.
+      // Its `fmt` is discarded, and the figure was chosen by the call that
+      // actually sent. Harmless today (the panel only ever asks for png), but
+      // a figure created between two clicks is saved by neither.
+      //
+      // And note what protects a click after a Stop: NOT the check above it,
+      // which only asks whether a socket OBJECT exists -- `mplFigures` is
+      // untouched by stopCode(). It is stopCode() clearing this flag before it
+      // terminates the worker. Move that and this dedupe covers nothing.
       if (mplSaveInFlight) return true;
       try {
         // The socket's own answer, not `true` for "did not throw". With no
@@ -5185,7 +5208,17 @@ function requestWorkerFigureSave(format) {
         mplSaveWatchdog = setTimeout(function() {
           mplSaveWatchdog = null;
           mplSaveInFlight = false;
-          writeOut('[Could not save the figure: the interpreter stopped before it answered.]\n');
+          // REPORTS what was observed; does not DIAGNOSE. All this code knows
+          // is that ten seconds passed -- and the ordinary reason for that is
+          // a slow savefig, which is the very thing the ten seconds exist to
+          // outlast. The first wording said "the interpreter stopped before it
+          // answered", which is a conclusion it has no evidence for, and a
+          // student whose 600-dpi figure simply took twelve seconds was told
+          // it had failed and then handed the file.
+          mplSaveOverdue = true;
+          writeOut('[The figure has not saved after ' + Math.round(MPL_SAVE_TIMEOUT_MS / 1000)
+                   + ' seconds. The interpreter may have stopped; if it answers, the file '
+                   + 'will still download.]\n');
         }, MPL_SAVE_TIMEOUT_MS);
         return true;
       } catch (e) {
