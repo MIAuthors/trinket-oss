@@ -201,8 +201,15 @@ const init = async () => {
       //
       // Sliding expiration is unaffected in practice: assets are fetched as
       // part of page loads, and the page request itself still touches.
+      // Gated on app.cache.enabled as well: when asset caching is off the
+      // response is not cacheable anyway, so skipping the touch would buy
+      // nothing and would still alter sliding expiration. cacheControl states
+      // the rule this follows -- "off unless a deploy opts in, so merging this
+      // changes nothing until someone decides it should".
+      var assetCachingOn = !!(config.app.cache && config.app.cache.enabled === true);
       if (request.yar.get('userId') &&
-          !cacheControl.isVersionedAssetPath(request.path, config.app.cachePrefix)) {
+          !(assetCachingOn &&
+            cacheControl.isVersionedAssetPath(request.path, config.app.cachePrefix))) {
         request.yar.touch();
       }
     }
