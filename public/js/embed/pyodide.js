@@ -3771,6 +3771,7 @@ function resetMplFigures() {
     clearTimeout(st.startupTimer);
   });
   paneFitState = Object.create(null);
+  clearMplSaveWait();
 }
 
 // ---- the dpi pane fit, page half ------------------------------------------
@@ -4462,6 +4463,26 @@ function registerPaneFit(fig) {
   // startup bug described there.
 }
 
+/**
+ * A save is out and its reply has not come back.
+ *
+ * Owned HERE rather than in the adapter, because here is where the reply
+ * lands. The first version of the duplicate-click guard lived in the adapter
+ * on a 1-second timer, which was a debounce wearing a one-at-a-time label: a
+ * slow save (300 dpi, bbox='tight', a cold worker) still duplicated at 1.1 s,
+ * which is exactly the case the guard was for, while a click inside the window
+ * was reported to the student as "Saved" without ever reaching this file --
+ * punching a hole straight through the no-worker detection beside it.
+ */
+var mplSaveInFlight = false;
+var mplSaveWatchdog = null;
+var MPL_SAVE_TIMEOUT_MS = 10000;
+
+function clearMplSaveWait() {
+  mplSaveInFlight = false;
+  if (mplSaveWatchdog !== null) { clearTimeout(mplSaveWatchdog); mplSaveWatchdog = null; }
+}
+
 function ensureMplAssets(msg) {
   if (mplLoaded) return true;
   try {
@@ -4972,8 +4993,15 @@ function handleWorkerFigure(msg) {
   if (msg.kind === 'assets') { ensureMplAssets(msg); return; }
 
   if (msg.kind === 'new') {
-    // If mpl.js could not be loaded, do nothing here — the worker also emits a
-    // static PNG for this figure, so a plot still appears.
+    // If mpl.js could not be loaded, do nothing here. This used to say "the
+    // worker also emits a static PNG for this figure, so a plot still
+    // appears", and that is FALSE: the only thing that posts `kind:'png'` is
+    // `self.__trinket_worker_figure` in pyodide-worker.js, which has no caller
+    // anywhere in this repository (its own comment points at an MPL_FALLBACK
+    // constant that was removed). So an mpl.js load failure means the student
+    // gets no figure at all, and nothing here softens it. Corrected rather
+    // than left, because it is the comment that made a dead <img> fallback
+    // look reasonable to write. See requestWorkerFigureSave below.
     if (!mplLoaded || mplFigures[msg.figureId]) return;
 
     var host = document.createElement('div');
@@ -5020,6 +5048,7 @@ function handleWorkerFigure(msg) {
   // bytes, and sends them across for this side to download -- same <a download>
   // shape embed.js already uses, and no form, so the embed CSP contract holds.
   if (msg.kind === 'save') {
+    clearMplSaveWait();
     var saved = null;
     try { saved = JSON.parse(msg.data); } catch (e) { saved = null; }
     // Do not fail the way this button used to. A reply this side cannot read is
@@ -5071,6 +5100,7 @@ function handleWorkerFigure(msg) {
   // A save that raised in the worker. Say so rather than failing the way this
   // button used to -- silently.
   if (msg.kind === 'save-error') {
+    clearMplSaveWait();
     writeOut('[Could not save the figure: ' + msg.data + ']\n');
     return;
   }
@@ -5134,13 +5164,32 @@ function requestWorkerFigureSave(format) {
     var id    = ids[ids.length - 1];
     var entry = mplFigures[id];
     if (entry && entry.socket && typeof entry.socket.send === 'function') {
+      // A save is already out. The student's request WILL be satisfied by it,
+      // so this is a true answer, not a suppression dressed up as one -- and
+      // it costs the worker nothing. Judged here, after the worker check
+      // above, so a click after a Stop still reaches the no-worker path.
+      if (mplSaveInFlight) return true;
       try {
         // The socket's own answer, not `true` for "did not throw". With no
         // worker -- after a Stop -- postMessage never happens and nothing
         // throws, so returning true told the panel to say "Saved" over a
         // message that went nowhere.
-        return entry.socket.send({ type: 'save', figure_id: id, format: fmt }) === true;
+        if (entry.socket.send({ type: 'save', figure_id: id, format: fmt }) !== true) return false;
+        mplSaveInFlight = true;
+        // A backstop, not a debounce: the reply clears this, and the only way
+        // to reach the timeout is a worker that went away without a Stop. Ten
+        // seconds because it has to outlast a genuinely slow savefig, and the
+        // point is to convert silence into a line the student can read --
+        // "Saved" is the panel's word and this cannot retract it, but it can
+        // stop the failure being invisible.
+        mplSaveWatchdog = setTimeout(function() {
+          mplSaveWatchdog = null;
+          mplSaveInFlight = false;
+          writeOut('[Could not save the figure: the interpreter stopped before it answered.]\n');
+        }, MPL_SAVE_TIMEOUT_MS);
+        return true;
       } catch (e) {
+        clearMplSaveWait();
         return false;
       }
     }
@@ -5580,6 +5629,10 @@ function stopCode() {
   // about.
   if (workerClient && workerClient.isRunning()) {
     rerunQueued = false;             // Stop means stop, not restart
+    // Any save waiting on that worker is never going to be answered. Cleared
+    // here rather than left to the watchdog, so the next Save click is judged
+    // on whether a worker exists instead of being swallowed as a duplicate.
+    clearMplSaveWait();
     workerClient.stop();
 
     // The interpreter is gone, so there is nothing left to ping: stop the clock

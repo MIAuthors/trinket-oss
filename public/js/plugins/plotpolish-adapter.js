@@ -288,28 +288,22 @@
     // bytes the worker replies with. That is why the Save tab's savefig.dpi,
     // transparent and bbox apply here -- a canvas grab in this file would have
     // silently dropped all three.
-    var saveInFlight = false;
     panel.addEventListener('plotpolish-save-requested', function(e) {
       var detail = e.detail || {};
       var took   = false;
-      // One at a time. The panel disables its button only on the path where it
-      // owns a backend, so on this runtime three impatient clicks were three
-      // savefig round trips in the worker and three downloads -- measured.
-      // The window is short: it closes as soon as the reply lands, or after a
-      // second if the worker never answers, which is the same "do not strand
-      // the control" reasoning as everywhere else in this file.
-      if (saveInFlight) { e.preventDefault(); return; }
+      // No duplicate-click guard HERE. There was one, on a 1-second timer, and
+      // it was wrong twice: a slow save still duplicated just past the window,
+      // and a click inside the window returned before ctx.saveFigure was ever
+      // called -- so the no-worker detection was bypassed and the panel said
+      // "Saved" after a Stop. The host owns that state now, next to the reply
+      // that clears it (requestWorkerFigureSave in pyodide.js).
       try {
         took = !!(ctx && typeof ctx.saveFigure === 'function'
                   && ctx.saveFigure(detail.format || 'png'));
       } catch (err) {
         took = false;
       }
-      if (took) {
-        saveInFlight = true;
-        window.setTimeout(function() { saveInFlight = false; }, 1000);
-        e.preventDefault();
-      }
+      if (took) e.preventDefault();
     });
 
     wrap.appendChild(panel);
@@ -322,7 +316,11 @@
   function hasFigure() {
     var fig = document.getElementById('graphic');
     if (!fig) return false;
-    // A worker run posts the figure back as an image.
+    // DEAD, and kept only because deleting it is a behaviour change nobody has
+    // asked for: `img.worker-figure` is posted by `self.__trinket_worker_figure`
+    // in pyodide-worker.js, which has no caller in this repository, so a worker
+    // run never produces one. It used to read "a worker run posts the figure
+    // back as an image", which is what this check was written against.
     if (fig.querySelector('img.worker-figure')) return true;
     // Any <canvas> is not enough: Web VPython draws its 3D scene on a canvas
     // inside #graphic, so matching canvases alone mounted the plot-style pill

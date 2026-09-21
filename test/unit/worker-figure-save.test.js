@@ -167,8 +167,13 @@ describe('worker figure save — the plot-style panel reaches the same route', (
     // fallback question is open again -- which is exactly when someone should
     // be made to think about it.
     const worker = fs.readFileSync(WORKER, 'utf8');
+    // AT MOST the definition. Not `=== 1`: that also failed when the orphan
+    // was DELETED, which is the cleanup this branch explicitly defers and
+    // endorses -- a test that fires on the fix it recommends is a trap, and
+    // `expected 0 to be 1` points at nothing useful. It also fired on a mere
+    // comment mentioning the name, so the follow-up could not leave a note.
     const hits = worker.split('__trinket_worker_figure').length - 1;
-    expect(hits).toBe(1);   // the definition, and nothing calling it
+    expect(hits).toBeLessThan(2);
   });
 
   // The format the panel asks for reaches savefig, so a guard that inverts on
@@ -193,7 +198,7 @@ describe('worker figure save — the plot-style panel reaches the same route', (
   // is a weak instrument -- worker-client.test.js drives the real module for
   // the half that can actually be executed.
   it('returns what the socket said, rather than true for "did not throw"', () => {
-    expect(body).toMatch(/return entry\.socket\.send\([^)]*\) === true;/);
+    expect(body).toMatch(/if \(entry\.socket\.send\([^)]*\) !== true\) return false;/);
     expect(body).not.toMatch(/entry\.socket\.send\([^)]*\);\s*\n\s*return true;/);
   });
 
@@ -205,5 +210,115 @@ describe('worker figure save — the plot-style panel reaches the same route', (
     // `return true`, the panel claims a save on a run that produced no figure.
     const lastReturn = body.slice(body.lastIndexOf('return '));
     expect(lastReturn.startsWith('return false;')).toBe(true);
+  });
+});
+
+/**
+ * The save chain has THREE links and a source reading only ever pins two.
+ *
+ * A round-2 review mutated the middle one -- makeMplSocket's `send` ignoring
+ * the client's answer and returning true -- and the whole 558-test suite
+ * stayed green while the original bug was fully restored: after a Stop the
+ * panel says "Saved" and no file appears. So these EXECUTE the links instead,
+ * using the same extract-and-run idiom as mpl-resize-debounce.test.js.
+ */
+describe('worker figure save — the chain, executed', () => {
+  const SRC = path.join(ROOT, 'public/js/embed/pyodide.js');
+  function extract(name) {
+    const src = fs.readFileSync(SRC, 'utf8');
+    const start = src.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error(name + ' not found');
+    let depth = 0;
+    for (let j = src.indexOf('{', start); j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
+    }
+    throw new Error('unbalanced braces extracting ' + name);
+  }
+
+  // --- LINK 2: the socket passes the client's answer through -------------
+  function socketWith(client) {
+    const make = new Function('window', 'workerClient',
+      'return (' + extract('makeMplSocket') + ')')({}, client);
+    return make('fig1');
+  }
+
+  it('the socket returns false when the client says it did not post', () => {
+    expect(socketWith({ sendMplEvent: () => false }).send({ type: 'save' })).toBe(false);
+  });
+  it('the socket returns true when the client posted', () => {
+    expect(socketWith({ sendMplEvent: () => true }).send({ type: 'save' })).toBe(true);
+  });
+  it('the socket returns false when there is no client at all', () => {
+    expect(socketWith(null).send({ type: 'save' })).toBe(false);
+  });
+
+  // --- LINK 3 + the in-flight state, which lives in this file now --------
+  function sandbox(sendResult) {
+    const sent = [];
+    const out = [];
+    const figures = {
+      fig1: { socket: { send: () => true } },
+      fig2: { socket: { send: (m) => { sent.push(m); return sendResult; } } },
+    };
+    const api = new Function(
+      'mplFigures', 'writeOut', 'MPL_SAVE_TIMEOUT_MS', 'setTimeout', 'clearTimeout',
+      'var mplSaveInFlight = false, mplSaveWatchdog = null;' +
+      extract('clearMplSaveWait') +
+      extract('requestWorkerFigureSave') +
+      'return { save: requestWorkerFigureSave, clear: clearMplSaveWait,' +
+      '         inFlight: function () { return mplSaveInFlight; } };'
+    )(figures, (t) => out.push(t), 10000, setTimeout, clearTimeout);
+    return { api, sent, out };
+  }
+
+  it('reports the socket\'s refusal rather than claiming a save', () => {
+    const { api, out } = sandbox(false);
+    expect(api.save('png')).toBe(false);
+    expect(api.inFlight()).toBe(false);   // nothing left armed
+    expect(out).toEqual([]);
+  });
+
+  it('takes the save, and answers a second request while one is out', () => {
+    const { api, sent } = sandbox(true);
+    expect(api.save('png')).toBe(true);
+    expect(api.inFlight()).toBe(true);
+    // True, not suppressed-and-lied-about: the student's request is satisfied
+    // by the save already running, and the worker is asked only once.
+    expect(api.save('png')).toBe(true);
+    expect(sent.length).toBe(1);
+  });
+
+  it('is askable again once the reply has cleared the wait', () => {
+    const { api, sent } = sandbox(true);
+    api.save('png');
+    api.clear();                           // what the 'save' / 'save-error' branches do
+    expect(api.inFlight()).toBe(false);
+    api.save('png');
+    expect(sent.length).toBe(2);
+  });
+
+  // The default figure choice: the LAST key, not the first. Round 1 flagged
+  // that `ids[0]` passed the whole suite; this is the assertion that closes it.
+  // Source-text, deliberately: stopCode() reaches half the module's state and
+  // cannot be lifted out the way the two above can. Presence-and-ordering is
+  // what text answers well, and that is exactly the question here -- the save
+  // wait must be cleared BEFORE the worker is terminated, or a Save click in
+  // the seconds after a Stop is swallowed as a duplicate of a save that can
+  // never be answered, and the panel says "Saved".
+  it('a Stop clears the save wait, before it terminates the worker', () => {
+    const page = fs.readFileSync(PAGE, 'utf8');
+    const stop = page.slice(page.indexOf('function stopCode('));
+    const clearAt = stop.indexOf('clearMplSaveWait()');
+    const stopAt  = stop.indexOf('workerClient.stop()');
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(stopAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeLessThan(stopAt);
+  });
+
+  it('asks the last figure, not the first', () => {
+    const { api, sent } = sandbox(true);
+    api.save('png');
+    expect(sent[0].figure_id).toBe('fig2');
   });
 });

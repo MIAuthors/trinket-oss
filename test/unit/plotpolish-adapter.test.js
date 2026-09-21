@@ -427,28 +427,17 @@ d('plot-style adapter — Save PNG on the worker', () => {
     expect(said()).not.toBe('Saved');
   });
 
-  // The host's answer is now the SOCKET's answer, not "postMessage did not
-  // throw". After a Stop there is no worker, the frame is dropped in silence,
-  // and the old code returned true -- so the panel said "Saved" over a message
-  // that went nowhere, which is the failure this whole feature exists to end.
-  it('does not claim a save when the host could not actually send it', () => {
-    const win = boot();
-    addCanvas(win, null);
-    win.trinketPlotpolish.afterRun('worker');
-    win.$saveResult = false;                  // stands in for "no worker"
-
-    const { button, said } = saveSurface(win);
-    button.click();
-
-    expect(win.$saves).toEqual(['png']);
-    expect(said()).not.toBe('Saved');
-    expect(said()).toContain('available');
-  });
-
-  // The panel disables its button only on the path where it owns a backend, so
-  // on this runtime nothing stopped three impatient clicks becoming three
-  // savefig round trips and three downloads. Measured before the guard.
-  it('collapses a burst of clicks into one save', () => {
+  // No duplicate-click guard in the adapter: every click is forwarded, and the
+  // host decides. There WAS one here, on a 1-second timer, and it returned
+  // before ctx.saveFigure was called -- so a click within a second of a Stop
+  // never reached the no-worker check and the panel said "Saved". Deduping
+  // belongs next to the reply that ends the save, which is in pyodide.js;
+  // worker-figure-save.test.js executes it there.
+  //
+  // (There was also a test here asserting the host is not asked when it
+  // declines. It was byte-identical to "does not claim a save the host
+  // declined" above -- coverage-shaped, adding none -- and is gone.)
+  it('forwards every click and lets the host decide about duplicates', () => {
     const win = boot();
     addCanvas(win, null);
     win.trinketPlotpolish.afterRun('worker');
@@ -458,7 +447,7 @@ d('plot-style adapter — Save PNG on the worker', () => {
     button.click();
     button.click();
 
-    expect(win.$saves).toEqual(['png']);
+    expect(win.$saves).toEqual(['png', 'png', 'png']);
   });
 
   it('does not ask the host for anything until the button is pressed', () => {
