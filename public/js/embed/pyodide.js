@@ -4597,6 +4597,24 @@ function makeMplSocket(figureId) {
       if (!workerClient || !workerClient.sendMplEvent) return false;
       // Passed through rather than swallowed: requestWorkerFigureSave() tells
       // the panel whether the save was taken, and the panel tells the student.
+      //
+      // Returning a value where mpl.js used to get `undefined` is safe, and
+      // that is MEASURED against the shipped file rather than reasoned about.
+      // mpl.js is not in this repo -- it arrives at runtime from the pyodide
+      // matplotlib wheel and is PATCHED on the way -- so it was checked in a
+      // live worker run (pyodide 0.28.1, matplotlib loaded, real figure on
+      // screen): 30 functions on `mpl` and `mpl.figure.prototype`, three
+      // `.send(` call sites (send_message, send_draw_message, handle_save),
+      // and ZERO places that use the result -- no assignment, no `if`, no
+      // `return`, no `&&`/`||`, no chaining, no `await`, no negation.
+      //
+      // The same run settled two other things the source could only assert:
+      // handle_save -- which is Pyodide's patch, absent upstream -- sends
+      // `{type:'save', figure_id, format}`, byte-identical in shape to what
+      // requestWorkerFigureSave sends, so "the same route as the toolbar" is
+      // now verified rather than claimed; and the figure came back as
+      // `div.worker-figure.mpl-figure` with no `img.worker-figure` anywhere,
+      // which is the dead fallback confirmed dead on the real host.
       return workerClient.sendMplEvent(figureId, content);
     }
   };
