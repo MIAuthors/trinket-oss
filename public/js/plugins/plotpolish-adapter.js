@@ -288,16 +288,28 @@
     // bytes the worker replies with. That is why the Save tab's savefig.dpi,
     // transparent and bbox apply here -- a canvas grab in this file would have
     // silently dropped all three.
+    var saveInFlight = false;
     panel.addEventListener('plotpolish-save-requested', function(e) {
       var detail = e.detail || {};
       var took   = false;
+      // One at a time. The panel disables its button only on the path where it
+      // owns a backend, so on this runtime three impatient clicks were three
+      // savefig round trips in the worker and three downloads -- measured.
+      // The window is short: it closes as soon as the reply lands, or after a
+      // second if the worker never answers, which is the same "do not strand
+      // the control" reasoning as everywhere else in this file.
+      if (saveInFlight) { e.preventDefault(); return; }
       try {
         took = !!(ctx && typeof ctx.saveFigure === 'function'
                   && ctx.saveFigure(detail.format || 'png'));
       } catch (err) {
         took = false;
       }
-      if (took) e.preventDefault();
+      if (took) {
+        saveInFlight = true;
+        window.setTimeout(function() { saveInFlight = false; }, 1000);
+        e.preventDefault();
+      }
     });
 
     wrap.appendChild(panel);

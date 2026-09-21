@@ -427,6 +427,40 @@ d('plot-style adapter — Save PNG on the worker', () => {
     expect(said()).not.toBe('Saved');
   });
 
+  // The host's answer is now the SOCKET's answer, not "postMessage did not
+  // throw". After a Stop there is no worker, the frame is dropped in silence,
+  // and the old code returned true -- so the panel said "Saved" over a message
+  // that went nowhere, which is the failure this whole feature exists to end.
+  it('does not claim a save when the host could not actually send it', () => {
+    const win = boot();
+    addCanvas(win, null);
+    win.trinketPlotpolish.afterRun('worker');
+    win.$saveResult = false;                  // stands in for "no worker"
+
+    const { button, said } = saveSurface(win);
+    button.click();
+
+    expect(win.$saves).toEqual(['png']);
+    expect(said()).not.toBe('Saved');
+    expect(said()).toContain('available');
+  });
+
+  // The panel disables its button only on the path where it owns a backend, so
+  // on this runtime nothing stopped three impatient clicks becoming three
+  // savefig round trips and three downloads. Measured before the guard.
+  it('collapses a burst of clicks into one save', () => {
+    const win = boot();
+    addCanvas(win, null);
+    win.trinketPlotpolish.afterRun('worker');
+
+    const { button } = saveSurface(win);
+    button.click();
+    button.click();
+    button.click();
+
+    expect(win.$saves).toEqual(['png']);
+  });
+
   it('does not ask the host for anything until the button is pressed', () => {
     const win = boot();
     addCanvas(win, null);

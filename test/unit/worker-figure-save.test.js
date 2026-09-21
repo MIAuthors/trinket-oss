@@ -149,16 +149,52 @@ describe('worker figure save — the plot-style panel reaches the same route', (
     expect(body).toContain('figure_id');
   });
 
-  // Order is the load-bearing part, exactly as it is in the worker: the socket
-  // is a real savefig, the <img> is the mpl.js-never-loaded fallback at
-  // whatever dpi the preview used. If the fallback were reached first, every
-  // save would silently become a preview-resolution PNG.
-  it('prefers the live figure socket over the fallback <img>', () => {
-    const socketAt = body.indexOf("type: 'save'");
-    const imgAt    = body.indexOf('img.worker-figure');
-    expect(socketAt).toBeGreaterThan(-1);
-    expect(imgAt).toBeGreaterThan(-1);
-    expect(socketAt).toBeLessThan(imgAt);
+  // There is deliberately NO <img> fallback. An earlier version had one, on
+  // the theory that mpl.js failing to load leaves a static PNG to download --
+  // but `self.__trinket_worker_figure`, the only thing that posts `kind:'png'`,
+  // has no caller anywhere in the repo, so the <img> is never painted. Dead
+  // code defended by a paragraph that was not true. If someone revives the
+  // sender, revive the fallback deliberately rather than by accident.
+  it('builds no download of its own -- the socket route is the only route', () => {
+    const code = body.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    expect(code).not.toContain('createElement');
+    expect(code).not.toContain('download');
+    expect(code).not.toContain('img.worker-figure');
+  });
+
+  it('has no orphan sender revived behind its back', () => {
+    // If this ever fails, __trinket_worker_figure gained a caller and the
+    // fallback question is open again -- which is exactly when someone should
+    // be made to think about it.
+    const worker = fs.readFileSync(WORKER, 'utf8');
+    const hits = worker.split('__trinket_worker_figure').length - 1;
+    expect(hits).toBe(1);   // the definition, and nothing calling it
+  });
+
+  // The format the panel asks for reaches savefig, so a guard that inverts on
+  // its own default is worse than none: it would send the nine-character
+  // string "undefined" to matplotlib.
+  it('defaults a missing format to png rather than to the string "undefined"', () => {
+    // The expression as written, evaluated -- source text cannot tell a guard
+    // from a guard-shaped string, and that is exactly how the bug shipped.
+    const line = body.slice(body.indexOf('var fmt ='), body.indexOf('var ids'));
+    const fmtOf = new Function('format', line + '; return fmt;');
+    expect(fmtOf(undefined)).toBe('png');
+    expect(fmtOf(null)).toBe('png');
+    expect(fmtOf('')).toBe('png');
+    expect(fmtOf('PDF')).toBe('pdf');
+    expect(fmtOf('svg;')).toBe('png');
+    expect(fmtOf('toolongformat')).toBe('png');
+  });
+
+  // The socket's ANSWER, not "send() did not throw". With no worker the frame
+  // is dropped in silence and nothing throws, so a bare `return true` told the
+  // panel to say "Saved" over a message that went nowhere. Source-text, which
+  // is a weak instrument -- worker-client.test.js drives the real module for
+  // the half that can actually be executed.
+  it('returns what the socket said, rather than true for "did not throw"', () => {
+    expect(body).toMatch(/return entry\.socket\.send\([^)]*\) === true;/);
+    expect(body).not.toMatch(/entry\.socket\.send\([^)]*\);\s*\n\s*return true;/);
   });
 
   // The panel calls preventDefault() only on a true return, so a false here is

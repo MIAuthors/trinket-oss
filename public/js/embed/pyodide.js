@@ -4564,9 +4564,10 @@ function makeMplSocket(figureId) {
       // upstream that socket is a Python object, so no serialisation happens on
       // the JS side. Normalise here so the worker always parses a string.
       var content = (typeof payload === 'string') ? payload : JSON.stringify(payload);
-      if (workerClient && workerClient.sendMplEvent) {
-        workerClient.sendMplEvent(figureId, content);
-      }
+      if (!workerClient || !workerClient.sendMplEvent) return false;
+      // Passed through rather than swallowed: requestWorkerFigureSave() tells
+      // the panel whether the save was taken, and the panel tells the student.
+      return workerClient.sendMplEvent(figureId, content);
     }
   };
 }
@@ -5121,39 +5122,46 @@ function handleWorkerFigure(msg) {
  * by figure id, so this reads the last key rather than assuming there is one.
  */
 function requestWorkerFigureSave(format) {
-  var fmt  = /^[a-z0-9]{1,5}$/.test(String(format || 'png').toLowerCase())
-           ? String(format).toLowerCase() : 'png';
+  // Two statements, not a ternary: the `|| 'png'` used to sit INSIDE the test
+  // and not in the result, so the guard inverted on exactly the inputs it
+  // exists for -- requestWorkerFigureSave() with no argument produced the
+  // nine-character string "undefined", which its own regex would reject.
+  // This is the shape used by the save handler above, which was always right.
+  var fmt = String(format || 'png').toLowerCase();
+  if (!/^[a-z0-9]{1,5}$/.test(fmt)) { fmt = 'png'; }
   var ids  = Object.keys(mplFigures);
   if (ids.length) {
     var id    = ids[ids.length - 1];
     var entry = mplFigures[id];
     if (entry && entry.socket && typeof entry.socket.send === 'function') {
       try {
-        entry.socket.send({ type: 'save', figure_id: id, format: fmt });
-        return true;
+        // The socket's own answer, not `true` for "did not throw". With no
+        // worker -- after a Stop -- postMessage never happens and nothing
+        // throws, so returning true told the panel to say "Saved" over a
+        // message that went nowhere.
+        return entry.socket.send({ type: 'save', figure_id: id, format: fmt }) === true;
       } catch (e) {
         return false;
       }
     }
   }
 
-  // Fallback path only: mpl.js never came up, so the worker painted a static
-  // <img> instead (see `kind === 'png'`) and there is no socket to ask. That
-  // image is a base64 PNG the worker already rendered, so downloading it is a
-  // real save of what the student is looking at -- but it is whatever dpi the
-  // worker chose for the preview, NOT what the Save tab asks for. Better than
-  // refusing; not the same thing as the route above, which is why it is last.
-  var img = document.querySelector('#graphic img.worker-figure');
-  if (img && img.src) {
-    var dl = document.createElement('a');
-    dl.href = img.src;
-    dl.download = 'plot.png';
-    document.body.appendChild(dl);
-    dl.click();
-    document.body.removeChild(dl);
-    return true;
-  }
-
+  // NO `img.worker-figure` FALLBACK, and the reason is worth recording because
+  // the first version of this function had one and justified it at length.
+  //
+  // That justification was counterfactual. `img.worker-figure` is created by
+  // the `kind === 'png'` branch above, which is fed by
+  // `self.__trinket_worker_figure` in pyodide-worker.js -- a function with NO
+  // CALLER anywhere in this repository. Its own comment points at an
+  // "MPL_FALLBACK" constant that was removed, leaving the sender orphaned. So
+  // the <img> is never painted, the fallback could never run, and shipping it
+  // would have meant dead code defended by a paragraph that was not true.
+  //
+  // Two neighbouring comments are wrong for the same reason and are NOT
+  // touched here, because they predate this change and fixing them belongs in
+  // its own commit: the one at the `kind === 'new'` early return claiming "the
+  // worker also emits a static PNG for this figure, so a plot still appears",
+  // and hasFigure()'s `img.worker-figure` check in plotpolish-adapter.js.
   return false;
 }
 

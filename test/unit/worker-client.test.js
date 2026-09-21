@@ -547,3 +547,40 @@ describe('createWorkerClient and the `rich` message', () => {
     await tick();
   });
 });
+
+// The plot-style panel's Save PNG asks this side whether the request was taken
+// and tells the student "Saved" on the strength of the answer -- so a dropped
+// frame has to be reported, not swallowed. Before this, sendMplEvent returned
+// nothing whether or not a worker existed: click Stop, click Save, get "Saved"
+// and no file.
+describe('sendMplEvent reports whether the frame went anywhere', () => {
+  // No "before the first worker exists" case: createWorkerClient constructs one
+  // eagerly (measured -- `made.length` is 1 straight away), so the reachable
+  // no-worker state is the one after a Stop, below.
+
+  it('returns true once a worker exists, and actually posts', async () => {
+    const h = await bootedClient();
+    const w = h.made[0];
+    const before = w.posted.length;
+    expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(true);
+    expect(w.posted.length).toBe(before + 1);
+    expect(w.posted[w.posted.length - 1].type).toBe('mpl-event');
+  });
+
+  // The case that made this a bug rather than a nicety: after a Stop the
+  // figure is still on the page and the panel is still mounted, so the student
+  // can absolutely press Save -- and nothing throws to tell anyone.
+  it('returns false after stop(), without throwing', async () => {
+    const h = await bootedClient();
+    const w = h.made[0];
+    const before = w.posted.length;
+    h.client.stop();
+    let threw = null;
+    let result;
+    try { result = h.client.sendMplEvent('fig1', '{"type":"save"}'); }
+    catch (e) { threw = e; }
+    expect(threw).toBeNull();
+    expect(result).toBe(false);
+    expect(w.posted.length).toBe(before);
+  });
+});

@@ -275,10 +275,17 @@
       },
 
       // Toolbar clicks and mouse events, back to the figure's manager.
+      // Returns whether the message actually went anywhere. It used to return
+      // nothing and drop the frame in silence when there is no worker (after a
+      // Stop, or before the first run), which is fine for a toolbar click that
+      // nobody is waiting on -- but the plot-style panel's Save PNG asks this
+      // side whether it took the request, and answers the student "Saved" on
+      // the strength of it. Silence became a lie: click Stop, click Save, get
+      // "Saved" and no file.
       sendMplEvent: function(figureId, content) {
-        if (worker) {
-          worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
-        }
+        if (!worker) return false;
+        worker.postMessage({ type: 'mpl-event', figureId: figureId, content: content });
+        return true;
       },
 
       // Browser events — or the bare pacing trigger `[{"trigger":1}]` — to the
