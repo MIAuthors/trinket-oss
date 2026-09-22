@@ -285,7 +285,8 @@
     // one.
     //
     // The delivery is the host's, not ours: ctx.saveFigure sends the same
-    // {type:'save'} the mpl toolbar sends, and pyodide.js downloads the savefig
+    // {type:'save'} the mpl toolbar sends (plus a request_id, so the panel's
+    // reply can be told from the toolbar's), and pyodide.js downloads the savefig
     // bytes the worker replies with. That is why savefig.dpi, transparent and
     // bbox apply here, as the last run left them -- a Save-tab change since
     // then reaches the worker only on the next run. A canvas grab in this file

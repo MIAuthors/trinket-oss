@@ -670,3 +670,68 @@ describe('worker figure save — the links nothing executed', () => {
     expect(src).toMatch(/saveFigure : function\(format\) \{ return requestWorkerFigureSave\(format\); \}/);
   });
 });
+
+/**
+ * A third local reachability round (2026-09-22) found two links the
+ * request-id change left unguarded.
+ */
+describe('worker figure save — the request id, end to end', () => {
+  const SRC = path.join(ROOT, 'public/js/embed/pyodide.js');
+  const WORKER = path.join(ROOT, 'public/js/embed/pyodide-worker.js');
+  function extract(name) {
+    const src = fs.readFileSync(SRC, 'utf8');
+    const start = src.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error(name + ' not found');
+    let depth = 0;
+    for (let j = src.indexOf('{', start); j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
+    }
+    throw new Error('unbalanced braces extracting ' + name);
+  }
+
+  // The REAL take and clear, sharing real state with the real handler. The
+  // handler tests above stub both, so swapping the two calls -- clear first,
+  // which resets the flag take reads -- passed the suite and silently lost
+  // the "answered after all" retraction.
+  it('a late panel reply retracts the overdue line, with the real take and clear', () => {
+    const out = [];
+    const doc = {
+      getElementById: () => ({ appendChild() {} }),
+      createElement: () => ({ set download(v) {}, href: '', click() {}, style: {} }),
+      body: { appendChild() {}, removeChild() {} },
+    };
+    const h = new Function(
+      'document', 'writeOut', 'ensureMplAssets', 'mplFigures', 'mplLoaded', 'atob', 'URL', 'Blob', 'setTimeout', 'clearTimeout',
+      '"use strict"; var mplSaveInFlight = false, mplSaveWatchdog = null, mplSaveOverdue = true,' +
+      '    mplSaveRequestId = "panel-1", mplSaveSeq = 1;' +
+      extract('clearMplSaveWait') + extract('takeMplSaveOverdue') + extract('handleWorkerFigure') +
+      'return { fn: handleWorkerFigure, state: function () {' +
+      '  return { overdue: mplSaveOverdue, rid: mplSaveRequestId }; } };'
+    )(doc, (t) => out.push(t), () => {}, {}, false,
+      (b) => Buffer.from(b, 'base64').toString('binary'),
+      { createObjectURL: () => 'blob:x', revokeObjectURL() {} }, function Blob() {}, setTimeout, clearTimeout);
+    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=', request_id: 'panel-1' }) });
+    expect(out.join('')).toContain('after all');
+    expect(h.state()).toEqual({ overdue: false, rid: null });
+  });
+
+  // The worker half of the correlation is Python inside a JS setup string, so
+  // it cannot be executed here; the deploy spec runs the save reply's echo.
+  // Nothing ran the save-ERROR reply at all: reverting it to a bare str(_err)
+  // passed everything, and then a panel save that raised left every Save
+  // click for ten seconds answered "Saved" and sent nothing. Source-text,
+  // bounded to the save branch and comment-stripped.
+  it("the worker echoes the request id in both the save and the save-error reply", () => {
+    const src = fs.readFileSync(WORKER, 'utf8');
+    const from = src.indexOf("if _evt.get('type') == 'save':");
+    const to = src.indexOf('_m.handle_json(_evt)', from);
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const code = src.slice(from, to).split('\n')
+      .filter((l) => !/^\s*['"]\s*#/.test(l.trim()) && !/^\s*\/\//.test(l)).join('\n');
+    expect(code).toContain("_rid = _evt.get('request_id')");
+    expect(code.match(/'request_id': _rid/g) || []).toHaveLength(2);
+    expect(code).toMatch(/'save-error', _json\.dumps\(/);
+  });
+});

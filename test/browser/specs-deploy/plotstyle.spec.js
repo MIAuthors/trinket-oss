@@ -110,7 +110,9 @@ test.describe('plot style panel: Save PNG on the worker runtime', () => {
     await run(page, 'import matplotlib.pyplot as plt\nplt.plot([1,2,3],[2,1,3])\nplt.show()\n');
     await pill(page).waitFor({ state: 'attached', timeout: 90000 });
 
+    const t0 = Date.now();
     const [first] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), saveFromPanel(page)]);
+    const firstMs = Date.now() - t0;
     expect(first.suggestedFilename()).toBe('plot.png');
     const buf = await downloaded(first);
     const dpi = pngDpi(buf);
@@ -124,6 +126,17 @@ test.describe('plot style panel: Save PNG on the worker runtime', () => {
     // it had not, the first reply would not settle the panel's wait, and this
     // click would piggyback on a save that already finished: "Saved", and no
     // file until the 10 s watchdog released the button.
+    //
+    // That proof holds only while the watchdog has NOT fired: once it has, the
+    // button is released anyway and the second click sends a fresh request
+    // whether or not the echo works. So pin both halves of "not yet".
+    // Read from the SERVED pyodide.js, not restated here.
+    const served = await (await page.request.get('/js/embed/pyodide.js')).text();
+    const timeoutMs = Number(/MPL_SAVE_TIMEOUT_MS\s*=\s*(\d+)/.exec(served)[1]);
+    expect(firstMs, 'first save must beat the watchdog, or the next check proves nothing')
+      .toBeLessThan(timeoutMs - 2000);
+    const consoleText = await page.evaluate(() => document.querySelector('#console-output')?.innerText || '');
+    expect(consoleText, 'the watchdog must not have spoken').not.toContain('has not saved');
     const [second] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), saveFromPanel(page)]);
     expect((await downloaded(second)).subarray(0, 4).toString('hex')).toBe('89504e47');
   });

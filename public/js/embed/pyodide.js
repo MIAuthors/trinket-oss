@@ -4618,9 +4618,10 @@ function makeMplSocket(figureId) {
       //
       // The same run settled two other things the source could only assert:
       // handle_save -- which is Pyodide's patch, absent upstream -- sends
-      // `{type:'save', figure_id, format}`, byte-identical in shape to what
-      // requestWorkerFigureSave sends, so "the same route as the toolbar" is
-      // now verified rather than claimed; and the figure came back as
+      // `{type:'save', figure_id, format}`, the shape requestWorkerFigureSave
+      // sends (which adds only a request_id, so its reply can be told from the
+      // toolbar's), so "the same route as the toolbar" is now verified rather
+      // than claimed; and the figure came back as
       // `div.worker-figure.mpl-figure` with no `img.worker-figure` anywhere,
       // which is the dead fallback confirmed dead on the real host.
       return workerClient.sendMplEvent(figureId, content);
@@ -5186,9 +5187,11 @@ function handleWorkerFigure(msg) {
  * This is the host's answer, handed to the adapter through its init context
  * the same way getPyodide and isBusy are.
  *
- * It sends the SAME message the mpl toolbar's own Save button sends -- the
+ * It sends the same message the mpl toolbar's own Save button sends -- the
  * `{type:'save'}` the worker swallows and answers with real savefig bytes,
- * which `handleWorkerFigure`'s `kind === 'save'` branch then downloads. So the
+ * which `handleWorkerFigure`'s `kind === 'save'` branch then downloads -- plus
+ * a request_id the worker echoes, so only this request's reply settles the
+ * wait below. So the
  * panel's button and the toolbar's button end at one implementation, and the
  * worker's savefig.dpi / transparent / bbox apply. Those are the values the
  * LAST RUN set: a Save-tab change reaches the worker only through the
@@ -5245,8 +5248,9 @@ function requestWorkerFigureSave(format) {
         // about downloads when it lands, as that line said it would, but it is
         // no longer this request's to retract.
         mplSaveOverdue = false;
-        // A backstop, not a debounce: the reply clears this, and the only way
-        // to reach the timeout is a worker that went away without a Stop. Ten
+        // A backstop, not a debounce: the reply clears this. The timeout is
+        // reached by a worker that went away without a Stop, a reply that was
+        // lost or never sent, or a savefig slower than the timeout. Ten
         // seconds because it has to outlast a genuinely slow savefig, and the
         // point is to convert silence into a line the student can read --
         // "Saved" is the panel's word and this cannot retract it, but it can
