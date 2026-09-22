@@ -458,11 +458,138 @@ describe('worker figure save — the wait is always released', () => {
 
   it('a new run cancels a save that can never be answered', () => {
     const calls = [];
-    // paneFitState: resetMplFigures also tears down the dpi pane fit's
-    // per-figure state (#305), so the lifted function needs it in scope.
-    const fn = new Function('clearMplSaveWait', 'mplFigures', 'mplGeneration', 'paneFitState',
-      extract('resetMplFigures') + 'return resetMplFigures;')(() => calls.push(1), {}, 0, Object.create(null));
+    // resetMplFigures also tears down the dpi pane fit's per-figure state
+    // (#305). Seeded with a real-shaped entry, so that teardown actually runs
+    // ahead of the clear -- an empty map would skip it and could not tell
+    // whether it throws before clearMplSaveWait() is reached.
+    const removed = [];
+    const doc = { removeEventListener: (type, fn) => removed.push(type) };
+    const pane = Object.create(null);
+    pane.fig1 = { onPointerUp: () => {}, startupTimer: null };
+    const fn = new Function('document', 'clearMplSaveWait', 'mplFigures', 'mplGeneration', 'paneFitState',
+      extract('resetMplFigures') + 'return resetMplFigures;')(doc, () => calls.push(1), {}, 0, pane);
     fn();
+    expect(removed).toEqual(['pointerup', 'pointercancel']);
     expect(calls.length).toBe(1);
+  });
+});
+
+/**
+ * A local reachability round (2026-09-22) found ten one-line reverts that
+ * passed the whole suite. These close them. The overdue chain and the catch
+ * are EXECUTED; the call sites that live inside functions too entangled to
+ * lift (stopCode, startRun, runInWorker, clearMemory, the adapter's ctx) are
+ * read as comment-stripped source, and each says what that reading cannot see.
+ */
+describe('worker figure save — the links nothing executed', () => {
+  const SRC = path.join(ROOT, 'public/js/embed/pyodide.js');
+  const page = () => fs.readFileSync(SRC, 'utf8');
+  function extract(name) {
+    const src = page();
+    const start = src.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error(name + ' not found');
+    return balanced(src, start);
+  }
+  function balanced(src, start) {
+    let depth = 0;
+    for (let j = src.indexOf('{', start); j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
+    }
+    throw new Error('unbalanced braces');
+  }
+  // Code lines only, trimmed: a comment naming a call must not satisfy a test.
+  function codeLines(marker) {
+    const src = page();
+    const at = src.indexOf(marker);
+    if (at < 0) throw new Error(marker + ' not found');
+    return balanced(src, at).split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .map((l) => l.replace(/\s\/\/\s.*$/, '').trim()).filter(Boolean);   // and trailing comments
+  }
+
+  // The REAL overdue state and the real functions that touch it. The older
+  // sandbox above never declared mplSaveOverdue, so the watchdog wrote a
+  // global and takeMplSaveOverdue was only ever a stub.
+  function overdueSandbox(timers) {
+    const out = [];
+    const figures = { fig1: { socket: { send: () => true } } };
+    const api = new Function(
+      'mplFigures', 'writeOut', 'MPL_SAVE_TIMEOUT_MS', 'setTimeout', 'clearTimeout',
+      '"use strict"; var mplSaveInFlight = false, mplSaveWatchdog = null, mplSaveOverdue = false;' +
+      extract('clearMplSaveWait') +
+      extract('takeMplSaveOverdue') +
+      extract('requestWorkerFigureSave') +
+      'return { save: requestWorkerFigureSave, clear: clearMplSaveWait, take: takeMplSaveOverdue,' +
+      '         inFlight: function () { return mplSaveInFlight; } };'
+    )(figures, (t) => out.push(t), 10000, timers.setTimeout, timers.clearTimeout);
+    return { api, out };
+  }
+
+  it('the watchdog marks the save overdue, and the reply reads that exactly once', () => {
+    vi.useFakeTimers();
+    try {
+      const { api } = overdueSandbox({ setTimeout, clearTimeout });
+      api.save('png');
+      expect(api.take()).toBe(false);          // not late yet
+      vi.advanceTimersByTime(10050);
+      expect(api.take()).toBe(true);           // the reply that follows retracts
+      expect(api.take()).toBe(false);          // ...and only that one
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Watchdog fires, then Stop (or a new run): the wait is cleared. The NEXT
+  // save's ordinary reply must not print "answered after all" over a save
+  // that was never late.
+  it('clearing the wait also forgets that an earlier save was overdue', () => {
+    vi.useFakeTimers();
+    try {
+      const { api } = overdueSandbox({ setTimeout, clearTimeout });
+      api.save('png');
+      vi.advanceTimersByTime(10050);
+      api.clear();
+      expect(api.take()).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // The catch matters only when something throws AFTER the flag is set --
+  // arming the watchdog is the one statement that can. Without the clear the
+  // button wedges: every later click is swallowed as a duplicate.
+  it('a throw after the save was marked in flight releases it', () => {
+    const { api } = overdueSandbox({
+      setTimeout: () => { throw new Error('no timers'); },
+      clearTimeout: () => {},
+    });
+    expect(api.save('png')).toBe(false);
+    expect(api.inFlight()).toBe(false);
+  });
+
+  // Every teardown that replaces the figures has to cancel a save that can
+  // no longer be answered. Deleting any one of these calls passed the suite.
+  // Source-text: presence of the statement, not that its branch is taken.
+  it.each([
+    ['startRun', 'function startRun('],
+    ['runInWorker', 'function runInWorker('],
+    ['clearMemory', 'clearMemory : function('],
+  ])('%s resets the figures, which clears the save wait', (_name, marker) => {
+    expect(codeLines(marker)).toContain('resetMplFigures();');
+  });
+
+  // Tighter than the ordering test above: the clear is its own statement,
+  // immediately before stop() in the same block, so `if (false) clear...`
+  // or a clear moved into another branch fails.
+  it('stopCode clears the wait as the statement right before stopping the worker', () => {
+    const lines = codeLines('function stopCode(');
+    const at = lines.indexOf('workerClient.stop();');
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at - 1]).toBe('clearMplSaveWait();');
+  });
+
+  // The adapter's ctx must hand back requestWorkerFigureSave's own answer.
+  // `requestWorkerFigureSave(format); return true;` restores "Saved" after a
+  // Stop with no file, and passed the suite.
+  it("the panel's saveFigure returns the host's answer, with the format", () => {
+    const src = page().replace(/\s+/g, ' ');
+    expect(src).toMatch(/saveFigure : function\(format\) \{ return requestWorkerFigureSave\(format\); \}/);
   });
 });
