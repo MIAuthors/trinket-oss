@@ -268,7 +268,8 @@ describe('worker figure save — the chain, executed', () => {
     };
     const api = new Function(
       'mplFigures', 'writeOut', 'MPL_SAVE_TIMEOUT_MS', 'setTimeout', 'clearTimeout',
-      'var mplSaveInFlight = false, mplSaveWatchdog = null;' +
+      'var mplSaveInFlight = false, mplSaveWatchdog = null, mplSaveOverdue = false,' +
+      '    mplSaveRequestId = null, mplSaveSeq = 0;' +
       extract('clearMplSaveWait') +
       extract('requestWorkerFigureSave') +
       'return { save: requestWorkerFigureSave, clear: clearMplSaveWait,' +
@@ -402,7 +403,11 @@ describe('worker figure save — the wait is always released', () => {
   }
 
   /** handleWorkerFigure, with just enough of its world to drive the replies. */
-  function figureHandler(overdue) {
+  // `inFlight` is the panel request id the page is waiting on; replies below
+  // carry it unless a test is about a reply that is NOT the panel's.
+  const RID = 'panel-1';
+  const reply = (extra) => JSON.stringify(Object.assign({ format: 'png', b64: 'aGk=', request_id: RID }, extra));
+  function figureHandler(overdue, inFlight = RID) {
     const cleared = [];
     const downloads = [];
     const out = [];
@@ -417,18 +422,18 @@ describe('worker figure save — the wait is always released', () => {
     };
     const fn = new Function(
       'document', 'writeOut', 'clearMplSaveWait', 'takeMplSaveOverdue', 'ensureMplAssets',
-      'mplFigures', 'mplLoaded', 'atob', 'URL', 'Blob', 'setTimeout',
+      'mplFigures', 'mplLoaded', 'atob', 'URL', 'Blob', 'setTimeout', 'mplSaveRequestId',
       extract('handleWorkerFigure') + 'return handleWorkerFigure;'
     )(doc, (t) => out.push(t), () => cleared.push(1), () => !!overdue, () => {},
       {}, false, (b) => Buffer.from(b, 'base64').toString('binary'),
       { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
-      function Blob() {}, setTimeout);
+      function Blob() {}, setTimeout, inFlight);
     return { fn, cleared, downloads, out };
   }
 
   it("the 'save' branch clears the wait before it downloads", () => {
     const h = figureHandler();
-    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    h.fn({ kind: 'save', data: reply() });
     expect(h.cleared.length).toBe(1);
     expect(h.downloads).toEqual(['plot.png']);
   });
@@ -438,22 +443,56 @@ describe('worker figure save — the wait is always released', () => {
   // with a failure line and a file.
   it('a late arrival retracts the overdue warning', () => {
     const h = figureHandler(true);
-    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    h.fn({ kind: 'save', data: reply() });
     expect(h.out.join('')).toContain('after all');
     expect(h.downloads).toEqual(['plot.png']);
   });
 
   it('says nothing extra when the save was never overdue', () => {
     const h = figureHandler(false);
-    h.fn({ kind: 'save', data: JSON.stringify({ format: 'png', b64: 'aGk=' }) });
+    h.fn({ kind: 'save', data: reply() });
     expect(h.out).toEqual([]);
   });
 
   it("the 'save-error' branch clears the wait and tells the student", () => {
     const h = figureHandler();
-    h.fn({ kind: 'save-error', data: 'boom' });
+    h.fn({ kind: 'save-error', data: JSON.stringify({ error: 'boom', request_id: RID }) });
     expect(h.cleared.length).toBe(1);
     expect(h.out.join('')).toContain('boom');
+    expect(h.out.join('')).not.toContain('request_id');
+  });
+
+  // The toolbar's own Save sends {type:'save'} with no id. Its reply must still
+  // download, and must NOT settle the panel's wait: that cancelled the panel's
+  // watchdog, so a panel reply that never came was "Saved" with no line.
+  it("a toolbar save's reply downloads but leaves the panel's wait alone", () => {
+    const h = figureHandler(true);
+    h.fn({ kind: 'save', data: reply({ request_id: null }) });
+    expect(h.downloads).toEqual(['plot.png']);
+    expect(h.cleared.length).toBe(0);
+    expect(h.out.join('')).not.toContain('after all');
+  });
+
+  it("a reply to an older panel request leaves the current one's wait alone", () => {
+    const h = figureHandler(false, 'panel-2');
+    h.fn({ kind: 'save', data: reply() });
+    expect(h.downloads).toEqual(['plot.png']);
+    expect(h.cleared.length).toBe(0);
+  });
+
+  it("a toolbar save-error is reported but leaves the panel's wait alone", () => {
+    const h = figureHandler();
+    h.fn({ kind: 'save-error', data: JSON.stringify({ error: 'boom', request_id: null }) });
+    expect(h.cleared.length).toBe(0);
+    expect(h.out.join('')).toContain('boom');
+  });
+
+  // Student Python can call _trinket_mpl_send itself with any string.
+  it('a bare-string save-error is still reported as-is', () => {
+    const h = figureHandler();
+    h.fn({ kind: 'save-error', data: 'raw text' });
+    expect(h.out.join('')).toContain('raw text');
+    expect(h.cleared.length).toBe(0);
   });
 
   it('a new run cancels a save that can never be answered', () => {
@@ -511,17 +550,19 @@ describe('worker figure save — the links nothing executed', () => {
   // The REAL overdue state and the real functions that touch it. The older
   // sandbox above never declared mplSaveOverdue, so the watchdog wrote a
   // global and takeMplSaveOverdue was only ever a stub.
-  function overdueSandbox(timers) {
+  function overdueSandbox(timers, send = () => true) {
     const out = [];
-    const figures = { fig1: { socket: { send: () => true } } };
+    const figures = { fig1: { socket: { send } } };
     const api = new Function(
       'mplFigures', 'writeOut', 'MPL_SAVE_TIMEOUT_MS', 'setTimeout', 'clearTimeout',
-      '"use strict"; var mplSaveInFlight = false, mplSaveWatchdog = null, mplSaveOverdue = false;' +
+      '"use strict"; var mplSaveInFlight = false, mplSaveWatchdog = null, mplSaveOverdue = false,' +
+      '    mplSaveRequestId = null, mplSaveSeq = 0;' +
       extract('clearMplSaveWait') +
       extract('takeMplSaveOverdue') +
       extract('requestWorkerFigureSave') +
       'return { save: requestWorkerFigureSave, clear: clearMplSaveWait, take: takeMplSaveOverdue,' +
-      '         inFlight: function () { return mplSaveInFlight; } };'
+      '         inFlight: function () { return mplSaveInFlight; },' +
+      '         rid: function () { return mplSaveRequestId; } };'
     )(figures, (t) => out.push(t), 10000, timers.setTimeout, timers.clearTimeout);
     return { api, out };
   }
@@ -541,6 +582,42 @@ describe('worker figure save — the links nothing executed', () => {
   // Watchdog fires, then Stop (or a new run): the wait is cleared. The NEXT
   // save's ordinary reply must not print "answered after all" over a save
   // that was never late.
+  it('the panel request carries an id, and a new request drops an older overdue', () => {
+    vi.useFakeTimers();
+    try {
+      const sent = [];
+      const { api } = overdueSandbox({ setTimeout, clearTimeout }, (m) => { sent.push(m); return true; });
+      api.save('png');
+      vi.advanceTimersByTime(10050);           // watchdog: overdue, button released
+      api.save('png');                         // the student asks again
+      expect(sent.map((m) => m.request_id)).toEqual(['panel-1', 'panel-2']);
+      expect(api.take()).toBe(false);          // panel-2 is not late
+    } finally { vi.useRealTimers(); }
+  });
+
+  // The id the reply is matched against: set by the send that was taken,
+  // kept through the watchdog (a late reply still retracts), and dropped by
+  // every clear so a torn-down request can never be matched again.
+  it('remembers the id it sent until the wait is cleared', () => {
+    vi.useFakeTimers();
+    try {
+      const { api } = overdueSandbox({ setTimeout, clearTimeout });
+      expect(api.rid()).toBe(null);
+      api.save('png');
+      expect(api.rid()).toBe('panel-1');
+      vi.advanceTimersByTime(10050);
+      expect(api.rid()).toBe('panel-1');
+      api.clear();
+      expect(api.rid()).toBe(null);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a refused send leaves no id behind', () => {
+    const { api } = overdueSandbox({ setTimeout, clearTimeout }, () => false);
+    expect(api.save('png')).toBe(false);
+    expect(api.rid()).toBe(null);
+  });
+
   it('clearing the wait also forgets that an earlier save was overdue', () => {
     vi.useFakeTimers();
     try {

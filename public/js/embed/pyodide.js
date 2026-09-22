@@ -4478,10 +4478,18 @@ var mplSaveInFlight = false;
 var mplSaveWatchdog = null;
 var mplSaveOverdue = false;   // the watchdog spoke; the reply must answer it
 var MPL_SAVE_TIMEOUT_MS = 10000;
+// The panel's request carries an id the worker echoes, because the toolbar's
+// own Save sends the same {type:'save'} with none. Without it, a toolbar
+// reply arriving first cleared the panel's wait and its watchdog -- so a
+// panel reply that then never came was "Saved" with no file and no line.
+// Survives the watchdog on purpose: a late reply still has to retract it.
+var mplSaveRequestId = null;
+var mplSaveSeq = 0;
 
 function clearMplSaveWait() {
   mplSaveInFlight = false;
   mplSaveOverdue = false;
+  mplSaveRequestId = null;
   if (mplSaveWatchdog !== null) { clearTimeout(mplSaveWatchdog); mplSaveWatchdog = null; }
 }
 
@@ -5075,14 +5083,18 @@ function handleWorkerFigure(msg) {
   // bytes, and sends them across for this side to download -- same <a download>
   // shape embed.js already uses, and no form, so the embed CSP contract holds.
   if (msg.kind === 'save') {
-    // Before clearMplSaveWait(), which resets the flag it reads: if the
-    // watchdog already told the student this was overdue, the arrival has to
-    // retract that rather than leaving a stale failure line on screen.
-    var wasOverdue = takeMplSaveOverdue();
-    clearMplSaveWait();
-    if (wasOverdue) writeOut('[The figure answered after all -- saving it now.]\n');
     var saved = null;
     try { saved = JSON.parse(msg.data); } catch (e) { saved = null; }
+    // Only the reply to the PANEL's request settles the panel's wait. A
+    // toolbar save's reply carries no id and still downloads below.
+    if (saved && saved.request_id != null && saved.request_id === mplSaveRequestId) {
+      // Before clearMplSaveWait(), which resets the flag it reads: if the
+      // watchdog already told the student this was overdue, the arrival has
+      // to retract that rather than leaving a stale failure line on screen.
+      var wasOverdue = takeMplSaveOverdue();
+      clearMplSaveWait();
+      if (wasOverdue) writeOut('[The figure answered after all -- saving it now.]\n');
+    }
     // Do not fail the way this button used to. A reply this side cannot read is
     // the same experience for the student as the bug being fixed here -- click,
     // nothing -- so it has to say something rather than return quietly.
@@ -5132,8 +5144,15 @@ function handleWorkerFigure(msg) {
   // A save that raised in the worker. Say so rather than failing the way this
   // button used to -- silently.
   if (msg.kind === 'save-error') {
-    clearMplSaveWait();
-    writeOut('[Could not save the figure: ' + msg.data + ']\n');
+    // JSON {error, request_id} from the worker's save branch; a bare string
+    // is still accepted, because student Python can call _trinket_mpl_send.
+    var failed = null;
+    try { failed = JSON.parse(msg.data); } catch (e) { failed = null; }
+    var why = (failed && typeof failed === 'object' && 'error' in failed) ? failed.error : msg.data;
+    if (failed && failed.request_id != null && failed.request_id === mplSaveRequestId) {
+      clearMplSaveWait();
+    }
+    writeOut('[Could not save the figure: ' + why + ']\n');
     return;
   }
 
@@ -5218,8 +5237,14 @@ function requestWorkerFigureSave(format) {
         // worker -- after a Stop -- postMessage never happens and nothing
         // throws, so returning true told the panel to say "Saved" over a
         // message that went nowhere.
-        if (entry.socket.send({ type: 'save', figure_id: id, format: fmt }) !== true) return false;
+        var rid = 'panel-' + (++mplSaveSeq);
+        if (entry.socket.send({ type: 'save', figure_id: id, format: fmt, request_id: rid }) !== true) return false;
         mplSaveInFlight = true;
+        mplSaveRequestId = rid;
+        // A new request answers for itself: an older save the watchdog spoke
+        // about downloads when it lands, as that line said it would, but it is
+        // no longer this request's to retract.
+        mplSaveOverdue = false;
         // A backstop, not a debounce: the reply clears this, and the only way
         // to reach the timeout is a worker that went away without a Stop. Ten
         // seconds because it has to outlast a genuinely slow savefig, and the
