@@ -33,6 +33,7 @@ log = require('./config/log');
 
 const startupCheck   = require('./lib/util/startup-check');
 const publicHostname = require('./lib/util/publicHostname');
+const sessionCookie  = require('./lib/util/sessionCookie');
 const Hapi           = require('@hapi/hapi');
 const Boom           = require('@hapi/boom');
 const Inert          = require('@hapi/inert');
@@ -179,8 +180,36 @@ const init = async () => {
         if (cb) cb(null);
       };
 
-      // Sliding expiration: touch session to reset TTL on each authenticated request
-      if (request.yar.get('userId')) {
+      // Sliding expiration: touch session to reset TTL on each authenticated
+      // request -- EXCEPT for version-stamped asset paths.
+      //
+      // touch() marks the session dirty, so yar re-issues the cookie on the
+      // response. A response carrying Set-Cookie is one no shared cache will
+      // store: Cloudflare answers `cf-cache-status: BYPASS`. Because this ran
+      // on every request, every fingerprinted asset an authenticated user
+      // fetched came back uncacheable, and the CDN was effectively switched
+      // off for exactly the population it exists to serve. Measured on mandi
+      // 2026-09-21: one 1.06 MB GlowScript runtime pulled from the origin 95
+      // times in 40 minutes through a single Cloudflare edge, while the same
+      // URL fetched anonymously returned HIT.
+      //
+      // Skipping the touch (rather than stripping Set-Cookie afterwards) is
+      // deliberate: nothing is removed from a response, so a newly minted or
+      // rotated cookie can never be dropped on the floor. The predicate is
+      // cacheControl's own, so "this is cacheable" and "do not touch the
+      // session" cannot drift apart.
+      //
+      // Sliding expiration is unaffected in practice: assets are fetched as
+      // part of page loads, and the page request itself still touches.
+      // Gated on app.cache.enabled as well: when asset caching is off the
+      // response is not cacheable anyway, so skipping the touch would buy
+      // nothing and would still alter sliding expiration. cacheControl states
+      // the rule this follows -- "off unless a deploy opts in, so merging this
+      // changes nothing until someone decides it should".
+      var assetCachingOn = !!(config.app.cache && config.app.cache.enabled === true);
+      if (request.yar.get('userId') &&
+          !(assetCachingOn &&
+            cacheControl.isVersionedAssetPath(request.path, config.app.cachePrefix))) {
         request.yar.touch();
       }
     }
@@ -345,38 +374,57 @@ const init = async () => {
     return h.continue;
   });
 
-  // Add onPreResponse extension for cookie expiration (SameSite/Secure are set on the cookie by
-  // Yar's cookieOptions above, driven by sessionSecure).
-  server.ext('onPreResponse', (request, h) => {
-    // if this is a cookie-setting request and we have a _header method
-    if (request.cookie && request.response && typeof request.response._header === "function") {
-      const header = request.response._header;
-      const sessionName = config.app.plugins.session.name || 'session';
-
-      request.response._header = function(key, value) {
-        // find the 'set-cookie' header
-        if (key.match(/^set\-cookie$/i)) {
-          if (!Array.isArray(value)) {
-            value = [value];
-          }
-          const nextYear = new Date();
-          nextYear.setFullYear(nextYear.getFullYear() + 1);
-
-          for (let i = 0; i < value.length; i++) {
-            // find the session portion of the cookie
-            if (value[i].indexOf(sessionName) === 0) {
-              // add a custom expires if an expires is not already present
-              if (!value[i].match(/;\s*Expires=/i)) {
-                value[i] += "; Expires=" + nextYear.toUTCString();
-              }
-            }
-          }
-        }
-        // call the original _header method
-        header.call(request.response, key, value);
-      }
+  // Session cookie plumbing, both directions (#286; SameSite/Secure are set on
+  // the cookie by Yar's cookieOptions above, driven by sessionSecure).
+  //
+  // In: a cross-site LMS frame with third-party cookies blocked never stores
+  // the session cookie, but it does store a `Partitioned` copy of it, same
+  // name. Where the browser holds both, both arrive under one name; collapse
+  // them to the first BEFORE hapi parses cookies (onRequest runs ahead of the
+  // state step), so yar and every session-backed route work unchanged. See
+  // lib/util/sessionCookie.js for why it is a same-named copy, not an attribute.
+  //
+  // Out: rewrite the session Set-Cookie at the raw response, which every
+  // response path shares — a takeover in the Boom hook above or hapi's own
+  // wrapping of a Boom replaces the hapi response object but not `raw.res`:
+  //  - Expires: a year, on routes flagged `cookie: true` (routeParser), as before.
+  //  - a partitioned copy of the session cookie on responses to navigations
+  //    into a frame, whenever the cookie is Secure (`Partitioned` is invalid
+  //    without it).
+  server.ext('onRequest', (request, h) => {
+    const sessionName = config.app.plugins.session.name || 'session';
+    const single = sessionCookie.dedupe(request.headers.cookie, sessionName, (kept, dropped) => {
+      log.info('[session] duplicate session cookies differ; kept the first', {
+        path: request.path, kept: kept.slice(0, 12) + '…', dropped: dropped.slice(0, 12) + '…'
+      });
+    });
+    if (single !== request.headers.cookie) {
+      request.headers.cookie = single;
     }
 
+    const res = request.raw && request.raw.res;
+    if (res && typeof res.setHeader === 'function') {
+      const setHeader = res.setHeader;
+      const wantCopy = sessionSecure && sessionCookie.wantsCopy(request.headers);
+      const sessionRe = new RegExp('^' + sessionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=');
+
+      res.setHeader = function(key, value) {
+        if (typeof key === 'string' && /^set-cookie$/i.test(key)) {
+          value = [].concat(value);
+          // request.cookie is set by routeParser during the handler, so read it here, not above.
+          if (request.cookie) {
+            const nextYear = new Date();
+            nextYear.setFullYear(nextYear.getFullYear() + 1);
+            value = value.map((v) => (sessionRe.test(v) && !/;\s*Expires=/i.test(v))
+              ? v + "; Expires=" + nextYear.toUTCString() : v);
+          }
+          if (wantCopy) {
+            value = value.concat(sessionCookie.partitionedCopies(value, sessionName));
+          }
+        }
+        return setHeader.call(res, key, value);
+      };
+    }
     return h.continue;
   });
 
