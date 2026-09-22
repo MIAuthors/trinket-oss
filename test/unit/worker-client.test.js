@@ -558,9 +558,15 @@ describe('sendMplEvent reports whether the frame went anywhere', () => {
   // eagerly (measured -- `made.length` is 1 straight away), so the reachable
   // no-worker state is the one after a Stop, below.
 
-  it('returns true once a worker exists, and actually posts', async () => {
+  // A figure from the worker is what makes it the one frames go to.
+  function showFigure(w) {
+    w.onmessage({ data: { type: 'figure', kind: 'new', id: 'fig1' }, target: w });
+  }
+
+  it('returns true once the live worker has sent a figure, and actually posts', async () => {
     const h = await bootedClient();
     const w = h.made[0];
+    showFigure(w);
     const before = w.posted.length;
     expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(true);
     expect(w.posted.length).toBe(before + 1);
@@ -573,6 +579,7 @@ describe('sendMplEvent reports whether the frame went anywhere', () => {
   it('returns false after stop(), without throwing', async () => {
     const h = await bootedClient();
     const w = h.made[0];
+    showFigure(w);
     const before = w.posted.length;
     h.client.stop();
     let threw = null;
@@ -582,5 +589,39 @@ describe('sendMplEvent reports whether the frame went anywhere', () => {
     expect(threw).toBeNull();
     expect(result).toBe(false);
     expect(w.posted.length).toBe(before);
+  });
+  it('returns false before the worker has sent any figure', async () => {
+    const h = await bootedClient();
+    expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(false);
+  });
+
+  // Stop, then one console statement: the REPL boots a fresh worker while the
+  // old figure is still on the page. That worker owns no figure manager and
+  // would never answer, so a Save must not be reported as taken.
+  it('returns false after a Stop replaced the worker via the console', async () => {
+    const h = await bootedClient();
+    showFigure(h.made[0]);
+    h.client.stop();
+    h.client.pushRepl('x = 1');
+    expect(h.made.length).toBe(2);
+    const w2 = h.made[1];
+    const before = w2.posted.length;
+    expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(false);
+    expect(w2.posted.length).toBe(before);
+    // ...and once the new worker draws its own figure, frames go to it.
+    showFigure(w2);
+    expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(true);
+  });
+
+  // A late figure from a replaced worker must not take the page's figures
+  // away from the live one.
+  it('ignores a late figure from a replaced worker', async () => {
+    const h = await bootedClient();
+    const old = h.made[0];
+    h.client.stop();
+    h.client.pushRepl('x = 1');
+    showFigure(h.made[1]);
+    showFigure(old);
+    expect(h.client.sendMplEvent('fig1', '{"type":"save"}')).toBe(true);
   });
 });
