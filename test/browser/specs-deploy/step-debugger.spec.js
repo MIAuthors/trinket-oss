@@ -62,10 +62,10 @@ test.describe('step-through debugger', () => {
   //   raised:     step-debugger (180 s -> 240 s),
   //               panefit (240 s -> 360 s, two blocks at 660 s),
   //               panefit-plotstyle (240 s -> 420 s, one test at 660 s),
-  //               worker-figsize-ratchet (240 s -> 660 s)
-  //   NOT raised: math-output (180 s), matplotlib-figures (180 s),
-  //               worker-figure-toolbar (180 s), console-status (120 s),
-  //               deploy-smoke (120 s)
+  //               worker-figsize-ratchet (240 s -> 660 s),
+  //               math-output (180 s -> 300 s, raised by #294)
+  //   NOT raised: matplotlib-figures (180 s), worker-figure-toolbar (180 s),
+  //               console-status (120 s), deploy-smoke (120 s)
   //   marginal:   plotstyle.spec.js, largest wait exactly 90 s, i.e. the cap
   //
   // THE TABLE ABOVE IS specs-deploy ONLY, AND IT IS NOT THE WORST CASE. The
@@ -80,10 +80,15 @@ test.describe('step-through debugger', () => {
   // `for...of CASES` loop (:58-59), so it greps as one test and is four, all
   // four inheriting runProgram()'s 180 s wait.
   //
-  // Those five have not hit it because nothing has been slow enough yet. That
-  // is luck, not design. math-output.spec.js is fixed on feat/mathoutput-worker
-  // (4a31d33) and still unfixed here, so expect these two branches to collide
-  // on this paragraph; the list above is the one to keep.
+  // Those four have not hit it because nothing has been slow enough yet. That
+  // is luck, not design.
+  //
+  // math-output.spec.js WAS on that list and came off it: #294 raised it to
+  // 300 s when that branch landed, and this paragraph was written before it
+  // did. An earlier draft predicted the two branches would collide here and
+  // asked for this version to be kept; that is what happened, so the note is
+  // recorded rather than left standing as an instruction. Everything still in
+  // the NOT-raised list above is outstanding and is what #302 covers.
   test.describe.configure({ timeout: 240_000 });
 
   test.beforeEach(async ({ page }) => {
