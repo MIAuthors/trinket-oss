@@ -458,8 +458,10 @@ describe('worker figure save — the wait is always released', () => {
 
   it('a new run cancels a save that can never be answered', () => {
     const calls = [];
-    const fn = new Function('clearMplSaveWait', 'mplFigures', 'mplGeneration',
-      extract('resetMplFigures') + 'return resetMplFigures;')(() => calls.push(1), {}, 0);
+    // paneFitState: resetMplFigures also tears down the dpi pane fit's
+    // per-figure state (#305), so the lifted function needs it in scope.
+    const fn = new Function('clearMplSaveWait', 'mplFigures', 'mplGeneration', 'paneFitState',
+      extract('resetMplFigures') + 'return resetMplFigures;')(() => calls.push(1), {}, 0, Object.create(null));
     fn();
     expect(calls.length).toBe(1);
   });
