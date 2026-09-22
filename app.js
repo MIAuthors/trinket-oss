@@ -180,8 +180,36 @@ const init = async () => {
         if (cb) cb(null);
       };
 
-      // Sliding expiration: touch session to reset TTL on each authenticated request
-      if (request.yar.get('userId')) {
+      // Sliding expiration: touch session to reset TTL on each authenticated
+      // request -- EXCEPT for version-stamped asset paths.
+      //
+      // touch() marks the session dirty, so yar re-issues the cookie on the
+      // response. A response carrying Set-Cookie is one no shared cache will
+      // store: Cloudflare answers `cf-cache-status: BYPASS`. Because this ran
+      // on every request, every fingerprinted asset an authenticated user
+      // fetched came back uncacheable, and the CDN was effectively switched
+      // off for exactly the population it exists to serve. Measured on mandi
+      // 2026-09-21: one 1.06 MB GlowScript runtime pulled from the origin 95
+      // times in 40 minutes through a single Cloudflare edge, while the same
+      // URL fetched anonymously returned HIT.
+      //
+      // Skipping the touch (rather than stripping Set-Cookie afterwards) is
+      // deliberate: nothing is removed from a response, so a newly minted or
+      // rotated cookie can never be dropped on the floor. The predicate is
+      // cacheControl's own, so "this is cacheable" and "do not touch the
+      // session" cannot drift apart.
+      //
+      // Sliding expiration is unaffected in practice: assets are fetched as
+      // part of page loads, and the page request itself still touches.
+      // Gated on app.cache.enabled as well: when asset caching is off the
+      // response is not cacheable anyway, so skipping the touch would buy
+      // nothing and would still alter sliding expiration. cacheControl states
+      // the rule this follows -- "off unless a deploy opts in, so merging this
+      // changes nothing until someone decides it should".
+      var assetCachingOn = !!(config.app.cache && config.app.cache.enabled === true);
+      if (request.yar.get('userId') &&
+          !(assetCachingOn &&
+            cacheControl.isVersionedAssetPath(request.path, config.app.cachePrefix))) {
         request.yar.touch();
       }
     }
