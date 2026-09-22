@@ -5171,7 +5171,10 @@ function handleWorkerFigure(msg) {
  * `{type:'save'}` the worker swallows and answers with real savefig bytes,
  * which `handleWorkerFigure`'s `kind === 'save'` branch then downloads. So the
  * panel's button and the toolbar's button end at one implementation, and the
- * Save tab's savefig.dpi / transparent / bbox actually apply. A canvas grab
+ * worker's savefig.dpi / transparent / bbox apply. Those are the values the
+ * LAST RUN set: a Save-tab change reaches the worker only through the
+ * generated block on the next run, so a change made since then is not in
+ * this file (the panel marks itself stale). A canvas grab
  * here would honor none of them: it is on-screen pixels at screen dpi, which
  * is exactly the substitution the comment at the ondownload callback above
  * refuses for the toolbar.
@@ -5257,11 +5260,10 @@ function requestWorkerFigureSave(format) {
   // the <img> is never painted, the fallback could never run, and shipping it
   // would have meant dead code defended by a paragraph that was not true.
   //
-  // Two neighbouring comments are wrong for the same reason and are NOT
-  // touched here, because they predate this change and fixing them belongs in
-  // its own commit: the one at the `kind === 'new'` early return claiming "the
-  // worker also emits a static PNG for this figure, so a plot still appears",
-  // and hasFigure()'s `img.worker-figure` check in plotpolish-adapter.js.
+  // Two neighboring comments made the same mistake and are corrected on this
+  // branch: the one at the `kind === 'new'` early return, and hasFigure()'s
+  // `img.worker-figure` check in plotpolish-adapter.js. Removing the orphan
+  // sender itself is left to its own commit.
   return false;
 }
 
