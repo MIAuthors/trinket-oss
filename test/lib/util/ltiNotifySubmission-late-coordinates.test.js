@@ -40,8 +40,13 @@ describe('ltiNotifySubmission.notifyOnCoordinates', () => {
   function stubLinkByLink(link) {
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation((p, r, cb) => cb(null, link));
   }
+  // The narrow finder does the picking in the DATABASE now, so this stub stands
+  // in for the row it would return. Which row that is -- newest by submittedOn,
+  // drafts excluded -- is pinned against the real query in
+  // test/lib/models/trinket-newest-submission.test.js, not here.
   function stubSubmissions(list) {
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve(list));
+    var chosen = (list || []).filter(function (t) { return t && t.submittedOn; })[0] || null;
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(() => Promise.resolve(chosen));
   }
 
   beforeEach(() => {
@@ -68,7 +73,7 @@ describe('ltiNotifySubmission.notifyOnCoordinates', () => {
   it('reports the NEWEST submission when the student has several', async () => {
     const older = Object.assign({}, submitted, { id: 'sub-older', submittedOn: new Date('2026-09-01T00:00:00Z') });
     stubLinkByLink(assignmentLink);
-    stubSubmissions([submitted, older]);   // findByUserAndMaterial sorts created desc
+    stubSubmissions([submitted, older]);   // the DB returns the newest submission
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER);
 
@@ -148,13 +153,21 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   function submission(extra) {
     return Object.assign({
       id: 'sub-mark-1', _creator: USER, courseId: 'course-1', materialId: MATERIAL,
-      submittedOn: new Date('2026-09-10T00:00:00Z'),
-      save: function () { saved.push({ sourcedId: this.ltiReportedSourcedId, at: this.ltiReportedAt }); return Promise.resolve(this); }
+      submittedOn: new Date('2026-09-10T00:00:00Z')
     }, extra || {});
   }
 
   beforeEach(() => {
     posted11 = []; saved = [];
+    // The marker is written with an atomic partial update now, not save(), so a
+    // whole-row overwrite cannot revert a concurrent resubmission. See
+    // test/lib/models/trinket-mark-reported.test.js for that guarantee against
+    // the real backends -- mongo alone cannot show it.
+    vi.spyOn(Trinket, 'findByIdAndUpdate').mockImplementation((id, update) => {
+      var set = (update && update.$set) || {};
+      saved.push({ id: id, sourcedId: set.ltiReportedSourcedId, at: set.ltiReportedAt });
+      return Promise.resolve({ id: id });
+    });
     vi.spyOn(lti11Outcomes, 'postSubmission').mockImplementation((a) => { posted11.push(a); return Promise.resolve({ ok: true }); });
     vi.spyOn(LtiResourceLink, 'findByLink').mockImplementation((p, r, cb) => cb(null, assignmentLink));
     vi.spyOn(LtiResourceLink, 'findAssignmentLink').mockImplementation((c, m, cb) => cb(null, assignmentLink));
@@ -166,14 +179,14 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   it('reports work whose token was captured before this code existed (no marker)', async () => {
     // The window that made gating on "is the token new" wrong: these students
     // clicked their assignment already, so nothing about the token is new.
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(() => Promise.resolve(submission()));
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
     expect(posted11.length, 'an unmarked submission must be reported').toBe(1);
   });
 
   it('records the token it reported against', async () => {
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(() => Promise.resolve(submission()));
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
     expect(saved.length, 'the marker must be persisted').toBe(1);
@@ -182,8 +195,8 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   });
 
   it('does not re-announce a submission already reported against this token', async () => {
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(
-      () => Promise.resolve([submission({ ltiReportedSourcedId: TOKEN, ltiReportedAt: new Date() })]));
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(
+      () => Promise.resolve(submission({ ltiReportedSourcedId: TOKEN, ltiReportedAt: new Date() })));
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
     expect(posted11.length, 'a routine relaunch must stay quiet').toBe(0);
@@ -192,8 +205,8 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   it('reports again when the platform reissued a different token', async () => {
     // An assignment re-created in the LMS mints new sourcedids; the old one is
     // dead, so the submission has to be re-announced against the new one.
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(
-      () => Promise.resolve([submission({ ltiReportedSourcedId: 'sid-stale', ltiReportedAt: new Date() })]));
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(
+      () => Promise.resolve(submission({ ltiReportedSourcedId: 'sid-stale', ltiReportedAt: new Date() })));
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);
     expect(posted11.length).toBe(1);
@@ -201,7 +214,7 @@ describe('ltiNotifySubmission: the reported-against marker makes the retry idemp
   });
 
   it('retries after a failed post — a failure leaves no marker', async () => {
-    vi.spyOn(Trinket, 'findByUserAndMaterial').mockImplementation(() => Promise.resolve([submission()]));
+    vi.spyOn(Trinket, 'findNewestSubmission').mockImplementation(() => Promise.resolve(submission()));
     lti11Outcomes.postSubmission.mockImplementation(() => Promise.reject(new Error('429 from the platform')));
 
     await notify.notifyOnCoordinates(PLATFORM, RL, USER, TOKEN);

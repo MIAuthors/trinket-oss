@@ -4,71 +4,158 @@
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "_owner",      "order": "ASCENDING" },
-        { "fieldPath": "deletedAt",   "order": "ASCENDING" },
-        { "fieldPath": "lastUpdated", "order": "DESCENDING" }
+        {
+          "fieldPath": "_owner",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deletedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "lastUpdated",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "_owner",    "order": "ASCENDING" },
-        { "fieldPath": "published", "order": "ASCENDING" },
-        { "fieldPath": "deletedAt", "order": "ASCENDING" },
-        { "fieldPath": "name",      "order": "ASCENDING" }
+        {
+          "fieldPath": "_owner",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "published",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deletedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "name",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "materialId", "order": "ASCENDING" },
-        { "fieldPath": "_creator",   "order": "ASCENDING" },
-        { "fieldPath": "created",    "order": "DESCENDING" }
+        {
+          "fieldPath": "materialId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "_creator",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "_owner",    "order": "ASCENDING" },
-        { "fieldPath": "deletedAt", "order": "ASCENDING" },
-        { "fieldPath": "name",      "order": "ASCENDING" }
+        {
+          "fieldPath": "_owner",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deletedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "name",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "_owner",           "order": "ASCENDING" },
-        { "fieldPath": "deletedAt",        "order": "ASCENDING" },
-        { "fieldPath": "metrics.embedViews", "order": "DESCENDING" }
+        {
+          "fieldPath": "_owner",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deletedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "metrics.embedViews",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "_owner",          "order": "ASCENDING" },
-        { "fieldPath": "deletedAt",       "order": "ASCENDING" },
-        { "fieldPath": "lastView.viewedOn", "order": "DESCENDING" }
+        {
+          "fieldPath": "_owner",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deletedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "lastView.viewedOn",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "snippets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "courseId",   "order": "ASCENDING" },
-        { "fieldPath": "materialId", "order": "ASCENDING" }
+        {
+          "fieldPath": "courseId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "materialId",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "users",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "roles",    "order": "ASCENDING" },
-        { "fieldPath": "username", "order": "ASCENDING" }
+        {
+          "fieldPath": "roles",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "username",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "snippets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "materialId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "_creator",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "submittedOn",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],
@@ -78,8 +165,14 @@
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": [
-        { "order": "ASCENDING",  "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" }
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION"
+        }
       ]
     },
     {
@@ -87,8 +180,14 @@
       "fieldPath": "created",
       "ttl": true,
       "indexes": [
-        { "order": "ASCENDING",  "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" }
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION"
+        }
       ]
     }
   ]
