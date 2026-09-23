@@ -96,6 +96,7 @@
     var pyodide = null;
     var currentRunId = null;
     var varsHelper = '';
+    var displayUrl = '';
 
     var post = function(msg) { self.postMessage(msg); };
 
@@ -114,6 +115,12 @@
         // The page owns VARS_HELPER; it is sent here so the two runtimes cannot
         // drift into showing different variables for the same program.
         varsHelper = msg.varsHelper || '';
+        // Likewise for the typeset-math helper: the page owns the asset URL and
+        // the feature flag, so an empty string here IS features.mathOutput being
+        // off, and nothing below ever fetches. The module itself is loaded
+        // lazily on the first run (ensureDisplay), not here — unlike the main
+        // thread, which must install before its Clear-memory snapshot is taken.
+        displayUrl = msg.displayUrl || '';
 
         // Both versions: the REPL banner names the PYTHON version ("Python
         // 3.13.2"), which is not pyodide.version ("0.28.1").
@@ -156,6 +163,156 @@
       '    return await js.__trinket_worker_input(prompt)',
       'builtins.input = _trinket_input'
     ].join('\n');
+
+    // ---- typeset math output (features.mathOutput) -------------------------
+    //
+    // The page owns _trinket_display.py, the KaTeX bundle and the renderer; the
+    // worker owns only an interpreter. So the module is fetched here and
+    // installed with a sink that posts `rich` — the worker's answer to the main
+    // thread's window.__trinket_rich (pyodide.js). Both carry the same JSON
+    // payload and both end up in the same queueMathCard(), so a card cannot
+    // come out differently on the two runtimes.
+    //
+    // `self`, not `window`: a worker has no window, which is the one line of the
+    // main thread's bootstrap that cannot be copied verbatim.
+    self.__trinket_rich = function(json) {
+      post({ type: 'rich', id: currentRunId, json: String(json) });
+    };
+
+    // The filename the runner's own frames carry. The page's TRACEBACK_INTERNAL
+    // matches it (and `_trinket_display`) so the wrapper is dropped from a
+    // student's traceback — the same string the main thread uses, deliberately:
+    // two spellings would mean a frame filtered on one runtime and shown on the
+    // other.
+    var TRINKET_RUNNER_FILENAME = '<trinket-runner>';
+
+    var displayLoading = null;
+    var displayReady = false;
+    function ensureDisplay(url) {
+      if (displayLoading) return displayLoading;
+      displayLoading = fetch(url)
+        .then(function(r) {
+          // fetch does NOT reject on 4xx/5xx. Without this check a 404's HTML
+          // body is written to the FS as _trinket_display.py and only fails
+          // later, as a Python SyntaxError on the import, hiding the actual
+          // HTTP status from anyone debugging a deploy.
+          if (!r.ok) throw new Error('HTTP ' + r.status + ' fetching ' + url);
+          return r.text();
+        })
+        .then(function(src) {
+          pyodide.FS.writeFile('_trinket_display.py', src);
+          // Runs in a THROWAWAY namespace, not the student's globals.
+          //
+          // The main thread installs the same way but deletes its temporaries
+          // afterwards, which is safe THERE because it installs at boot, before
+          // any student code has run. Here the install is lazy, so it can land
+          // after the namespace already holds student state: a first attempt
+          // that failed on a transient fetch is retried on the next run, and the
+          // worker's interpreter persists across runs. A `del _d, _json, _js,
+          // _trinket_sink` would then remove a student's own `_json` rather than
+          // ours. An isolated namespace makes the whole class impossible instead
+          // of narrowing it -- nothing to overwrite and nothing to delete.
+          //
+          // install() mutates the module and builtins, so it does not need to
+          // see or touch the student's globals at all.
+          // A note for whoever adds an import to _trinket_display.py: every
+          // module it pulls in (ast, builtins, linecache, sys) and the json
+          // below is ALREADY in sys.modules from Pyodide's own boot, so these
+          // imports are dict hits and never touch the filesystem. That matters
+          // because msg.files has written the student's .py files by now and
+          // sys.path[0] is '' — a trinket shipping its own linecache.py could
+          // otherwise be imported here. Measured, not assumed: with a student
+          // `linecache.py` whose body is `BOOM = 1/0`, and separately with a
+          // student `json.py`, the install still succeeds and the card still
+          // renders. If an import is ever added that Pyodide does NOT preload,
+          // move ensureDisplay ahead of the msg.files writes in run().
+          var ns = pyodide.toPy({});
+          return pyodide.runPythonAsync([
+            'import _trinket_display as _d',
+            'import json as _json',
+            'import js as _js',
+            // json.dumps in Python so no PyProxy crosses into JS and nothing
+            // needs destroying.
+            //
+            // dumps and the JS callback are bound as DEFAULT ARGUMENTS, not read
+            // from globals: this namespace is discarded the moment the install
+            // returns, and a body that resolved them at call time would raise
+            // NameError on the first displayed expression. The sink itself
+            // survives because the module holds the reference.
+            'def _trinket_sink(p, _dumps=_json.dumps, _rich=_js.__trinket_rich):',
+            '    _rich(_dumps(p))',
+            '_d.install(_trinket_sink)'
+          ].join('\n'), { globals: ns })
+            .finally(function() { try { ns.destroy(); } catch (e) {} });
+        })
+        .then(function() { displayReady = true; })
+        .catch(function(e) {
+          // Never cache a failed load (one transient fetch error would poison
+          // every later run of this worker), and never let it stop the run.
+          //
+          // THE FAILURE CONTRACT, stated exactly, because "it degrades
+          // gracefully" is not true of both halves: with no helper, a bare
+          // expression is silent and the program runs on, but `display()` is
+          // never installed as a builtin and so raises NameError at that line.
+          // Verified by pointing the URL at a 404 and running it.
+          //
+          // That is PARITY, not a worker defect: the main thread's install
+          // does the same thing in the same situation, and its console output
+          // is identical (also verified by running, on ?runtime=main). A no-op
+          // `display` here would fix the symptom on one runtime and create the
+          // very divergence this feature exists to remove -- and it would hide
+          // a broken deploy behind silently-missing output, which is worse than
+          // a NameError naming the line. If that trade is ever reconsidered it
+          // belongs in both runtimes at once, not here.
+          displayLoading = null;
+          displayReady = false;
+          try { console.warn('[mathOutput] display hook unavailable:', e); } catch (e2) {}
+        });
+      return displayLoading;
+    }
+
+    // Memoized, so only the first caller in a flag-on worker pays the fetch; an
+    // empty displayUrl is the flag being off and skips it entirely.
+    //
+    // Module scope, not local to run(), because the REPL needs it too: the main
+    // thread installs the helper during its boot, ahead of the Clear-memory
+    // snapshot, so `display` is a builtin before the student has pressed
+    // anything. A worker that installed only inside run() left the console
+    // raising NameError until the first Run, and `Clear memory` put a student
+    // who had been using the feature straight back into that state.
+    function prepareDisplay() {
+      return displayUrl ? ensureDisplay(displayUrl) : Promise.resolve();
+    }
+
+    // The worker's half of the page's runProgram().
+    //
+    // `src` is what executes — already async-transformed where that applies.
+    // `echoSource` is what the source echo above each card shows, which is the
+    // ORIGINAL program: the transform inserts `await `/`async ` textually, and
+    // echoing that back would show the student a line they did not write. It
+    // never adds or removes lines, so the two agree on line numbers.
+    //
+    // With the flag off, or if the helper failed to load, this is exactly the
+    // bare runPythonAsync it replaced — a flag-off run is byte-for-byte what it
+    // was before this feature existed, including the frame filenames.
+    function runProgram(src, echoSource) {
+      if (!displayReady) return pyodide.runPythonAsync(src || '');
+      pyodide.globals.set('__user_source__', src || '');
+      pyodide.globals.set('__trinket_echo_source__',
+        (echoSource === undefined || echoSource === null ? src : echoSource) || '');
+      return pyodide.runPythonAsync([
+        // __import__ rather than an import statement: the latter would BIND its
+        // name in the program's globals, visible to dir() and globals() on every
+        // flag-on run for no reason.
+        "__import__('_trinket_display').set_source(__trinket_echo_source__, __user_source__)",
+        // Deleted the moment set_source has consumed it, so the student's
+        // globals() looks the same with the flag on as off. __user_source__
+        // stays: run_program needs it, and it is pre-existing on the transform
+        // path rather than anything this feature added.
+        "del __trinket_echo_source__",
+        "await __import__('_trinket_display').run_program(__user_source__, globals())"
+      ].join('\n'), { filename: TRINKET_RUNNER_FILENAME });
+    }
 
     // The async transform rewrites blocking-looking calls to `await`. Its await
     // set is a module constant that deliberately EXCLUDES bare `input`, because
@@ -358,10 +515,25 @@
       'import matplotlib',
       "matplotlib.use('Agg')",              // a real canvas is never drawn here
       "matplotlib.rcParams['figure.autolayout'] = True",
-      'try:',
-      "    matplotlib.rcParams['figure.figsize'] = [__trinket_figw__, __trinket_figh__]",
-      'except NameError:',
-      '    pass',
+      // A FIXED default figure size, not one derived from the pane. Deriving it
+      // from the pane -- which is what this did until the dpi pane fit landed --
+      // makes figsize, and therefore every download, depend on how wide the
+      // output pane happened to be when Run was pressed: drag the divider,
+      // re-run, and the figure is RE-COMPOSED, because text is in absolute
+      // points and a smaller canvas gives the same label a larger share of the
+      // picture. Two students running identical code got different figures.
+      //
+      // 4.8 x 3.6 rather than matplotlib's 6.4 x 4.8: it is close to what the
+      // pane-derived default produced at a typical window (measured 4.66 x 3.36
+      // at a 482-px pane), so most students see no change, and the dpi floor
+      // engages far less often than 6.4 in would. The pane is fitted by scaling
+      // figure.dpi instead, which changes scale without touching composition.
+      "matplotlib.rcParams['figure.figsize'] = [4.8, 3.6]",
+      // savefig.dpi so a Download is print-usable rather than screen-sized, and
+      // so the toolbar never has to fall back to figure.dpi -- which one SVG or
+      // PDF export poisons, because print_figure builds a fresh canvas and its
+      // __init__ rewrites figure._original_dpi.
+      "matplotlib.rcParams['savefig.dpi'] = 300",
       'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
       // Figures belong to a RUN, and MPL_SETUP runs once per run (see the
       // loadPackagesFromImports chain below), so this sits exactly where
@@ -478,14 +650,14 @@
       '    # supports_binary is swallowed, render here, and hand the bytes to the',
       '    # page, which has a real document to download them with.',
       '    #',
-      '    # No explicit dpi: the main thread\'s patched handle_save passes none',
-      '    # either, so this keeps the two runtimes producing the same file. The',
-      '    # dpi question belongs to the export-resolution work, not here.',
+      '    # The dpi is resolved rather than left to matplotlib: see',
+      '    # _trinket_savefig_dpi, defined below in this same setup string',
+      '    # (pyodide-worker.js:627) -- not above it.',
       "    if _evt.get('type') == 'save':",
       "        _fmt = str(_evt.get('format') or 'png')",
       '        try:',
       '            _sbuf = _io.BytesIO()',
-      '            _m.canvas.figure.savefig(_sbuf, format=_fmt)',
+      '            _m.canvas.figure.savefig(_sbuf, format=_fmt, dpi=_trinket_savefig_dpi())',
       "            _trinket_mpl_send(figid, 'save', _json.dumps(",
       "                {'format': _fmt, 'b64': _b64.b64encode(_sbuf.getvalue()).decode()}))",
       '        except Exception as _err:',
@@ -500,6 +672,120 @@
       '    except Exception:',
       '        pass',
       '',
+      "# #283: tight_layout's first pass after Home/Back/Forward reproduces the",
+      "# PREVIOUS layout, because ax.get_tightbbox is stale until a draw has run at",
+      "# the restored limits; the restored axes position is then overwritten and the",
+      "# x mapping lands a few percent off (measured +3.3% worker, +2.2% main). A",
+      "# second pass in the same draw is exact. Scoped to the draw that follows a",
+      "# nav-stack restore: _update_view flags the figure, execute() consumes the",
+      "# flag. Ordinary draws pay one pass as before; with figure.autolayout off the",
+      "# engine is never instantiated and none of this runs.",
+      "#",
+      "# The helper names below STAY in globals. They have to: the two wrappers",
+      "# resolve _le_exec, _nav_update_view and _le from globals at CALL time, so",
+      "# deleting them raises NameError on the first Home (checked). They are",
+      "# also invisible where it would matter -- the Variables tab is filtered by",
+      "# VARS_HELPER (pyodide.js:1714), which the page sends to this worker at",
+      "# pyodide-worker.js:115 and which drops modules and functions by type; all",
+      "# six are one or the other. NOT _snap_ns, which is RECORD_HELPER's",
+      "# (pyodide.js:2144) and runs only on the main thread. (This block keeps",
+      "# its own helpers too -- _wac, _trinket_managers and the rest.)",
+      "import matplotlib.layout_engine as _le",
+      "from matplotlib import backend_bases as _bb",
+      "if not getattr(_le.TightLayoutEngine, '_trinket_relayout_patched', False):",
+      "    _le_exec = _le.TightLayoutEngine.execute",
+      "    def _trinket_layout_execute(self, fig):",
+      "        _le_exec(self, fig)",
+      "        if getattr(fig, '_trinket_relayout', False):",
+      "            fig._trinket_relayout = False",
+      "            _le_exec(self, fig)",
+      "    _le.TightLayoutEngine.execute = _trinket_layout_execute",
+      "    _le.TightLayoutEngine._trinket_relayout_patched = True",
+      "    _nav_update_view = _bb.NavigationToolbar2._update_view",
+      "    def _trinket_update_view(self):",
+      "        # Only when the tight engine is actually in charge. plotpolish's",
+      "        # 'Fit labels in figure' toggle calls fig.set_layout_engine() on a",
+      "        # LIVE figure, so a restore while it is off would leave the flag set",
+      "        # with nothing to consume it, and the next ordinary draw after the",
+      "        # student turned it back on would pay a pass it does not need.",
+      "        _f = self.canvas.figure",
+      "        if isinstance(_f.get_layout_engine(), _le.TightLayoutEngine):",
+      "            _f._trinket_relayout = True",
+      "        return _nav_update_view(self)",
+      "    _bb.NavigationToolbar2._update_view = _trinket_update_view",
+      '',
+      "# ---- the dpi pane fit -------------------------------------------------------",
+      "#",
+      "# The pane sets SCALE, the student's corner drag sets SHAPE. Fitting the pane",
+      "# by figsize -- which is what matplotlib's own handle_resize does -- silently",
+      "# RE-COMPOSES the figure, because text is in absolute points: the same label on",
+      "# a smaller canvas takes a larger share of the picture, so the download ends up",
+      "# depending on the browser window. Scaling dpi changes scale only; the picture",
+      "# is identical, just bigger or smaller. This is matplotlib's own idiom --",
+      "# backend_bases._set_device_pixel_ratio is exactly dpi = ratio * _original_dpi.",
+      "if not getattr(_wac.FigureCanvasWebAggCore, '_trinket_panefit_patched', False):",
+      "    def _trinket_pane_fit(self, event):",
+      "        _f = self.figure",
+      "        _fw, _fh = _f.get_size_inches()",
+      "        _dpr = float(event.get('dpr') or 1) or 1.0",
+      "        _w = float(event.get('w') or 0)",
+      "        _h = float(event.get('h') or 0)",
+      "        if _fw <= 0 or _fh <= 0 or _w <= 0 or _h <= 0:",
+      "            return",
+      "        # The page sends the PANE, not a dpi, and the division happens here",
+      "        # against the figure's CURRENT size -- so a student writing",
+      "        # plt.figure(figsize=(10, 3)) is fitted rather than rendered at twice",
+      "        # the pane. Both dimensions bound it; the page has already subtracted",
+      "        # the figure's own title bar and toolbar from the height.",
+      "        _logical = min(_w / _fw, _h / _fh)",
+      "        # Floor the LOGICAL dpi and only then multiply. Legibility is a",
+      "        # function of dpi/dpr, because a device pixel is not a unit anyone",
+      "        # reads. Flooring the DEVICE dpi instead leaves the floor inactive",
+      "        # exactly where it is needed: at a 200-px pane on a retina screen it",
+      "        # lets 10 pt fall to 5.8 CSS px while reporting the floor satisfied.",
+      "        if _logical < 72:",
+      "            _logical = 72",
+      "        _f._set_dpi(_logical * _dpr, forward=False)",
+      "        # forward=False above means the browser has not been told; this is what",
+      "        # tells it, and it is what provokes the echo the page marks below.",
+      "        self.manager.resize(int(_fw * _f.dpi), int(_fh * _f.dpi))",
+      "        self._force_full = True",
+      "        self.draw_idle()",
+      "    _wac.FigureCanvasWebAggCore.handle_trinket_pane_fit = _trinket_pane_fit",
+      "",
+      "    _trinket_prev_resize = _wac.FigureCanvasWebAggCore.handle_resize",
+      "    def _trinket_handle_resize(self, event):",
+      "        # mpl.js's ResizeObserver cannot tell our fit from the student dragging",
+      "        # the figure's corner -- both arrive as {type:'resize'} -- so the PAGE",
+      "        # classifies them, by pointer order, and marks its own fit's echo.",
+      "        #",
+      "        # Without this the echo reaches handle_resize, which recomputes figsize",
+      "        # from twice-truncated pixels, and figsize RATCHETS DOWN on every fit:",
+      "        # measured 4.66 in -> 4.5682 in over five fits at dpr 2, with the",
+      "        # explicit-dpi export moving 466x336 -> 463x333. That is \"figsize",
+      "        # FIXED\" quietly broken, and quieter than the bug it replaced.",
+      "        if event.get('trinket_fit_echo'):",
+      "            return",
+      "        return _trinket_prev_resize(self, event)",
+      "    _wac.FigureCanvasWebAggCore.handle_resize = _trinket_handle_resize",
+      "    _wac.FigureCanvasWebAggCore._trinket_panefit_patched = True",
+      "# savefig.dpi can be the STRING 'figure', which matplotlib resolves to",
+      "# figure._original_dpi -- and the pane fit makes that unreliable. Every canvas",
+      "# construction rewrites _original_dpi, and print_figure builds a FRESH canvas",
+      "# for svg and pdf, so one vector export leaves it holding the fitted DEVICE",
+      "# dpi. Measured: a post-SVG 'figure' export gave 960x720 on the worker and",
+      "# 949x712 on the main thread -- twice the CSS size, and dependent on both the",
+      "# pane at export time and the display density. Before any vector export the",
+      "# same choice gives 480x360, so the student's file silently changes meaning.",
+      "#",
+      "# Resolved here to the figure's COMPOSED density, rcParams['figure.dpi'],",
+      "# which the fit never touches -- so 'figure' means what a student picking it",
+      "# would expect, and keeps meaning it.",
+      "def _trinket_savefig_dpi():",
+      "    _d = matplotlib.rcParams['savefig.dpi']",
+      "    if isinstance(_d, bool) or not isinstance(_d, (int, float)):",
+      "        return matplotlib.rcParams['figure.dpi']",
+      "    return _d",
       '_plt.show = _trinket_show'
     ].join('\n');
 
@@ -535,6 +821,29 @@
 
     function pushRepl(msg) {
       currentRunId = msg.id;
+      // The display helper must be installed before the statement is evaluated,
+      // not only before a Run: on the main thread `display` is a builtin from
+      // boot, so typing display(Integral(x)) at a fresh prompt works there and
+      // raised NameError here. prepareDisplay is memoized, so only the first
+      // statement of a flag-on worker waits on the fetch, and a failed load
+      // resolves rather than rejects -- the console still evaluates, with the
+      // same NameError the main thread gives when its own install failed.
+      //
+      // Bare expressions are NOT affected either way: measured on 2026-09-18,
+      // `Integral(x, x)` at the prompt prints plain repr on BOTH runtimes,
+      // because the hook wraps module-level statements in run_program and the
+      // REPL does not go through it. Only display() differs, and only here.
+      // Both arms evaluate. A failed install must not stop the statement
+      // running -- the student loses typeset output, not their console. Stated
+      // HERE rather than relied on from ensureDisplay's catch 400 lines away:
+      // without the second arm a rejected promise posts neither `done` nor
+      // `error`, and the console is dead with no message and no prompt. run()'s
+      // chain already ends in a catch for the same reason.
+      prepareDisplay().then(function() { evaluateRepl(msg); },
+                            function() { evaluateRepl(msg); });
+    }
+
+    function evaluateRepl(msg) {
       var console_;
       try {
         console_ = ensureReplConsole();
@@ -605,12 +914,30 @@
           })
         : Promise.resolve(source); };
 
+      // A VPython run is not routed through the AST WRAP, matching runVpython()
+      // on the page (pyodide.js), which says so in as many words: typeset
+      // output covers the plain run and worker paths in slice 1 only. Without
+      // this the worker wrapped module-level expressions on top of the vpython
+      // async transform while the main thread did not.
+      //
+      // The WRAP only. prepareDisplay() below stays unconditional, because it
+      // does two separable things: it installs builtins.display, and it flips
+      // displayReady so runProgram() applies the wrap. Gating both removed
+      // `display` from VPython programs entirely -- and the main thread installs
+      // at boot for every run, VPython included, so that was a NameError on one
+      // runtime and a rendered card on the other. It is not rescued by an
+      // earlier plain run in the same worker: the page calls discardWorker()
+      // for every worker VPython run (worker-client.js), so msg.vpython is true
+      // on the first run of that worker, always.
+      var wantsWrap = !msg.vpython;
+
       var mpl = usesMatplotlib(source);
 
       // The wheel install comes FIRST and the source preparation is built after
       // it resolves, so micropip's runPythonAsync never interleaves with the
       // transform's.
       return (msg.vpython ? ensureVPython(msg.wheelUrl) : Promise.resolve())
+        .then(prepareDisplay)
         .then(prepare)
         .then(function(src) {
           // Pyodide-bundled packages the program imports (numpy, matplotlib,
@@ -618,22 +945,26 @@
           // interpreter, so the main thread's loadPackagesFromImports does not
           // help it.
           return pyodide.loadPackagesFromImports(src).then(function() {
-            if (mpl) {
-              installDomStubs();
-              // Default figure size chosen to fit the page's graphic pane. Only
-              // the DEFAULT — a program setting its own figsize still wins.
-              var gw = Number(msg.graphicWidth) || 0;
-              if (gw > 200) {
-                var inches = Math.max(2.4, (gw - 16) / 100);
-                pyodide.globals.set('__trinket_figw__', inches);
-                pyodide.globals.set('__trinket_figh__', Math.round(inches * 0.72 * 100) / 100);
-              }
-            }
+            // The figure size used to be computed here from msg.graphicWidth,
+            // once, before the program ran. The pane is now fitted by scaling
+            // figure.dpi after the figure exists (handle_trinket_pane_fit in
+            // MPL_SETUP), so the size is a fixed rcParam and the pane no longer
+            // reaches into it.
+            //
+            // graphicWidth is still SENT and is read by nobody, here or on the
+            // page. This comment used to say "the page uses it for the first
+            // fit"; it does not -- the page's first measurement is paneFitBox(),
+            // reading the DOM live. See the longer note at the point it is
+            // computed, pyodide.js:5153.
+            if (mpl) { installDomStubs(); }
             return mpl ? pyodide.runPythonAsync(MPL_SETUP).then(function() { return src; })
                        : src;
           });
         })
-        .then(function(src) { return pyodide.runPythonAsync(src); })
+        .then(function(src) {
+          return wantsWrap ? runProgram(src, source)
+                           : pyodide.runPythonAsync(src);
+        })
         .then(function() {
           return mpl ? pyodide.runPythonAsync(MPL_FLUSH) : null;
         })
