@@ -12,5 +12,15 @@
 //     npx playwright test -c playwright.noop.config.js math-output-noop math-output
 const base = require('./playwright.deploy.config.js');
 
+// No silent default: the deploy config falls back to a shared trial when
+// TRINKET_BASE_URL is unset, and a forgotten variable would aim both halves
+// of the gate at someone else's server.
+if (!process.env.TRINKET_BASE_URL) {
+  throw new Error('playwright.noop.config.js: set TRINKET_BASE_URL to the deploy under test');
+}
+
+// retries: 0 for the positive control too. A retry can only hide an
+// intermittent failure, and "flaky, exit 0" is exactly a dead-feature result
+// the control exists to catch. (math-output-noop.spec.js sets its own 0.)
 const { globalSetup, globalTeardown, ...rest } = base;
-module.exports = rest;
+module.exports = { ...rest, retries: 0 };

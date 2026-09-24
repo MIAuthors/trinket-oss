@@ -53,14 +53,17 @@ const path = require('path');
 // printed reason -- it is half a measurement, and must not read as a pass.
 // Delete the file to start over. The comparing run refuses a pair that differs
 // in anything but mathOutput: another feature flag, the runtime a program ran
-// on, its source, or the served code itself (every same-origin script the page
-// loaded is hashed, because /version says 'unknown' on a dev stack).
+// on, its source, or the served code itself (every same-origin .js/.py the page
+// fetched is hashed and compared wherever both halves fetched it, because
+// /version says 'unknown' on a dev stack).
 //
 // RUN math-output.spec.js ALONGSIDE IT (the command above does). That spec is
 // the positive control: flag-off and a feature that silently does nothing both
 // satisfy every assertion here, and only a control that MUST typeset tells the
 // two apart. The built-in `sympy-bare` entry below is a second, in-corpus
-// control, and it is always run for the same reason.
+// control, and it is always run for the same reason. It downloads Pyodide once
+// per test (its tests do not share a context), so with the flag on it costs
+// several times what this file does.
 //
 // THE CORPUS, and what a pass does and does not prove.
 //   TRINKET_CORPUS=abc123,def456   short codes ON THE TARGET DEPLOY. This is
@@ -117,6 +120,7 @@ const RUN_TIMEOUT = 150_000;
 // would download Pyodide and its wheels again for every program -- hundreds of
 // MB across a corpus, on someone else's CDN, possibly over a metered link.
 let sharedContext = null;
+const assetHashes = new Map();   // full served URL -> content hash, for this run
 async function freshPage(browser, baseURL) {
   if (!sharedContext) {
     sharedContext = await browser.newContext({ ...devices['Desktop Chrome'], baseURL });
@@ -283,6 +287,7 @@ const BUILTIN = [
       'x = symbols("x")',
       'print("Loading math…")',
       'print("mid")',
+      'print("Loading math…")      # immediately before the card, like the notice',
       'x**2 + 1',
       'print("end")',
     ].join('\n'),
@@ -350,6 +355,10 @@ async function runOnce(page, entry) {
   // parent IS the window, so counting those messages is a completion signal
   // both runtimes share. readyForSnapshot is not: input() sets it too.
   await page.addInitScript(() => {
+    // Chromium keeps 250 resource-timing entries and drops the rest silently;
+    // a main-thread run's Pyodide wheels can pass that, and a dropped script
+    // would vanish from the same-build comparison below without a word.
+    performance.setResourceTimingBufferSize(10000);
     window.__noopComplete = 0;
     window.addEventListener('message', (e) => {
       if (e.data === 'complete') window.__noopComplete++;
@@ -437,9 +446,13 @@ async function runOnce(page, entry) {
 
   // The build. /version is 'unknown' on a dev stack, and 'checkout' reports
   // HEAD while ignoring uncommitted edits, so hash what was actually SERVED:
-  // every same-origin script and Python helper this page loaded, keyed by path
-  // with the per-boot cache prefix removed. Two halves on different code
-  // compare two programs, not one program with the flag flipped.
+  // every same-origin .js/.py the DOCUMENT fetched (a worker's own fetches are
+  // in the worker's timeline, not here), keyed by path with the per-boot cache
+  // prefix removed, and compared wherever both halves fetched it. Two halves on
+  // different code compare two programs, not one program with the flag flipped.
+  //
+  // Hashed once per URL per run: page.request has no HTTP cache, and without
+  // this every program would re-fetch ~36 scripts (~1 MB) from the target.
   const version = await page.request.get('/version').then((r) => r.json()).catch(() => ({}));
   const assetUrls = await page.evaluate(() => performance.getEntriesByType('resource')
     .map((e) => e.name)
@@ -447,10 +460,14 @@ async function runOnce(page, entry) {
       && /\.(js|py)$/.test(x.pathname); } catch (e) { return false; } }));
   const assets = {};
   for (const u of assetUrls) {
-    const res = await page.request.get(u).catch(() => null);
-    if (!res || !res.ok()) continue;
     const key = new URL(u).pathname.replace(/^\/cache-prefix-[^/]*/, '');
-    assets[key] = crypto.createHash('sha256').update(await res.body()).digest('hex').slice(0, 16);
+    if (!assetHashes.has(u)) {
+      const res = await page.request.get(u).catch((e) => ({ ok: () => false, status: () => e.message }));
+      // A failed hash must not quietly shrink what the two halves compare.
+      expect(res.ok(), 'could not re-fetch ' + key + ' to hash it (' + res.status() + ')').toBe(true);
+      assetHashes.set(u, crypto.createHash('sha256').update(await res.body()).digest('hex').slice(0, 16));
+    }
+    assets[key] = assetHashes.get(u);
   }
 
   return {
@@ -554,6 +571,9 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       }
 
       // Refuse comparisons that would not mean anything.
+      expect(Boolean(prev.features && prev.assets && prev.runtime), 'the recorded ' + other
+        + ' half predates this revision of the spec; delete ' + file + ' and re-record both')
+        .toBe(true);
       expect(prev.sha, entry.id + ' changed between the two runs (source sha '
         + prev.sha + ' -> ' + run.sha + '); re-record both halves').toBe(run.sha);
       expect(changedKeys(prev.features || {}, run.features, { ignore: 'mathOutput', union: true }),
@@ -563,12 +583,18 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       expect(changedKeys(prev.assets || {}, run.assets),
         'the served code CHANGED between the two runs (these files hash differently); '
         + 're-record both halves against one build').toEqual([]);
-      expect(Object.keys(run.assets).some((k) => /\/js\/embed\/pyodide\.js$/.test(k)),
-        'could not hash the served pyodide.js, so there is no evidence both halves ran one build')
+      // The anchor, required in BOTH halves: shared-key comparison alone passes
+      // vacuously when one half hashed nothing.
+      const anchor = Object.keys(run.assets).find((k) => /\/js\/embed\/pyodide\.js$/.test(k));
+      expect(Boolean(anchor && prev.assets[anchor]),
+        'pyodide.js was not hashed in both halves, so there is no evidence they ran one build')
         .toBe(true);
       if (prev.commit !== 'unknown' && run.commit !== 'unknown') {
         expect(prev.commit, 'the deploy was REBUILT between the two runs; re-record both halves')
           .toBe(run.commit);
+      } else if (prev.commit !== run.commit) {
+        console.log('  [math-noop] ' + entry.id + ': one half reports commit ' + prev.commit
+          + ' and the other ' + run.commit + '; relying on the asset hashes');
       }
 
       const off = phase === 'off' ? mine : prev;
