@@ -21,8 +21,12 @@ const path = require('path');
 //      "Loading math…" line (ensureKatex() in pyodide.js), which is part of the
 //      card, not a change to the program's own output. It is removed only when
 //      that run produced a card, and only once.
-//   2. no .math-card appears unless the program imports SymPy (or the corpus
-//      entry says why it may: see numpy-polynomial below).
+//   2. no .math-card appears unless the program imports SymPy, or the corpus
+//      entry expects one. SymPy is the common case, not the rule: the feature
+//      typesets ANY object that defines _repr_latex_, so numpy polynomials
+//      typeset too (numpy-polynomial below). A stored trinket that typesets
+//      without SymPy still FAILS here -- by design, and for this gate that is a
+//      visible change to an existing trinket, which is what #247 exists to show.
 //   3. flag-OFF produces no .math-card at all, ever.
 //
 // HOW IT IS INVOKED. By a person -- nothing runs this file automatically.
@@ -191,10 +195,9 @@ const BUILTIN = [
   },
   {
     id: 'numpy-polynomial',
-    // The exception to "no card without SymPy", and the reason the rule is
-    // written with a way out. numpy's Polynomial has its own _repr_latex_, and
-    // the feature's actual contract is "objects with _repr_latex_ display" --
-    // so a bare Polynomial typesets with no SymPy anywhere. The non-card text
+    // A feature, not an exception: the display hook typesets any object that
+    // defines _repr_latex_, and numpy's Polynomial does, so a bare Polynomial
+    // renders as typeset math with no SymPy anywhere. The text around the card
     // must still be identical.
     cards: 'some',
     why: 'numpy.polynomial.Polynomial defines _repr_latex_',
@@ -554,7 +557,11 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       const allowed = entry.cards !== undefined ? entry.cards : (run.sympy ? 'some' : 0);
       if (allowed === 0) {
         expect(on.cards, entry.id + ' produced ' + on.cards + ' math card(s) with the flag on'
-          + (run.sympy ? '' : ' and does not import SymPy')).toBe(0);
+          + (run.sympy ? ''
+            : ' without importing SymPy. That is by design -- something in it defines '
+              + '_repr_latex_ (numpy polynomials do) -- but it is a VISIBLE change to this '
+              + 'trinket when the flag goes on, so a person has to decide whether it is wanted'))
+          .toBe(0);
       } else if (entry.cards === 'some') {
         expect(on.cards, entry.id + ' must typeset with the flag on'
           + (entry.control ? ' -- this is the positive control, and without it every '
