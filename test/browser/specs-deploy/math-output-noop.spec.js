@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect, devices } = require('@playwright/test');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -34,13 +34,22 @@ const path = require('path');
 //
 //   # 1. flag off
 //   TRINKET_BASE_URL=http://localhost:3000 npx playwright test \
-//     -c playwright.deploy.config.js math-output-noop math-output
+//     -c playwright.noop.config.js math-output-noop math-output
 //   # 2. flip features.mathOutput, restart the server, run the same command again
+//
+// playwright.noop.config.js, NOT playwright.deploy.config.js. The deploy
+// config's globalSetup (ephemeral-setup.js) refuses production outright --
+// trinket.gopicup.org throws before any test starts -- and on a Firebase trial
+// it mints two test identities. This file needs neither, so its config is the
+// deploy config minus the global setup and teardown.
 //
 // Each run records what it saw in test/browser/.mathoutput-noop/<host>.json
 // (gitignored). A run that finds no record of the other phase SKIPS with a
 // printed reason -- it is half a measurement, and must not read as a pass.
-// Delete the file to start over.
+// Delete the file to start over. The comparing run refuses a pair that differs
+// in anything but mathOutput: another feature flag, the runtime a program ran
+// on, its source, or the served code itself (every same-origin script the page
+// loaded is hashed, because /version says 'unknown' on a dev stack).
 //
 // RUN math-output.spec.js ALONGSIDE IT (the command above does). That spec is
 // the positive control: flag-off and a feature that silently does nothing both
@@ -76,6 +85,14 @@ const path = require('path');
 //                                  get unless a trinket pins its runtime.
 //   MATH_NOOP_ANSWER=3             the reply to every input() (default "3").
 //
+// Two kinds of entry pass without testing the display hook, and the spec says
+// so rather than counting them: a VPython program (runVpython() bypasses
+// runProgram(), where the hook lives) and a program whose halves both end in a
+// traceback. They are kept because a no-op must hold for them too.
+//
+// Each FAILED test restarts Playwright's worker, and with it the shared
+// browser context below, so every failure costs one more Pyodide download.
+//
 // A program must FINISH to be compared: a `while True: rate(30)` animation has
 // no final console to compare, and this file fails it by name rather than
 // comparing a timing-dependent prefix.
@@ -97,7 +114,7 @@ const RUN_TIMEOUT = 150_000;
 let sharedContext = null;
 async function freshPage(browser, baseURL) {
   if (!sharedContext) {
-    sharedContext = await browser.newContext({ baseURL, viewport: { width: 1280, height: 720 } });
+    sharedContext = await browser.newContext({ ...devices['Desktop Chrome'], baseURL });
   }
   return sharedContext.newPage();
 }
@@ -272,7 +289,11 @@ const CORPUS = SHORT_CODES.length
       .concat(BUILTIN.filter((e) => e.control))
   : BUILTIN;
 
-const IMPORTS_SYMPY = /^\s*(?:import\s+sympy\b|from\s+sympy(?:\.\w+)*\s+import\b)/m;
+// `import sympy`, `import numpy as np, sympy as sp`, `from sympy.abc import x`.
+// A regex over source, so an import inside a string also counts; that errs
+// towards ALLOWING cards, which only ever loosens the cards rule, never the
+// identity rule.
+const IMPORTS_SYMPY = /^\s*(?:import\s+[^\n#]*\bsympy\b|from\s+sympy(?:\.\w+)*\s+import\b)/m;
 
 function embedUrl(entry) {
   const base = entry.shortCode ? '/embed/python3/' + encodeURIComponent(entry.shortCode)
@@ -285,12 +306,21 @@ function embedUrl(entry) {
 function recordPath(baseURL) {
   return path.join(RECORD_DIR, new URL(baseURL).host.replace(/[^\w.-]/g, '_') + '.json');
 }
+// Only a MISSING file is an empty record. A corrupt one throws: silently
+// starting over would discard both halves and read as a procedure mistake.
 function loadRecord(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return {}; }
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw e;
+  }
+  return JSON.parse(text);
 }
+// Write-then-rename, so a run killed mid-write leaves the previous record whole.
 function saveRecord(file, record) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(record, null, 2));
+  fs.writeFileSync(file + '.tmp', JSON.stringify(record, null, 2));
+  fs.renameSync(file + '.tmp', file);
 }
 
 // --- one run of one program -----------------------------------------------
@@ -312,11 +342,16 @@ async function runOnce(page, entry) {
   expect(resp && resp.status(), 'the embed must load: ' + embedUrl(entry)).toBeLessThan(400);
   await expect(page.locator('.ace_editor').first()).toBeVisible();
 
-  const html = await page.content();
-  const flags = {
-    math:   /mathOutput\s*:\s*true/.test(html),
-    worker: /workerRuntime\s*:\s*true/.test(html),
-  };
+  // The page's own config object -- what mathOutputEnabled() reads -- rather
+  // than a regex over the DOM, which would also match a trinket's source.
+  // Every boolean is kept: the halves must differ in mathOutput and NOTHING
+  // else, or a difference is not the flag's.
+  const features = await page.evaluate(() => {
+    const cfg = (window.trinket && window.trinket.config) || {};
+    const out = {};
+    for (const k of Object.keys(cfg)) if (typeof cfg[k] === 'boolean') out[k] = cfg[k];
+    return out;
+  });
 
   if (!entry.shortCode) {
     await page.evaluate((src) => {
@@ -336,14 +371,15 @@ async function runOnce(page, entry) {
     window.jQuery('#editor').trigger('trinket.code.run', { action: 'code.run' }));
 
   // Wait for completion, answering input() on the worker (an inline jqconsole
-  // field rather than a dialog) as it comes up.
+  // field rather than a dialog) as it comes up. The textarea is jqconsole's,
+  // scoped to the console: an embed with inline comments has others.
   const input = page.locator('#console-output .jqconsole-input');
+  const box = page.locator('#console-output textarea').first();
   const deadline = Date.now() + RUN_TIMEOUT;
   let finished = false;
   while (Date.now() < deadline) {
     if (await page.evaluate(() => window.__noopComplete > 0)) { finished = true; break; }
     if (await input.isVisible().catch(() => false)) {
-      const box = page.locator('textarea:not(.ace_text-input)');
       await box.pressSequentially(ANSWER);
       await box.press('Enter');
       // Let the field close before looking again, or a second answer lands in
@@ -367,14 +403,36 @@ async function runOnce(page, entry) {
     };
   });
 
-  // The build, where the deploy reports one. Two phases on different builds
+  // Which runtime this program ACTUALLY ran on. The deploy default is not it:
+  // VPython goes to the main thread unless workerVPython is on, and
+  // MATH_NOOP_RUNTIME or a trinket's own setting can pin either.
+  const runtime = await page.evaluate(() => window.__trinketRuntime || 'unknown');
+
+  // The build. /version is 'unknown' on a dev stack, and 'checkout' reports
+  // HEAD while ignoring uncommitted edits, so hash what was actually SERVED:
+  // every same-origin script and Python helper this page loaded, keyed by path
+  // with the per-boot cache prefix removed. Two halves on different code
   // compare two programs, not one program with the flag flipped.
   const version = await page.request.get('/version').then((r) => r.json()).catch(() => ({}));
+  const assetUrls = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map((e) => e.name)
+    .filter((u) => { try { const x = new URL(u); return x.origin === location.origin
+      && /\/js\/.*\.js$|\.py$/.test(x.pathname); } catch (e) { return false; } }));
+  const assets = {};
+  for (const u of assetUrls) {
+    const res = await page.request.get(u).catch(() => null);
+    if (!res || !res.ok()) continue;
+    const key = new URL(u).pathname.replace(/^\/cache-prefix-[^/]*/, '');
+    assets[key] = crypto.createHash('sha256').update(await res.body()).digest('hex').slice(0, 16);
+  }
 
   return {
     finished,
-    flags,
+    features,
+    math: features.mathOutput === true,
+    runtime,
     commit: version.commit || 'unknown',
+    assets,
     sha: crypto.createHash('sha256').update(source).digest('hex').slice(0, 16),
     sympy: IMPORTS_SYMPY.test(source),
     ...out,
@@ -398,11 +456,22 @@ function firstDifference(a, b) {
     + '  ON : ' + JSON.stringify(b.slice(from, i + 60));
 }
 
+// Keys whose values differ between two flat objects, restricted to keys both have.
+function changedKeys(a, b, ignore) {
+  return Object.keys(a).filter((k) => k in b && k !== ignore && a[k] !== b[k]);
+}
+
 test.describe('mathOutput is a no-op for programs that do not ask for it (#247)', () => {
-  // Above the config's 90 s: one run may take RUN_TIMEOUT, and a mismatch
-  // re-runs once to tell a flag effect from a program that differs from itself.
-  // Must EXCEED 2 x RUN_TIMEOUT, or the test cap fires before the wait reports.
-  test.describe.configure({ timeout: 2 * RUN_TIMEOUT + 60_000 });
+  // Above the config's 90 s: one run may take RUN_TIMEOUT plus page load,
+  // asset hashing and up to 10 s per input() answer, and a mismatch re-runs
+  // once. The cap must EXCEED both runs, or it fires before the wait reports
+  // and "Test timeout exceeded" replaces the message that says what differed.
+  //
+  // retries: 0 overrides the config's 1. A retry here can only HIDE a failure:
+  // an intermittent flag effect that passes on the retry is reported as
+  // "flaky" and exits 0, and the retry overwrites the failing sample. The
+  // re-run below already asks "is this noise?", and says so in its message.
+  test.describe.configure({ timeout: 2 * (RUN_TIMEOUT + 45_000) + 30_000, retries: 0 });
 
   test.beforeAll(() => {
     console.log('  [math-noop] corpus: ' + (SHORT_CODES.length
@@ -421,7 +490,7 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       const page = await freshPage(browser, baseURL);
       const run = await runOnce(page, entry);
       await page.close();
-      const phase = run.flags.math ? 'on' : 'off';
+      const phase = run.math ? 'on' : 'off';
       const other = phase === 'on' ? 'off' : 'on';
       const where = embedUrl(entry);
 
@@ -435,10 +504,12 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       const record = loadRecord(file);
       record[phase] = record[phase] || {};
       const key = entry.id + (RUNTIME ? '@' + RUNTIME : '');
-      record[phase][key] = {
-        at: new Date().toISOString(), url: where, worker: run.flags.worker, commit: run.commit,
-        sha: run.sha, sympy: run.sympy, cards: run.cards, text: run.text, bare: run.bare,
+      const mine = {
+        at: new Date().toISOString(), url: where, runtime: run.runtime, features: run.features,
+        commit: run.commit, assets: run.assets, sha: run.sha, sympy: run.sympy,
+        cards: run.cards, text: run.text, bare: run.bare,
       };
+      record[phase][key] = mine;
       saveRecord(file, record);
 
       expect(phase !== 'off' || run.cards === 0,
@@ -455,19 +526,29 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       // Refuse comparisons that would not mean anything.
       expect(prev.sha, entry.id + ' changed between the two runs (source sha '
         + prev.sha + ' -> ' + run.sha + '); re-record both halves').toBe(run.sha);
-      expect(prev.worker, 'the deploy default runtime changed between the two runs '
-        + '(workerRuntime ' + prev.worker + ' -> ' + run.flags.worker + ')').toBe(run.flags.worker);
-
+      expect(changedKeys(prev.features || {}, run.features, 'mathOutput'),
+        'the two halves differ in more than mathOutput, so a difference would not be the '
+        + "flag's; restore the other flags and re-record").toEqual([]);
+      expect(prev.runtime, entry.id + ' ran on a different runtime in each half').toBe(run.runtime);
+      expect(changedKeys(prev.assets || {}, run.assets),
+        'the served code CHANGED between the two runs (these files hash differently); '
+        + 're-record both halves against one build').toEqual([]);
+      expect(Object.keys(run.assets).some((k) => /\/js\/embed\/pyodide\.js$/.test(k)),
+        'could not hash the served pyodide.js, so there is no evidence both halves ran one build')
+        .toBe(true);
       if (prev.commit !== 'unknown' && run.commit !== 'unknown') {
         expect(prev.commit, 'the deploy was REBUILT between the two runs; re-record both halves')
           .toBe(run.commit);
-      } else {
-        console.log('  [math-noop] ' + entry.id + ': the deploy reports no commit, so it '
-          + 'cannot confirm both halves ran the same build');
       }
 
-      const off = phase === 'off' ? record[phase][key] : prev;
-      const on  = phase === 'on'  ? record[phase][key] : prev;
+      const off = phase === 'off' ? mine : prev;
+      const on  = phase === 'on'  ? mine : prev;
+
+      // Flag-OFF is re-checked here, not only in its own run: the comparing run
+      // is the one a person reads, and a failed OFF half is still on disk.
+      expect(off.cards, entry.id + ': the recorded flag-OFF half has math cards').toBe(0);
+      expect(off.text.includes(KATEX_NOTICE),
+        entry.id + ': the recorded flag-OFF half announces KaTeX').toBe(false);
 
       // The cards rule.
       const allowed = entry.cards !== undefined ? entry.cards : (run.sympy ? 'some' : 0);
@@ -484,25 +565,43 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
           + ' card(s) with the flag on -- allowed; the text around them is still compared');
       }
 
+      // Say when a pass is weaker than it looks. Both halves ending in a
+      // traceback compare an ERROR, and a VPython run never reaches the display
+      // hook at all (runVpython bypasses runProgram), so neither is evidence
+      // about the wrap -- report them, do not count them.
+      if (/Traceback \(most recent call last\)/.test(off.text)
+          && /Traceback \(most recent call last\)/.test(on.text)) {
+        console.log('  [math-noop] ' + entry.id + ': both halves end in a traceback -- identical, '
+          + 'but it compares an error, not the program');
+      }
+
       // The identity rule. With no cards, bare === text and nothing is
       // removed, so this IS the byte-for-byte console comparison #247 asks for.
       const onBare = withoutKatexNotice(on);
       if (off.bare === onBare) return;
 
       // Different. Is that the flag, or a program that differs from itself?
-      // Re-run THIS phase once in a fresh context and see whether it agrees
-      // with its own first run.
+      // Re-run THIS phase once, on a fresh page (a fresh interpreter; the HTTP
+      // cache is shared), and see whether it agrees with its own first run.
+      // Only this phase can be re-run, so agreement proves THIS half is stable,
+      // not that the other one was.
       const retry = await freshPage(browser, baseURL);
       const again = await runOnce(retry, entry);
       await retry.close();
-      const selfConsistent = again.finished
-        && withoutKatexNotice(again) === withoutKatexNotice(record[phase][key]);
-      expect(off.bare, (selfConsistent
-        ? 'FLAG EFFECT: ' + entry.id + ' prints different console text with mathOutput on, '
-          + 'and a second ' + phase + ' run reproduced this phase exactly, so it is not noise. '
-        : 'NONDETERMINISTIC: ' + entry.id + ' differs from ITSELF between two ' + phase
-          + ' runs, so it cannot be evidence either way; drop it from the corpus. ')
-        + firstDifference(off.bare, onBare)).toBe(onBare);
+      let verdict;
+      if (!again.finished) {
+        verdict = 'UNCLASSIFIED: ' + entry.id + ' differs, and the re-run to classify it did '
+          + 'not finish. ';
+      } else if (withoutKatexNotice(again) === withoutKatexNotice(mine)) {
+        verdict = 'LIKELY FLAG EFFECT: ' + entry.id + ' prints different console text with '
+          + 'mathOutput ' + phase + ', and a second ' + phase + ' run reproduced this half '
+          + 'exactly. The ' + other + ' half was not re-run; re-record it to rule out noise '
+          + 'there before calling this the flag. ';
+      } else {
+        verdict = 'NONDETERMINISTIC: ' + entry.id + ' differs from ITSELF between two ' + phase
+          + ' runs, so it cannot be evidence either way; drop it from the corpus. ';
+      }
+      expect(off.bare, verdict + firstDifference(off.bare, onBare)).toBe(onBare);
     });
   }
 });
