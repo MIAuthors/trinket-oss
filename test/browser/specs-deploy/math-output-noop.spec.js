@@ -51,7 +51,8 @@ const path = require('path');
 // Each run records what it saw in test/browser/.mathoutput-noop/<host>.json
 // (gitignored). A run that finds no record of the other phase SKIPS with a
 // printed reason -- it is half a measurement, and must not read as a pass.
-// Delete the file to start over. The comparing run refuses a pair that differs
+// Recording the SAME half twice (the flag was not flipped) fails instead of
+// skipping again. Delete the file to start over. The comparing run refuses a pair that differs
 // in anything but mathOutput: another feature flag, the runtime a program ran
 // on, its source, or the served code itself (every same-origin .js/.py the page
 // fetched is hashed and compared wherever both halves fetched it, because
@@ -556,6 +557,7 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
         commit: run.commit, assets: run.assets, sha: run.sha, sympy: run.sympy,
         cards: run.cards, text: run.text, bare: run.bare,
       };
+      const already = record[phase][key];
       record[phase][key] = mine;
       saveRecord(file, record);
 
@@ -564,6 +566,13 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
         .toBe(true);
 
       const prev = record[other] && record[other][key];
+      // The same half, twice: the flag was never flipped (or the restart did not
+      // take). Skipping again would exit 0 having compared nothing, which reads
+      // like the gate passed. Fail and say what to do.
+      expect(Boolean(prev || !already), entry.id + ': the mathOutput ' + phase.toUpperCase()
+        + ' half was ALREADY recorded (at ' + (already && already.at) + ') and the '
+        + other.toUpperCase() + ' half is still missing. Flip features.mathOutput, restart the '
+        + 'server, and run again -- or delete ' + file + ' to start over.').toBe(true);
       if (!prev) {
         console.log('  [math-noop] ' + entry.id + ': recorded mathOutput ' + phase.toUpperCase()
           + '; nothing to compare yet -- flip the flag, restart, and run again');
