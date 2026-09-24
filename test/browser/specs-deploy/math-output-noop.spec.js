@@ -17,10 +17,11 @@ const path = require('path');
 // the same deploy:
 //   1. #console-output text is IDENTICAL once the math cards are taken out --
 //      and a program that produced no cards must be identical outright. The
-//      one allowance: the first card of a page announces KaTeX with a single
-//      "Loading math…" line (ensureKatex() in pyodide.js), which is part of the
-//      card, not a change to the program's own output. It is removed only when
-//      that run produced a card, and only once.
+//      one allowance: the first typeset card of a page announces KaTeX with a
+//      single "Loading math…" line (ensureKatex() in pyodide.js), which is part
+//      of the card, not a change to the program's own output. It is removed
+//      only where it sits immediately before a card, so a program that prints
+//      the same words itself is still compared.
 //   2. no .math-card appears unless the program imports SymPy, or the corpus
 //      entry expects one. SymPy is the common case, not the rule: the feature
 //      typesets ANY object that defines _repr_latex_, so numpy polynomials
@@ -271,6 +272,22 @@ const BUILTIN = [
     ].join('\n'),
   },
   {
+    id: 'prints-the-notice',
+    // A program that prints the feature's own KaTeX notice text, then typesets.
+    // Only the notice immediately before the card may be removed; the
+    // student's identical line must survive, in both halves.
+    cards: 'some',
+    why: 'it typesets a bare SymPy expression',
+    code: [
+      'from sympy import symbols',
+      'x = symbols("x")',
+      'print("Loading math…")',
+      'print("mid")',
+      'x**2 + 1',
+      'print("end")',
+    ].join('\n'),
+  },
+  {
     id: 'sympy-bare',
     // THE IN-CORPUS POSITIVE CONTROL. Flag-on must typeset this; if it does
     // not, every "identical" above is as consistent with a dead feature as with
@@ -392,19 +409,26 @@ async function runOnce(page, entry) {
     await page.waitForTimeout(250);
   }
 
-  const out = await page.evaluate(() => {
+  const out = await page.evaluate((notice) => {
     const el = document.querySelector('#console-output');
     if (!el) return { text: '', bare: '', cards: 0 };
+    // Each card becomes a sentinel first, so the feature's own KaTeX notice can
+    // be recognized by POSITION -- queueMathCard() queues it immediately before
+    // the first card that carries LaTeX -- rather than by its text, which a
+    // student's program is free to print too.
+    const MARK = '\u0000card\u0000';
     const clone = el.cloneNode(true);
-    clone.querySelectorAll('.math-card-wrap, .math-card').forEach((n) => n.remove());
+    clone.querySelectorAll('.math-card-wrap').forEach((n) => n.replaceWith(MARK));
+    clone.querySelectorAll('.math-card').forEach((n) => n.replaceWith(MARK));
+    const marked = clone.textContent || '';
     // textContent, not innerText: below ~1100 px the output pane is tabbed and
     // innerText of the hidden console is ''.
     return {
       text:  el.textContent || '',
-      bare:  clone.textContent || '',
+      bare:  marked.replace(notice + MARK, MARK).split(MARK).join(''),
       cards: el.querySelectorAll('.math-card').length,
     };
-  });
+  }, KATEX_NOTICE);
 
   // Which runtime this program ACTUALLY ran on. The deploy default is not it:
   // VPython goes to the main thread unless workerVPython is on, and
@@ -420,7 +444,7 @@ async function runOnce(page, entry) {
   const assetUrls = await page.evaluate(() => performance.getEntriesByType('resource')
     .map((e) => e.name)
     .filter((u) => { try { const x = new URL(u); return x.origin === location.origin
-      && /\/js\/.*\.js$|\.py$/.test(x.pathname); } catch (e) { return false; } }));
+      && /\.(js|py)$/.test(x.pathname); } catch (e) { return false; } }));
   const assets = {};
   for (const u of assetUrls) {
     const res = await page.request.get(u).catch(() => null);
@@ -443,10 +467,8 @@ async function runOnce(page, entry) {
 }
 
 // The one line the feature itself adds when -- and only when -- it typesets.
+// runOnce() removes it from `bare` where it sits immediately before a card.
 const KATEX_NOTICE = 'Loading math…\n';
-function withoutKatexNotice(run) {
-  return run.cards > 0 ? run.bare.replace(KATEX_NOTICE, '') : run.bare;
-}
 
 // First index where two strings differ, with a little of each around it --
 // "not identical" on two 4 KB consoles is useless without this.
@@ -459,9 +481,14 @@ function firstDifference(a, b) {
     + '  ON : ' + JSON.stringify(b.slice(from, i + 60));
 }
 
-// Keys whose values differ between two flat objects, restricted to keys both have.
-function changedKeys(a, b, ignore) {
-  return Object.keys(a).filter((k) => k in b && k !== ignore && a[k] !== b[k]);
+// Keys whose values differ between two flat objects. `union` also counts a key
+// present on only one side: right for feature flags, where a flag appearing or
+// vanishing is a change; wrong for assets, where flag-on legitimately loads
+// files flag-off never requests, so those compare shared keys only.
+function changedKeys(a, b, { ignore, union } = {}) {
+  const keys = union ? [...new Set([...Object.keys(a), ...Object.keys(b)])]
+                     : Object.keys(a).filter((k) => k in b);
+  return keys.filter((k) => k !== ignore && a[k] !== b[k]);
 }
 
 test.describe('mathOutput is a no-op for programs that do not ask for it (#247)', () => {
@@ -529,7 +556,7 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       // Refuse comparisons that would not mean anything.
       expect(prev.sha, entry.id + ' changed between the two runs (source sha '
         + prev.sha + ' -> ' + run.sha + '); re-record both halves').toBe(run.sha);
-      expect(changedKeys(prev.features || {}, run.features, 'mathOutput'),
+      expect(changedKeys(prev.features || {}, run.features, { ignore: 'mathOutput', union: true }),
         'the two halves differ in more than mathOutput, so a difference would not be the '
         + "flag's; restore the other flags and re-record").toEqual([]);
       expect(prev.runtime, entry.id + ' ran on a different runtime in each half').toBe(run.runtime);
@@ -549,9 +576,9 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
 
       // Flag-OFF is re-checked here, not only in its own run: the comparing run
       // is the one a person reads, and a failed OFF half is still on disk.
+      // No separate check for a flag-OFF KaTeX notice: a program may print that
+      // text itself, and a real one would already differ in the identity rule.
       expect(off.cards, entry.id + ': the recorded flag-OFF half has math cards').toBe(0);
-      expect(off.text.includes(KATEX_NOTICE),
-        entry.id + ': the recorded flag-OFF half announces KaTeX').toBe(false);
 
       // The cards rule.
       const allowed = entry.cards !== undefined ? entry.cards : (run.sympy ? 'some' : 0);
@@ -584,7 +611,7 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
 
       // The identity rule. With no cards, bare === text and nothing is
       // removed, so this IS the byte-for-byte console comparison #247 asks for.
-      const onBare = withoutKatexNotice(on);
+      const onBare = on.bare;
       if (off.bare === onBare) return;
 
       // Different. Is that the flag, or a program that differs from itself?
@@ -599,7 +626,7 @@ test.describe('mathOutput is a no-op for programs that do not ask for it (#247)'
       if (!again.finished) {
         verdict = 'UNCLASSIFIED: ' + entry.id + ' differs, and the re-run to classify it did '
           + 'not finish. ';
-      } else if (withoutKatexNotice(again) === withoutKatexNotice(mine)) {
+      } else if (again.bare === mine.bare) {
         verdict = 'LIKELY FLAG EFFECT: ' + entry.id + ' prints different console text with '
           + 'mathOutput ' + phase + ', and a second ' + phase + ' run reproduced this half '
           + 'exactly. The ' + other + ' half was not re-run; re-record it to rule out noise '
