@@ -106,6 +106,8 @@
     {% if plainEditor %}
     // Every editor type reads userSettings.disableAceEditor at startup.
     userSettings = Object.assign({}, window.userSettings, { disableAceEditor: true });
+    // The plain editor claims Tab for indenting only in exam mode (#318).
+    trinketExamMode = true;
     {% endif %}
   {% endif %}
   </script>
