@@ -90,12 +90,20 @@
   {% if user and user.roles %}
   <input id="roles" type='hidden' value='{{ user.roles | encrypt }}'>
   {% endif %}
+  {# Exam mode (trinket settings.plainEditor): the plain-text editor for every
+     viewer, logged in or not. The owner's unsaved draft decides for the owner,
+     as with the other trinket settings. #}
+  {% set plainEditor = (draft and draft.settings and draft.settings.plainEditor) or (not draft and trinket and trinket.settings and trinket.settings.plainEditor) %}
   <script>
     trinketObject = {% if trinket %}{{ trinket | escapeJSON | json | safe }}{% else %}{}{% endif %};
   {% if not outputOnly %}
     draftObject   = {% if draft %}{{ draft | escapeJSON | json | safe }}{% else %}undefined{% endif %};
     {% if user %}
     userSettings = {{ user.settings.toJSON() | escapeJSON | json | safe }};
+    {% endif %}
+    {% if plainEditor %}
+    // Every editor type reads userSettings.disableAceEditor at startup.
+    userSettings = Object.assign({}, window.userSettings, { disableAceEditor: true });
     {% endif %}
   {% endif %}
   </script>
@@ -158,7 +166,7 @@
             {% if not outputOnly and sharingEnabled %}
             <button class="show-for-medium-up button split item menu-button" data-action="sharing.social" data-dropdown="share-options" data-options="align:bottom" role="button" aria-label="Share Menu" aria-controls="share-options"><i class="fa fa-share-alt"></i><label id="share_button_label" class="show-for-large-up">Share</label><span data-dropdown="share-options" data-options="align:bottom" role="menu"></span></button>
             {% endif %}
-            {% if not outputOnly and config.features.accessibilityToggle and lang in ['python', 'python3', 'pygame', 'java', 'R', 'glowscript', 'html'] %}
+            {% if not outputOnly and not plainEditor and config.features.accessibilityToggle and lang in ['python', 'python3', 'pygame', 'java', 'R', 'glowscript', 'html'] %}
             <div id="editorToggleWrapper" style="display: inline-block; width: auto; padding: 0; margin-left: 10px">
               <img src="{{ '/img/accessibility.png' | cachePrefix }}" alt="Accessibility" title="Accessibility" style="float: left" />
               <fieldset id="editorToggleFieldset" class="switch small left highlight-on-focus" style="line-height: 12px; margin: 1px 4px 0 4px" title="Enable screen reader accessibility in code editor" aria-label="Enable screen reader accessibility in code editor" tabindex="0">
