@@ -22,6 +22,16 @@
         <h5 class="left">Enable Editor Autofocus</h5>
       </div>
     </div>
+    <div class="row">
+      <div class="small-12 columns">
+        <div class="switch round left">
+          <input id="plainEditor" type="checkbox" name="plainEditor" {% if (draft and draft.settings.plainEditor) or (not draft and trinket.settings.plainEditor) %}checked="checked"{% endif %} data-trinket-settings>
+          <label for="plainEditor"></label>
+        </div>
+        <h5 class="left">Exam mode (plain-text editor)</h5>
+        <p class="left" style="clear: both; margin: 0 0 0.5em; font-size: 0.85em;">No syntax highlighting; copy and paste work in locked-down exam browsers. Applies the next time the trinket is opened.</p>
+      </div>
+    </div>
     {% if config.app.runtimeOption and config.app.runtimeOption.indexOf(lang) >= 0 %}
     <div class="row">
       <div class="small-12 columns">
