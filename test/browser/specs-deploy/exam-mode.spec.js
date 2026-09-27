@@ -76,7 +76,7 @@ test.describe('exam mode', () => {
       const state = () => ta.evaluate((t) => ({ value: t.value, caret: t.selectionStart }));
 
       await ta.click();
-      await viewer.keyboard.press('Control+End');
+      await viewer.keyboard.press('ControlOrMeta+End');
       await viewer.keyboard.type('for i in range(3):');
       await viewer.keyboard.press('Enter');
       let s = await state();
@@ -94,7 +94,7 @@ test.describe('exam mode', () => {
       await viewer.keyboard.press('Shift+Tab');
       expect((await state()).value.endsWith('\n'), 'Shift-Tab outdents').toBe(true);
 
-      await viewer.keyboard.press('Control+z');
+      await viewer.keyboard.press('ControlOrMeta+z');
       expect((await state()).value.endsWith('\n' + ' '.repeat(tabSize)), 'Ctrl-Z undoes the outdent').toBe(true);
 
       // The caret survives leaving the editor and coming back.
