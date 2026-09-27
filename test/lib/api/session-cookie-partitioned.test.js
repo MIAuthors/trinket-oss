@@ -53,12 +53,20 @@ describe.skipIf(FB_MODE)('the session cookie gets a partitioned twin in cross-si
     expect(c[1].split(';')[0]).toBe(c[0].split(';')[0]);
   });
 
-  it('a top-level sign-in sets exactly one, unpartitioned — nothing changes for today\'s users', async () => {
+  it('a top-level sign-in sets BOTH, so it refreshes the twin too (#314)', async () => {
+    // This asserted "exactly one, unpartitioned" until #314. Trinket embeds
+    // itself in a same-origin iframe, so a first-party twin already exists by
+    // the time anyone signs in; refreshing only the plain cookie left the twin
+    // holding its pre-login value, and dedupe picks by position, so the stale
+    // one won every subsequent request. Writing both together is what makes
+    // divergence impossible.
     const s = await server();
     const res = await s.inject({ method: 'POST', url: '/users', payload: signup(), headers: TOP_LEVEL });
     const c = sessionEntries(res);
-    expect(c).toHaveLength(1);
+    expect(c).toHaveLength(2);
     expect(c[0]).not.toMatch(/Partitioned/);
+    expect(c[1]).toMatch(/; Partitioned$/);
+    expect(c[1].split(';')[0], 'same value in both jars').toBe(c[0].split(';')[0]);
   });
 
   it('the partitioned copy is a valid session on its own (same value, so the plain jar is not needed)', async () => {
@@ -89,7 +97,10 @@ describe.skipIf(FB_MODE)('the session cookie gets a partitioned twin in cross-si
     expect(bad.headers.location).toMatch(/\/login/);
   });
 
-  it('a fetch from inside the frame re-sets only the plain cookie — no copy', async () => {
+  it('a fetch from inside the frame re-sets BOTH, so neither jar is left behind (#314)', async () => {
+    // Also inverted by #314, and for the same reason: a fetch that rotates the
+    // session must not update one jar and not the other. Whatever writes the
+    // cookie writes both copies of it.
     const s = await server();
     const login = await s.inject({ method: 'POST', url: '/users', payload: signup(), headers: FRAMED_CROSS_SITE });
     const plain = sessionEntries(login)[0].split(';')[0];
@@ -98,7 +109,27 @@ describe.skipIf(FB_MODE)('the session cookie gets a partitioned twin in cross-si
     expect(res.statusCode).toBe(200);
     const c = sessionEntries(res);
     expect(c.length, 'session cookie re-set on the fetch').toBeGreaterThan(0);
-    expect(c.some((v) => /Partitioned/.test(v))).toBe(false);
+    const partitioned = c.filter((v) => /Partitioned/.test(v));
+    expect(partitioned, 'the twin is refreshed alongside the plain cookie').toHaveLength(1);
+    expect(partitioned[0].split(';')[0]).toBe(c[0].split(';')[0]);
+  });
+
+  it('the same-origin embed that creates the first-party twin (#314 trigger)', async () => {
+    // The step that made this reachable at all, recorded so the trigger is not
+    // lost: a trinket page loads /embed/<lang>/<id> in a SAME-ORIGIN iframe.
+    // wantsCopy's original comment reasoned that "no partitioned cookie is
+    // created in a first-party jar to go stale against the plain one" — true
+    // only if nothing same-origin is ever framed, which trinket does to itself.
+    const s = await server();
+    const login = await s.inject({ method: 'POST', url: '/users', payload: signup(), headers: TOP_LEVEL });
+    const plain = sessionEntries(login)[0].split(';')[0];
+    const res = await s.inject({
+      method: 'GET', url: '/home',
+      headers: Object.assign({ cookie: plain }, FRAMED_SAME_ORIGIN)
+    });
+    const c = sessionEntries(res);
+    expect(c.some((v) => /Partitioned/.test(v)),
+      'a same-origin frame writes a twin into the FIRST-PARTY jar').toBe(true);
   });
 
   it('a page the framed app navigates to (same-origin, still in the frame) keeps both jars in step', async () => {

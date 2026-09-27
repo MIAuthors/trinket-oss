@@ -42,17 +42,81 @@ describe('sessionCookie.partitionedCopies', () => {
 });
 
 describe('sessionCookie.wantsCopy', () => {
+  // Was "any navigation into a frame". That is now every response on a Secure
+  // deploy — see #314 and the comment on wantsCopy. The frame cases still hold;
+  // what changed is that top-level navigations get the copy too, which is what
+  // keeps the two jars from drifting apart.
   it('is true for any navigation into a frame — the launch and the pages after it', () => {
     expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'iframe' })).toBe(true);
     expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'iframe' })).toBe(true);
     expect(sessionCookie.wantsCopy({ 'sec-fetch-dest': 'frame' })).toBe(true);
   });
 
-  it('is false top-level, for fetches, and without the header', () => {
-    expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' })).toBe(false);
-    expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'empty' })).toBe(false);
-    expect(sessionCookie.wantsCopy({})).toBe(false);
-    expect(sessionCookie.wantsCopy(undefined)).toBe(false);
+  it('is ALSO true top-level, so a sign-in refreshes both jars (#314)', () => {
+    // A login is a top-level navigation. While this returned false there, the
+    // login response refreshed only the plain cookie and left the partitioned
+    // twin holding its pre-login value.
+    expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'document' })).toBe(true);
+    expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' })).toBe(true);
+    expect(sessionCookie.wantsCopy({})).toBe(true);
+    expect(sessionCookie.wantsCopy(undefined)).toBe(true);
+  });
+});
+
+// The relationship neither half was asserting (#314).
+//
+// wantsCopy and dedupe were each correct to their own spec, and the integration
+// test covered "a frame navigation gets the copy" and "a top-level sign-in sets
+// it once". Nothing covered the state every trinket user reaches by opening one
+// trinket: a first-party partitioned twin ALREADY EXISTS (trinket embeds itself
+// in a same-origin iframe), and then the plain cookie is updated by a login.
+//
+// dedupe keeps whichever cookie the browser lists first, and browsers order the
+// Cookie header by creation time, not by which was updated last. So the twin
+// created first wins for the rest of the session — a login that succeeded
+// server-side and an anonymous page immediately after.
+describe('the two jars cannot drift apart (#314)', () => {
+  const SESSION_NAME = 'session';
+  const OLD = 'session=Fe26.2**OLD; Secure; HttpOnly; SameSite=None; Path=/';
+  const NEW = 'session=Fe26.2**NEW; Secure; HttpOnly; SameSite=None; Path=/';
+
+  // The trigger: a same-origin iframe — trinket embedding trinket — must be a
+  // context that gets a copy, which is how the first-party twin appears at all.
+  it('a same-origin iframe does get a copy, so the twin is real', () => {
+    expect(sessionCookie.wantsCopy({ 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'iframe' })).toBe(true);
+    expect(sessionCookie.partitionedCopies([OLD], SESSION_NAME)).toEqual([OLD + '; Partitioned']);
+  });
+
+  it('a later top-level update copies too, so both jars move together', () => {
+    // The login response. Before the fix wantsCopy was false here and only the
+    // plain cookie was re-issued.
+    const login = { 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'document' };
+    expect(sessionCookie.wantsCopy(login)).toBe(true);
+
+    const emitted = [NEW].concat(sessionCookie.partitionedCopies([NEW], SESSION_NAME));
+    expect(emitted).toEqual([NEW, NEW + '; Partitioned']);
+
+    // Both jars now hold the NEW value, so whichever one the browser lists
+    // first, dedupe hands the session that was just established to yar.
+    const asSentOldFirst = 'session=Fe26.2**NEW; session=Fe26.2**NEW';
+    const conflicts = [];
+    expect(sessionCookie.dedupe(asSentOldFirst, SESSION_NAME, (k, d) => conflicts.push([k, d])))
+      .toBe('session=Fe26.2**NEW');
+    expect(conflicts, 'identical twins must not even be reported as a conflict').toEqual([]);
+  });
+
+  it('REGRESSION: a stale twin listed first would take over the session', () => {
+    // What the bug looked like. Kept as the statement of what must not recur:
+    // if the jars are ever allowed to diverge, dedupe picks by POSITION and the
+    // pre-login value wins.
+    const conflicts = [];
+    const kept = sessionCookie.dedupe(
+      'session=Fe26.2**OLD; session=Fe26.2**NEW', SESSION_NAME,
+      (k, d) => conflicts.push([k, d]));
+
+    expect(kept, 'position, not recency — this is why both jars must be written together')
+      .toBe('session=Fe26.2**OLD');
+    expect(conflicts).toEqual([['Fe26.2**OLD', 'Fe26.2**NEW']]);
   });
 });
 
