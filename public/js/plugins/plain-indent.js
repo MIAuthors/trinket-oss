@@ -31,6 +31,13 @@
     return new Array(n + 1).join(' ');
   }
 
+  // How many leading characters one outdent removes from `text`: a single tab,
+  // or up to `unit` spaces. (Enter keeps tabs, so tab-indented code happens.)
+  function outdentWidth(text, unit) {
+    if (text.charAt(0) === '\t') return 1;
+    return Math.min(unit, /^ */.exec(text)[0].length);
+  }
+
   // Enter: the new line starts with the current line's indentation, one level
   // deeper after a line ending in ':' (Python-like languages), one level
   // shallower after return/pass/break/continue/raise. Returns the edit that
@@ -44,10 +51,11 @@
 
     if (opts && COLON_BLOCKS.indexOf(opts.lang) >= 0) {
       if (/:$/.test(code)) {
-        indent += spaces(unit);
+        // Follow the line's own style: a tab-indented block goes one tab deeper.
+        indent += /\t$/.test(indent) ? '\t' : spaces(unit);
       }
       else if (BLOCK_EXIT.test(code) && indent.length) {
-        indent = indent.slice(0, Math.max(0, indent.length - unit));
+        indent = indent.slice(0, indent.length - outdentWidth(indent.split('').reverse().join(''), unit));
       }
     }
 
@@ -77,7 +85,7 @@
       , out = lines.map(function(line, i) {
           var change;
           if (outdent) {
-            change = -Math.min(unit, /^ */.exec(line)[0].length);
+            change = -outdentWidth(line, unit);
             line = line.slice(-change);
           }
           else {

@@ -33,6 +33,13 @@ describe('Enter', () => {
     expect(P.enter(top, 4, 4, PY).text).toBe('\n');
   });
 
+  it('follows tab indentation instead of mixing in spaces', () => {
+    const v = '\tif x:';
+    expect(P.enter(v, v.length, v.length, PY).text).toBe('\n\t\t');
+    const w = 'def f():\n\t\treturn 1';
+    expect(P.enter(w, w.length, w.length, PY).text).toBe('\n\t');
+  });
+
   it('uses the viewer\'s indent size', () => {
     const v = 'if x:';
     expect(P.enter(v, v.length, v.length, { lang: 'python3', tabSize: 2 }).text).toBe('\n  ');
@@ -82,6 +89,16 @@ describe('Tab and Shift-Tab', () => {
     const e = P.tab(v, caret, caret, { tabSize: 4, shift: true });
     expect(apply(v, e)).toBe('x\n  y');
     expect(e.select).toEqual([caret - 4, caret - 4]);
+  });
+
+  it('Shift-Tab outdents a tab-indented line too (Enter keeps tabs, so they happen)', () => {
+    const v = '\tfoo';
+    const e = P.tab(v, v.length, v.length, { tabSize: 4, shift: true });
+    expect(e).not.toBeNull();
+    expect(apply(v, e)).toBe('foo');
+    expect(e.select).toEqual([3, 3]);
+    const w = '\t\tbar\n\t  baz';    // one tab per line, then spaces
+    expect(apply(w, P.tab(w, 0, w.length, { tabSize: 4, shift: true }))).toBe('\tbar\n  baz');
   });
 
   it('Shift-Tab removes only what is there, and does nothing on an unindented line', () => {
