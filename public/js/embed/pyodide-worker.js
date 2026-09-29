@@ -801,8 +801,40 @@
       '    _plt.show()'
     ].join('\n');
 
-    function usesMatplotlib(src) {
-      return /(^|\n)\s*(import|from)\s+[^\n#]*\bmatplotlib\b/.test(src || '');
+    // Twin of loadImportsFromFiles() in pyodide.js (#316): load what ANY .py
+    // file imports, scanned per file and unioned so one file's syntax error
+    // cannot hide the others' imports. `src` is the main program as it will
+    // run (possibly transformed); msg.files also carries main.py, and scanning
+    // it twice is harmless.
+    function loadImportsFromSources(src, files) {
+      var names = {};
+      var scan = function(text) {
+        try {
+          var found = pyodide.code.find_imports(text || '');
+          var list = (found && typeof found.toJs === 'function') ? found.toJs() : (found || []);
+          if (found && typeof found.destroy === 'function') found.destroy();
+          list.forEach(function(n) {
+            if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
+          });
+        } catch (e) {}
+      };
+      scan(src);
+      if (files) {
+        for (var name in files) {
+          if (!Object.prototype.hasOwnProperty.call(files, name)) continue;
+          if (!/\.py$/.test(name)) continue;
+          scan(files[name]);
+        }
+      }
+      var union = Object.keys(names).map(function(n) { return 'import ' + n; }).join('\n');
+      return pyodide.loadPackagesFromImports(union);
+    }
+
+    // Twin of matplotlibLoaded() in pyodide.js: asked of THIS interpreter after
+    // the load, never guessed from the text (#316).
+    function matplotlibLoaded() {
+      return !!(pyodide && pyodide.loadedPackages &&
+                Object.prototype.hasOwnProperty.call(pyodide.loadedPackages, 'matplotlib'));
     }
 
     // ---- the REPL, in the worker -------------------------------------------
@@ -935,7 +967,9 @@
       // on the first run of that worker, always.
       var wantsWrap = !msg.vpython;
 
-      var mpl = usesMatplotlib(source);
+      // Assigned after the load below, not here: what loaded decides it (#316).
+      // Declared out here because MPL_FLUSH reads it after the program runs.
+      var mpl = false;
 
       // The wheel install comes FIRST and the source preparation is built after
       // it resolves, so micropip's runPythonAsync never interleaves with the
@@ -948,7 +982,8 @@
           // pandas, …) must be installed here too — the worker has its own
           // interpreter, so the main thread's loadPackagesFromImports does not
           // help it.
-          return pyodide.loadPackagesFromImports(src).then(function() {
+          return loadImportsFromSources(src, msg.files).then(function() {
+            mpl = matplotlibLoaded();
             // The figure size used to be computed here from msg.graphicWidth,
             // once, before the program ran. The pane is now fitted by scaling
             // figure.dpi after the figure exists (handle_trinket_pane_fit in
