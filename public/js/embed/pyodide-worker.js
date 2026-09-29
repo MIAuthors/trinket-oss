@@ -807,25 +807,38 @@
     // run (possibly transformed); msg.files also carries main.py, and scanning
     // it twice is harmless.
     function loadImportsFromSources(src, files) {
-      var names = {};
-      var scan = function(text) {
-        try {
-          var found = pyodide.code.find_imports(text || '');
-          var list = (found && typeof found.toJs === 'function') ? found.toJs() : (found || []);
-          if (found && typeof found.destroy === 'function') found.destroy();
-          list.forEach(function(n) {
-            if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
-          });
-        } catch (e) {}
-      };
-      scan(src);
+      var sources = [src || ''];
       if (files) {
         for (var name in files) {
           if (!Object.prototype.hasOwnProperty.call(files, name)) continue;
           if (!/\.py$/.test(name)) continue;
-          scan(files[name]);
+          sources.push(files[name]);
         }
       }
+      // Through pyimport, as on the page: 0.28.1 has no `pyodide.code` on the
+      // JS object. Without the scanner, fall back to one load per source.
+      var names = {}, mod = null, findImports = null;
+      try {
+        mod = pyodide.pyimport('pyodide.code');
+        findImports = mod.find_imports;
+      } catch (e) {
+        if (mod) { try { mod.destroy(); } catch (e2) {} }
+        console.warn('find_imports unavailable; loading imports file by file', e);
+        return sources.reduce(function(p, text) {
+          return p.then(function() { return pyodide.loadPackagesFromImports(text); });
+        }, Promise.resolve());
+      }
+      sources.forEach(function(text) {
+        var found = null;
+        try {
+          found = findImports(text);
+          found.toJs().forEach(function(n) {
+            if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
+          });
+        } catch (e) {}
+        if (found) { try { found.destroy(); } catch (e) {} }
+      });
+      try { findImports.destroy(); mod.destroy(); } catch (e) {}
       var union = Object.keys(names).map(function(n) { return 'import ' + n; }).join('\n');
       return pyodide.loadPackagesFromImports(union);
     }

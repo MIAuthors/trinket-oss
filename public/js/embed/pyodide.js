@@ -1035,19 +1035,36 @@ function syncFilesToFS(files, main) {
 // making that synthesized source itself unparseable. Non-.py files are skipped
 // here as they are by the FS write. The worker has its own copy of this
 // (pyodide-worker.js, loadImportsFromSources): it is a separate script.
+//
+// find_imports is reached through pyimport: 0.28.1 has NO `pyodide.code` on
+// the JS object (measured -- it is undefined), only the Python module. If the
+// scanner cannot be had at all, each file goes to loadPackagesFromImports on
+// its own instead, which is slower but still per file; a scan that silently
+// loaded nothing would bring back every symptom of #316.
 function loadImportsFromFiles(files) {
-  var names = {}, key, found, list;
-  for (key in files) {
-    if (!files.hasOwnProperty(key) || !/\.py$/.test(key)) continue;
+  var keys = Object.keys(files || {}).filter(function(k) { return /\.py$/.test(k); });
+  var names = {}, mod = null, findImports = null;
+  try {
+    mod = pyodide.pyimport('pyodide.code');
+    findImports = mod.find_imports;
+  } catch (e) {
+    if (mod) { try { mod.destroy(); } catch (e2) {} }
+    console.warn('find_imports unavailable; loading imports file by file', e);
+    return keys.reduce(function(p, k) {
+      return p.then(function() { return pyodide.loadPackagesFromImports(files[k]); });
+    }, Promise.resolve());
+  }
+  keys.forEach(function(k) {
+    var found = null;
     try {
-      found = pyodide.code.find_imports(files[key]);
-      list = (found && typeof found.toJs === 'function') ? found.toJs() : (found || []);
-      if (found && typeof found.destroy === 'function') found.destroy();
-      list.forEach(function(n) {
+      found = findImports(files[k]);
+      found.toJs().forEach(function(n) {
         if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
       });
     } catch (e) {}
-  }
+    if (found) { try { found.destroy(); } catch (e) {} }
+  });
+  try { findImports.destroy(); mod.destroy(); } catch (e) {}
   var src = Object.keys(names).map(function(n) { return 'import ' + n; }).join('\n');
   return pyodide.loadPackagesFromImports(src);
 }
