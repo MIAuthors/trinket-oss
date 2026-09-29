@@ -63,6 +63,8 @@ async function canvasesOutsidePane(page) {
 }
 
 async function expectFigureInPane(page) {
+  // The pane now opens when a figure is shown, not before the run (#316).
+  await expect(page.locator('#graphic-wrap')).toBeVisible({ timeout: 60_000 });
   await expect.poll(() => paintedInPane(page), { timeout: 60_000 }).toBeGreaterThan(500);
   expect(await canvasesOutsidePane(page), 'no figure drawn over the page (#21)').toBe(0);
 }
@@ -129,8 +131,9 @@ test.describe('#316 across runs in one main-thread session', () => {
 
     await runSrc("import console\nname = console.input('NAME? ')\nprint('HI', repr(name))\n");
     await expect.poll(() => consoleText(page), { timeout: 60_000 }).toContain('NAME?');
-    // Un-transformed, console.input returns a coroutine and the program runs
-    // straight to its print without waiting.
+    // Un-transformed, console.input returns a coroutine that never runs, so
+    // NAME? is never printed and the poll above is what fails. This line
+    // catches the other half: the program must be WAITING, not finished.
     await page.waitForTimeout(1500);
     expect(await consoleText(page)).not.toContain('HI');
   });

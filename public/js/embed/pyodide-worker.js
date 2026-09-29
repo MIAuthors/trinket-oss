@@ -535,12 +535,13 @@
       // __init__ rewrites figure._original_dpi.
       "matplotlib.rcParams['savefig.dpi'] = 300",
       'import matplotlib.pyplot as _plt, io as _io, base64 as _b64, js as _js, json as _json, os as _os',
-      // Figures belong to a RUN, and MPL_SETUP runs once per run (see the
-      // loadPackagesFromImports chain below), so this sits exactly where
-      // _plt.close('all') sits in the main thread's MATPLOTLIB_SETUP_CODE and
-      // gives the two runtimes the same figure lifetime: cleared when the next
-      // PLOTTING run starts, not at the end of the run that drew it, so the
-      // toolbar's Save still has a figure to deliver in between.
+      // Figures belong to a RUN, and MPL_SETUP runs at the start of every run
+      // once matplotlib is loaded in this worker (see the load chain below,
+      // #316), so this sits exactly where _plt.close('all') sits in the main
+      // thread's MATPLOTLIB_SETUP_CODE and gives the two runtimes the same
+      // figure lifetime: cleared when the next run starts, not at the end of
+      // the run that drew it, so the toolbar's Save still has a figure to
+      // deliver in between.
       //
       // Without it, pyplot keeps the previous run's figure while
       // _trinket_managers below is reset -- so run two draws on top of run one
@@ -817,30 +818,34 @@
       }
       // Through pyimport, as on the page: 0.28.1 has no `pyodide.code` on the
       // JS object. Without the scanner, fall back to one load per source.
-      var names = {}, mod = null, findImports = null;
+      var names = {}, direct = [], mod = null, findImports = null;
       try {
         mod = pyodide.pyimport('pyodide.code');
         findImports = mod.find_imports;
-      } catch (e) {
-        if (mod) { try { mod.destroy(); } catch (e2) {} }
-        console.warn('find_imports unavailable; loading imports file by file', e);
-        return sources.reduce(function(p, text) {
-          return p.then(function() { return pyodide.loadPackagesFromImports(text); });
-        }, Promise.resolve());
+      } catch (e) {}
+      if (typeof findImports !== 'function') {
+        console.warn('find_imports unavailable; loading imports file by file');
+        direct = sources.slice();
+      } else {
+        sources.forEach(function(text) {
+          var found = null;
+          try {
+            found = findImports(text);
+            found.toJs().forEach(function(n) {
+              if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
+            });
+          } catch (e) {
+            direct.push(text);    // load it the old way rather than drop it
+          }
+          if (found) { try { found.destroy(); } catch (e) {} }
+        });
       }
-      sources.forEach(function(text) {
-        var found = null;
-        try {
-          found = findImports(text);
-          found.toJs().forEach(function(n) {
-            if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
-          });
-        } catch (e) {}
-        if (found) { try { found.destroy(); } catch (e) {} }
-      });
-      try { findImports.destroy(); mod.destroy(); } catch (e) {}
+      try { if (findImports) findImports.destroy(); } catch (e) {}
+      try { if (mod) mod.destroy(); } catch (e) {}
       var union = Object.keys(names).map(function(n) { return 'import ' + n; }).join('\n');
-      return pyodide.loadPackagesFromImports(union);
+      return direct.reduce(function(p, text) {
+        return p.then(function() { return pyodide.loadPackagesFromImports(text); });
+      }, pyodide.loadPackagesFromImports(union));
     }
 
     // Twin of matplotlibLoaded() in pyodide.js: asked of THIS interpreter after

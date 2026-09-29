@@ -38,8 +38,8 @@ var VPYTHON_ZIP_URL = assetUrl('/js/embed/wvpython/vpython.zip');
 // side alone is a run-time 404 with nothing pointing at the cause.
 var VPYTHON_WHEEL_NAME = 'vpython-7.6.6.dev0-py3-none-any.whl';
 
-// Python code injected before user code runs each time a matplotlib program
-// executes.  Pyodide 0.28+ ships a Pyodide-patched WebAgg backend that reads
+// Python code injected before user code runs, on every run once matplotlib is
+// loaded in the page's interpreter (matplotlibLoaded(), #316).  Pyodide 0.28+ ships a Pyodide-patched WebAgg backend that reads
 // document.pyodideMplTarget (set by JS below) so figures land in #graphic,
 // and wires the full interactive toolbar + 3D mouse-orbit automatically.
 // plt.close('all') ensures stale figures from a previous run don't resurface.
@@ -1038,35 +1038,45 @@ function syncFilesToFS(files, main) {
 //
 // find_imports is reached through pyimport: 0.28.1 has NO `pyodide.code` on
 // the JS object (measured -- it is undefined), only the Python module. If the
-// scanner cannot be had at all, each file goes to loadPackagesFromImports on
-// its own instead, which is slower but still per file; a scan that silently
-// loaded nothing would bring back every symptom of #316.
+// scanner cannot be had, or one file fails to scan, those files go to
+// loadPackagesFromImports on their own instead, which is slower but still per
+// file; a scan that silently loaded nothing would bring back every symptom of
+// #316.
 function loadImportsFromFiles(files) {
   var keys = Object.keys(files || {}).filter(function(k) { return /\.py$/.test(k); });
-  var names = {}, mod = null, findImports = null;
+  var names = {}, direct = [], mod = null, findImports = null;
   try {
     mod = pyodide.pyimport('pyodide.code');
     findImports = mod.find_imports;
-  } catch (e) {
-    if (mod) { try { mod.destroy(); } catch (e2) {} }
-    console.warn('find_imports unavailable; loading imports file by file', e);
-    return keys.reduce(function(p, k) {
-      return p.then(function() { return pyodide.loadPackagesFromImports(files[k]); });
-    }, Promise.resolve());
+  } catch (e) {}
+  if (typeof findImports !== 'function') {
+    // Covers a missing module AND a module without find_imports, which is an
+    // attribute miss (undefined), not a throw.
+    console.warn('find_imports unavailable; loading imports file by file');
+    direct = keys.map(function(k) { return files[k]; });
+  } else {
+    keys.forEach(function(k) {
+      var found = null;
+      try {
+        found = findImports(files[k]);
+        found.toJs().forEach(function(n) {
+          if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
+        });
+      } catch (e) {
+        // Anything but a clean scan loads that file the old way, rather than
+        // silently contributing nothing. (Unparseable source is not an error
+        // here: find_imports returns [] for it.)
+        direct.push(files[k]);
+      }
+      if (found) { try { found.destroy(); } catch (e) {} }
+    });
   }
-  keys.forEach(function(k) {
-    var found = null;
-    try {
-      found = findImports(files[k]);
-      found.toJs().forEach(function(n) {
-        if (/^[A-Za-z_][\w.]*$/.test(n)) names[n] = true;
-      });
-    } catch (e) {}
-    if (found) { try { found.destroy(); } catch (e) {} }
-  });
-  try { findImports.destroy(); mod.destroy(); } catch (e) {}
+  try { if (findImports) findImports.destroy(); } catch (e) {}
+  try { if (mod) mod.destroy(); } catch (e) {}
   var src = Object.keys(names).map(function(n) { return 'import ' + n; }).join('\n');
-  return pyodide.loadPackagesFromImports(src);
+  return direct.reduce(function(p, text) {
+    return p.then(function() { return pyodide.loadPackagesFromImports(text); });
+  }, pyodide.loadPackagesFromImports(src));
 }
 
 // Whether matplotlib's render target and backend need setting up, decided by
@@ -1683,8 +1693,13 @@ function runVpython(prog) {
     );
   }).then(function() {
     // Load bundled packages any of the program's files import (numpy,
-    // matplotlib, …).
-    return loadImportsFromFiles(editor.getAllFiles());
+    // matplotlib, …). The main file is scanned with its "Web VPython 3.2"
+    // header commented out, as it will run below: with the header in place it
+    // does not parse, find_imports returns [] and none of main's imports load.
+    var files = editor.getAllFiles(), scan = {};
+    Object.keys(files).forEach(function(k) { scan[k] = files[k]; });
+    scan[mainFile] = (prog || '').replace(/^(\s*(Web\s+VPython|GlowScript)\b)/i, '#$1');
+    return loadImportsFromFiles(scan);
   }).then(function() {
     // A VPython program can also plot. Without this, matplotlib falls back to
     // its default target and the figure floats loose in the page next to the
@@ -3450,8 +3465,10 @@ function runStepThrough(defer) {
     return loadImportsFromFiles(files).then(function() {
       if (debugCancelled || running) return null; // cancelled, or a normal run got in first
       var setup = Promise.resolve();
-      // No showGraphic() here: the recording pass draws through _trinket_show,
-      // which opens the pane when a figure is actually shown (#316).
+      // No showGraphic() here: a plt.show() in the recording pass goes through
+      // _trinket_show, which opens the pane when a figure is actually shown
+      // (#316). fig.show() bypasses it -- and fails with "mpl is not defined"
+      // on origin/main as well, since the initialize() it needs is in there too.
       if (matplotlibLoaded()) {
         window.document.pyodideMplTarget = document.getElementById('graphic');
         setup = pyodide.runPythonAsync(MATPLOTLIB_SETUP_CODE);
