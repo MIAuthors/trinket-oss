@@ -17,9 +17,10 @@ const { test, expect } = require('@playwright/test');
 // has its own load site. A regex-only fix passes `pylab` and fails the rest;
 // a scan-only fix passes `helper` and fails `transitive` and `typo`.
 //
-// Lives in specs/, which browser-smoke.yml runs, so CI guards it. CI runs the
-// default flags, where the Step through cases skip; they run on a stack with
-// stepDebugger + variableExplorer on.
+// Lives in specs/, the suite browser-smoke.yml runs. That workflow runs on a
+// manual dispatch or a deploy-* tag, NOT on pull requests, so a PR's checks do
+// not exercise this file. It runs the default flags, where the Step through
+// cases skip; they run on a stack with stepDebugger + variableExplorer on.
 //
 // Multi-file programs are passed in the #code fragment, which the embed splits
 // on ----{name}---- lines. Every case loads a fresh page: goto with a new
