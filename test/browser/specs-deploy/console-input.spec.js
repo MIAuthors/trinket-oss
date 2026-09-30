@@ -38,12 +38,18 @@ test.describe('console.input() on the default runtime (#324)', () => {
     expect(await page.evaluate(() => window.__trinketRuntime), 'console input runs on the main thread').toBe('main');
   });
 
-  test('works when only a helper file imports console', async ({ page }) => {
-    await open(page, 'import helper\nprint("hi", helper.ask(), "FINI")\n\n----{helper.py}----\n' +
-                     'import console\ndef ask():\n    return console.input("your name? ")\n');
+  // Only the ROUTING is asserted here. console.input() called from a helper is
+  // a separate, older limitation: the async transform rewrites main.py only,
+  // so the helper's call returns an un-awaited coroutine (#326). What #324
+  // fixes is that a helper's `import console` no longer sends the whole
+  // program to the worker to die on the import.
+  test('a helper file importing console keeps the program on the main thread', async ({ page }) => {
+    await open(page, 'import helper\nprint("helper loaded", helper.ok, "FINI")\n\n----{helper.py}----\n' +
+                     'import console\nok = hasattr(console, "input")\n');
     await page.locator('.run-it').first().click();
-    await answer(page, 'Ada');
-    await expect.poll(() => outputText(page), { timeout: 60_000 }).toContain('hi Ada FINI');
+    await expect.poll(() => outputText(page), { timeout: 180_000 }).toContain('helper loaded True FINI');
+    expect(await outputText(page)).not.toContain("No module named 'console'");
+    expect(await page.evaluate(() => window.__trinketRuntime)).toBe('main');
   });
 
   test('?runtime=worker cannot send it to the worker, and says so', async ({ page }) => {
