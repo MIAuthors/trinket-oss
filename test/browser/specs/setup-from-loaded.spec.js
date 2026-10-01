@@ -17,6 +17,11 @@ const { test, expect } = require('@playwright/test');
 // has its own load site. A regex-only fix passes `pylab` and fails the rest;
 // a scan-only fix passes `helper` and fails `transitive` and `typo`.
 //
+// Lives in specs/, the suite browser-smoke.yml runs. That workflow runs on a
+// manual dispatch or a deploy-* tag, NOT on pull requests, so a PR's checks do
+// not exercise this file. It runs the default flags, where the Step through
+// cases skip; they run on a stack with stepDebugger + variableExplorer on.
+//
 // Multi-file programs are passed in the #code fragment, which the embed splits
 // on ----{name}---- lines. Every case loads a fresh page: goto with a new
 // fragment alone does NOT reload an embed, so each test starts from about:blank.
@@ -34,6 +39,13 @@ async function open(page, runtime, src) {
   await page.goto('about:blank');
   await page.goto('/embed/python3?runtime=' + runtime + '#code=' + encodeURIComponent(src));
   await expect(page.locator('.ace_editor').first()).toBeVisible();
+}
+
+// Run-while-running is ignored for an ordinary program (runCode), and the
+// sentinel prints BEFORE the post-run flush and finishRun(). finishRun hides
+// Stop, so that is the completion signal to wait on before the next Run.
+async function waitForRunEnd(page) {
+  await expect(page.locator('.stop-it').first()).toBeHidden({ timeout: 60_000 });
 }
 
 async function consoleText(page) {
@@ -124,9 +136,11 @@ test.describe('#316 across runs in one main-thread session', () => {
     };
     await page.locator('.run-it').first().click();
     await expect.poll(() => consoleText(page), { timeout: 180_000 }).toContain('FINI');
+    await waitForRunEnd(page);
 
     await runSrc("print('ONLY PRINTING')\n");
     await expect.poll(() => consoleText(page), { timeout: 60_000 }).toContain('ONLY PRINTING');
+    await waitForRunEnd(page);
     await expect(page.locator('#graphic-wrap')).toHaveClass(/hide/);
 
     await runSrc("import console\nname = console.input('NAME? ')\nprint('HI', repr(name))\n");

@@ -1647,7 +1647,7 @@ function ensureConsoleTransform() {
 // Deliberately NOT routed through runProgram(): typeset math output covers the
 // plain run and worker paths in slice 1 only. See slice 2 in
 // docs/superpowers/plans/2026-09-04-sympy-math-output.md.
-function runVpython(prog) {
+function runVpython(prog, files) {
   // No trailing newline: completed with "ready" once the library and bridge are
   // loaded, so the ellipsis never lingers as if it were still working (#27).
   openRuntimeLine('Loading VPython (GlowScript)… ');
@@ -1696,7 +1696,9 @@ function runVpython(prog) {
     // matplotlib, …). The main file is scanned with its "Web VPython 3.2"
     // header commented out, as it will run below: with the header in place it
     // does not parse, find_imports returns [] and none of main's imports load.
-    var files = editor.getAllFiles(), scan = {};
+    // `files` is startRun's snapshot, the one syncFilesToFS wrote, so an edit
+    // made while glow loads cannot make the scan disagree with what imports.
+    var scan = {};
     Object.keys(files).forEach(function(k) { scan[k] = files[k]; });
     scan[mainFile] = (prog || '').replace(/^(\s*(Web\s+VPython|GlowScript)\b)/i, '#$1');
     return loadImportsFromFiles(scan);
@@ -5706,7 +5708,7 @@ function startRun() {
     // vpython bridge + async rewriting, rendering 3D into the graphic pane.
     if (usesVPython(prog)) {
       runningIsVpython = true;  // mark cancellable so Run-while-running restarts
-      return runVpython(prog);
+      return runVpython(prog, files);
     }
 
     // No "Loading packages…" line of our own: Pyodide narrates installs itself
