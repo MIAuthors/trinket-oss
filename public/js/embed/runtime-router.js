@@ -58,12 +58,26 @@
   // #324: the inline console input (#86: `import console`, console.input())
   // exists only on the main thread; the worker has no `console` module, so a
   // program that imports it dies there with "No module named 'console'".
-  function usesConsole(src) {
-    return /^[ \t]*(?:import[ \t]+(?:[\w.]+(?:[ \t]+as[ \t]+\w+)?[ \t]*,[ \t]*)*console\b(?![\w.])|from[ \t]+console[ \t]+import\b)/m
-      .test(stripLiterals(src));
+  //
+  // Two rules, one source. importsConsoleModule() is the plain `import ...
+  // console ...` forms -- exactly what the main thread's console.input()
+  // rewrite handles, so pyodide.js gates that rewrite on it too (#325 review:
+  // its own narrower regex missed `import sys, console`). usesConsole() adds
+  // `from console import ...`, which still needs the page but is deliberately
+  // not rewritten there (pyodide.js says why).
+  var IMPORTS_CONSOLE = /^[ \t]*import[ \t]+(?:[\w.]+(?:[ \t]+as[ \t]+\w+)?[ \t]*,[ \t]*)*console\b(?![\w.])/m;
+  var FROM_CONSOLE    = /^[ \t]*from[ \t]+console[ \t]+import\b/m;
+
+  function importsConsoleModule(src) {
+    return IMPORTS_CONSOLE.test(stripLiterals(src));
   }
 
-  // options: { usesVPython, usesConsole, workerEnabled, workerVPython, queryRuntime, storedRuntime }
+  function usesConsole(src) {
+    var code = stripLiterals(src);
+    return IMPORTS_CONSOLE.test(code) || FROM_CONSOLE.test(code);
+  }
+
+  // options: { usesVPython, usesConsole, shadowsConsole, workerEnabled, workerVPython, queryRuntime, storedRuntime }
   // usesConsole lets the page report an import in ANY file (a helper, say);
   // `source` is only the main file.
   function chooseRuntime(source, options) {
@@ -102,7 +116,9 @@
     // so neither the URL nor a stored setting may send such a program there.
     // (This sits below the workerVPython rule; a program using both VPython and
     // the console is not a combination #86 offers.)
-    if (opts.usesConsole || usesConsole(source)) {
+    // ...unless the trinket ships its own console.py: then `console` is the
+    // student's module, which the worker writes and runs like any other.
+    if (!opts.shadowsConsole && (opts.usesConsole || usesConsole(source))) {
       return { runtime: 'main', reason: 'console: console.input needs the page' };
     }
 
@@ -195,6 +211,7 @@
     chooseRuntime      : chooseRuntime,
     hasUnawaitableCall : hasUnawaitableCall,
     usesConsole        : usesConsole,
+    importsConsoleModule : importsConsoleModule,
     runtimeNotice      : runtimeNotice
   };
 

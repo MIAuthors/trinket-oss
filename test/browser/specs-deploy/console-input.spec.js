@@ -52,6 +52,32 @@ test.describe('console.input() on the default runtime (#324)', () => {
     expect(await page.evaluate(() => window.__trinketRuntime)).toBe('main');
   });
 
+  // Review finding: `console` imported after another module. Routed to the main
+  // thread, and the main thread must then also rewrite console.input() --
+  // otherwise it returns an un-awaited coroutine instead of prompting.
+  test('import sys, console: console.input() still prompts', async ({ page }) => {
+    await open(page, 'import sys, console\nname = console.input("your name? ")\nprint("hi", name, "FINI")\n');
+    await page.locator('.run-it').first().click();
+    // Fail fast on the broken shape (a coroutine printed, no prompt) rather
+    // than waiting out answer()'s timeout.
+    await expect.poll(async () => (await page.locator('#console-output.console-active').count()) > 0
+      || /coroutine/.test(await outputText(page)), { timeout: 180_000 }).toBe(true);
+    expect(await outputText(page)).not.toMatch(/coroutine/);
+    await answer(page, 'Ada');
+    await expect.poll(() => outputText(page), { timeout: 60_000 }).toContain('hi Ada FINI');
+  });
+
+  // Review finding: a trinket's OWN console.py is the student's module, not
+  // the inline input, and the worker runs it; the console rule must not
+  // override ?runtime=worker for it.
+  test('a trinket with its own console.py can still run on the worker', async ({ page }) => {
+    await open(page, 'import console\nprint(console.hello(), "FINI")\n\n----{console.py}----\n' +
+                     'def hello():\n    return "mine"\n', '?runtime=worker');
+    await page.locator('.run-it').first().click();
+    await expect.poll(() => outputText(page), { timeout: 180_000 }).toContain('mine FINI');
+    expect(await page.evaluate(() => window.__trinketRuntime)).toBe('worker');
+  });
+
   test('?runtime=worker cannot send it to the worker, and says so', async ({ page }) => {
     await open(page, 'import console\nname = console.input("your name? ")\nprint("hi", name, "FINI")\n', '?runtime=worker');
     await page.locator('.run-it').first().click();

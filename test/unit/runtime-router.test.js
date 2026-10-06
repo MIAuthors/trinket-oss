@@ -371,4 +371,39 @@ describe('the console module keeps a program on the main thread (#324)', () => {
   it('leaves an ordinary program on the worker', () => {
     expect(chooseRuntime('print("console")', OPTS).runtime).toBe('worker');
   });
+
+  // Review finding: a trinket that ships its own console.py imports THAT, not
+  // our inline-input module, and the worker runs it fine (pyodide-worker.js
+  // writes the file and drops the await rule). The console rule must not fire.
+  it('does not apply when the trinket ships its own console.py', () => {
+    const shadowed = { ...OPTS, shadowsConsole: true };
+    expect(chooseRuntime('import console\nconsole.hello()', shadowed).runtime).toBe('worker');
+    expect(chooseRuntime('import console', { ...shadowed, usesConsole: true }).runtime).toBe('worker');
+    expect(chooseRuntime('import console', { ...shadowed, queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+});
+
+// Review finding: the main thread's own gate for the console.input() rewrite
+// matched only `import console` as the first module, so `import sys, console`
+// was routed to main by usesConsole and then never rewritten there. One rule
+// for the `import` forms now serves both. `from console import input` stays
+// out of it on purpose (pyodide.js explains why: rewriting a bare input() would
+// also catch the builtin).
+describe('importsConsoleModule', () => {
+  const { importsConsoleModule } = require('../../public/js/embed/runtime-router.js');
+
+  it('matches every plain import of console', () => {
+    for (const src of ['import console', 'import sys, console', 'import console as c',
+                       'import math, console as c, os', '  import console  # in a block',
+                       'x = 1\nimport console\n']) {
+      expect(importsConsoleModule(src), src).toBe(true);
+    }
+  });
+
+  it('leaves out from-imports, lookalikes, strings and comments', () => {
+    for (const src of ['from console import input', 'import consoles', 'import console_utils',
+                       '# import console', 'print("import console")', "s = '''\nimport console\n'''"]) {
+      expect(importsConsoleModule(src), src).toBe(false);
+    }
+  });
 });
