@@ -62,16 +62,19 @@
     return { start: selStart, end: selEnd, text: '\n' + indent };
   }
 
-  // Tab / Shift-Tab. With no multi-line selection, Tab inserts one level at
-  // the caret. A selection spanning lines, or Shift-Tab, indents or outdents
-  // every line it touches; the edit then replaces those whole lines, and
-  // `select` says what to re-select afterwards.
+  // Tab / Shift-Tab. With nothing selected (or only whitespace), Tab inserts
+  // one level at the caret, replacing that whitespace. Any selection holding
+  // code -- even within one line -- or Shift-Tab indents or outdents every
+  // line it touches, as ACE and VS Code do (Copilot review on #320: a selected
+  // word used to be replaced by spaces); the edit then replaces those whole
+  // lines, and `select` says what to re-select afterwards.
   function tab(value, selStart, selEnd, opts) {
     var unit = (opts && opts.tabSize) || 2
       , outdent = !!(opts && opts.shift)
-      , multi = value.slice(selStart, selEnd).indexOf('\n') >= 0;
+      , selected = value.slice(selStart, selEnd)
+      , multi = selected.indexOf('\n') >= 0;
 
-    if (!outdent && !multi) {
+    if (!outdent && !multi && !/\S/.test(selected)) {
       return { start: selStart, end: selEnd, text: spaces(unit) };
     }
 
