@@ -78,6 +78,21 @@ describe('Tab and Shift-Tab', () => {
     expect(e.select).toEqual([0, 7]);
   });
 
+  // Copilot review on #320: Tab on a selection inside one line replaced the
+  // selected code with spaces. ACE and VS Code indent the line instead, and
+  // replace the selection only when it is nothing but whitespace.
+  it('Tab on a one-line selection of code indents its line and keeps the code selected', () => {
+    const v = 'x = abc';
+    const e = P.tab(v, 4, 7, { tabSize: 4 });
+    expect(apply(v, e)).toBe('    x = abc');
+    expect(e.select).toEqual([8, 11]);
+  });
+
+  it('Tab on a whitespace-only selection still replaces it, as ACE does', () => {
+    const v = 'a  b';
+    expect(apply(v, P.tab(v, 1, 3, { tabSize: 4 }))).toBe('a    b');
+  });
+
   it('a selection ending at the start of a line leaves that line alone', () => {
     const v = 'a\nb\nc';
     expect(apply(v, P.tab(v, 0, 4, { tabSize: 2 }))).toBe('  a\n  b\nc');
