@@ -324,6 +324,90 @@ describe('runtimeNotice with a stored setting', () => {
   });
 });
 
+// #324: the worker has no `console` module, so a console.input() program sent
+// there died with "No module named 'console'" — on every deploy with the
+// worker on, because nothing here looked for it.
+describe('the console module keeps a program on the main thread (#324)', () => {
+  const { usesConsole } = require('../../public/js/embed/runtime-router.js');
+
+  it('recognises every way of importing it', () => {
+    for (const src of ['import console', 'import sys, console', 'import console as c',
+                       'from console import input', '  import console  # indented, in a block',
+                       'x = 1\nimport console\n']) {
+      expect(usesConsole(src), src).toBe(true);
+    }
+  });
+
+  it('ignores lookalikes, strings and comments', () => {
+    for (const src of ['import console_utils', 'import consoles', '# import console',
+                       'print("import console")', "s = '''\nimport console\n'''", 'from consolex import y',
+                       'console = 3']) {
+      expect(usesConsole(src), src).toBe(false);
+    }
+  });
+
+  it('routes a console program to the main thread on a worker-default deploy', () => {
+    const r = chooseRuntime('import console\nname = console.input("? ")', OPTS);
+    expect(r.runtime).toBe('main');
+    expect(r.reason).toMatch(/console/);
+  });
+
+  it('also when only a helper file imports it (the page passes usesConsole)', () => {
+    const r = chooseRuntime('import helper\nhelper.ask()', { ...OPTS, usesConsole: true });
+    expect(r.runtime).toBe('main');
+  });
+
+  it('beats ?runtime=worker and a stored worker setting: the worker cannot run it at all', () => {
+    expect(chooseRuntime('import console', { ...OPTS, queryRuntime: 'worker' }).runtime).toBe('main');
+    expect(chooseRuntime('import console', { ...OPTS, storedRuntime: 'worker' }).runtime).toBe('main');
+  });
+
+  it('says why, since the student did not ask for the main thread', () => {
+    const r = chooseRuntime('import console', OPTS);
+    expect(runtimeNotice(r)).toMatch(/main thread.*console\.input/);
+    expect(runtimeNotice(r, 'worker')).toMatch(/runtime=worker could not be honoured/);
+  });
+
+  it('leaves an ordinary program on the worker', () => {
+    expect(chooseRuntime('print("console")', OPTS).runtime).toBe('worker');
+  });
+
+  // Review finding: a trinket that ships its own console.py imports THAT, not
+  // our inline-input module, and the worker runs it fine (pyodide-worker.js
+  // writes the file and drops the await rule). The console rule must not fire.
+  it('does not apply when the trinket ships its own console.py', () => {
+    const shadowed = { ...OPTS, shadowsConsole: true };
+    expect(chooseRuntime('import console\nconsole.hello()', shadowed).runtime).toBe('worker');
+    expect(chooseRuntime('import console', { ...shadowed, usesConsole: true }).runtime).toBe('worker');
+    expect(chooseRuntime('import console', { ...shadowed, queryRuntime: 'worker' }).runtime).toBe('worker');
+  });
+});
+
+// Review finding: the main thread's own gate for the console.input() rewrite
+// matched only `import console` as the first module, so `import sys, console`
+// was routed to main by usesConsole and then never rewritten there. One rule
+// for the `import` forms now serves both. `from console import input` stays
+// out of it on purpose (pyodide.js explains why: rewriting a bare input() would
+// also catch the builtin).
+describe('importsConsoleModule', () => {
+  const { importsConsoleModule } = require('../../public/js/embed/runtime-router.js');
+
+  it('matches every plain import of console', () => {
+    for (const src of ['import console', 'import sys, console', 'import console as c',
+                       'import math, console as c, os', '  import console  # in a block',
+                       'x = 1\nimport console\n']) {
+      expect(importsConsoleModule(src), src).toBe(true);
+    }
+  });
+
+  it('leaves out from-imports, lookalikes, strings and comments', () => {
+    for (const src of ['from console import input', 'import consoles', 'import console_utils',
+                       '# import console', 'print("import console")', "s = '''\nimport console\n'''"]) {
+      expect(importsConsoleModule(src), src).toBe(false);
+    }
+  });
+});
+
 // #321: the classic first-line header ("Web VPython 3.2", "GlowScript 3.2
 // VPython") is not Python. The main thread comments it out before running;
 // a VPython program sent to the worker must get the same treatment.
