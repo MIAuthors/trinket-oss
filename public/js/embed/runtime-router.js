@@ -55,7 +55,31 @@
     return false;
   }
 
-  // options: { usesVPython, workerEnabled, workerVPython, queryRuntime, storedRuntime }
+  // #324: the inline console input (#86: `import console`, console.input())
+  // exists only on the main thread; the worker has no `console` module, so a
+  // program that imports it dies there with "No module named 'console'".
+  //
+  // Two rules, one source. importsConsoleModule() is the plain `import ...
+  // console ...` forms -- exactly what the main thread's console.input()
+  // rewrite handles, so pyodide.js gates that rewrite on it too (#325 review:
+  // its own narrower regex missed `import sys, console`). usesConsole() adds
+  // `from console import ...`, which still needs the page but is deliberately
+  // not rewritten there (pyodide.js says why).
+  var IMPORTS_CONSOLE = /^[ \t]*import[ \t]+(?:[\w.]+(?:[ \t]+as[ \t]+\w+)?[ \t]*,[ \t]*)*console\b(?![\w.])/m;
+  var FROM_CONSOLE    = /^[ \t]*from[ \t]+console[ \t]+import\b/m;
+
+  function importsConsoleModule(src) {
+    return IMPORTS_CONSOLE.test(stripLiterals(src));
+  }
+
+  function usesConsole(src) {
+    var code = stripLiterals(src);
+    return IMPORTS_CONSOLE.test(code) || FROM_CONSOLE.test(code);
+  }
+
+  // options: { usesVPython, usesConsole, shadowsConsole, workerEnabled, workerVPython, queryRuntime, storedRuntime }
+  // usesConsole lets the page report an import in ANY file (a helper, say);
+  // `source` is only the main file.
   function chooseRuntime(source, options) {
     var opts = options || {};
     var stored = (opts.storedRuntime === 'worker' || opts.storedRuntime === 'main')
@@ -86,6 +110,16 @@
     // override that — off-thread it would simply fail to import.
     if (opts.usesVPython) {
       return { runtime: 'main', reason: 'vpython: bridge requires the window realm' };
+    }
+
+    // #324: console input likewise. The worker has no `console` module at all,
+    // so neither the URL nor a stored setting may send such a program there.
+    // (This sits below the workerVPython rule; a program using both VPython and
+    // the console is not a combination #86 offers.)
+    // ...unless the trinket ships its own console.py: then `console` is the
+    // student's module, which the worker writes and runs like any other.
+    if (!opts.shadowsConsole && (opts.usesConsole || usesConsole(source))) {
+      return { runtime: 'main', reason: 'console: console.input needs the page' };
     }
 
     // The URL is a deliberate, temporary act by whoever is holding it, and it
@@ -134,6 +168,7 @@
     'vpython: bridge requires the window realm'             : 'Web VPython draws on the page',
     'config: worker runtime disabled'                       : 'the stoppable runtime is off for this site',
     'await cannot be inserted in a lambda or comprehension' : 'input(), sleep() or rate() inside a lambda or comprehension',
+    'console: console.input needs the page'                 : 'console.input() reads from the page',
     'trinket setting: runtime=worker'                       : "this trinket's setting",
     'trinket setting: runtime=main'                         : "this trinket's setting"
   };
@@ -155,6 +190,7 @@
     var worthSaying = decision.runtime === 'worker'
                    || ignored
                    || decision.reason === 'await cannot be inserted in a lambda or comprehension'
+                   || decision.reason === 'console: console.input needs the page'
                    || decision.reason.indexOf('trinket setting:') === 0;
     if (!worthSaying) return '';
 
@@ -174,6 +210,8 @@
   var router = {
     chooseRuntime      : chooseRuntime,
     hasUnawaitableCall : hasUnawaitableCall,
+    usesConsole        : usesConsole,
+    importsConsoleModule : importsConsoleModule,
     runtimeNotice      : runtimeNotice
   };
 

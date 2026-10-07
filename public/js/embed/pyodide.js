@@ -1345,8 +1345,13 @@ function usesVPython(code) {
 // and it fails/misbehaves at runtime same as it always would have (previously
 // a clean `ModuleNotFoundError` since `console` didn't exist). This is a
 // known, documented gap, not an oversight.
+//
+// The rule itself lives in runtime-router.js, shared with the router that sends
+// these programs here: before #325's review this file had its own regex, which
+// missed `console` later in an import list (`import sys, console`), so such a
+// program was routed to the main thread and then never rewritten.
 function usesConsole(code) {
-  return /(^|\n)\s*import\s+console\b/.test(code);
+  return runtimeRouter.importsConsoleModule(code);
 }
 
 // A trinket that ships its own console.py shadows our inline-input module:
@@ -5666,6 +5671,12 @@ function startRun() {
   // api._trinket (not window.trinket) and why it's whitelisted client-side too.
   var decision = runtimeRouter.chooseRuntime(workerProgram, {
     usesVPython   : usesVPython(workerProgram),
+    // #324: any file, not just main — a helper can import console too.
+    usesConsole   : Object.keys(workerFiles).some(function(f) {
+      return /\.py$/.test(f) && runtimeRouter.usesConsole(workerFiles[f]);
+    }),
+    // ...but not when the trinket ships its own console.py (#325 review).
+    shadowsConsole : Object.prototype.hasOwnProperty.call(workerFiles, 'console.py'),
     workerEnabled : !!(window.trinket && window.trinket.config && window.trinket.config.workerRuntime),
     workerVPython : !!(window.trinket && window.trinket.config && window.trinket.config.workerVPython),
     queryRuntime  : queryRuntime,
