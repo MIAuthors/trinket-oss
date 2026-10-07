@@ -97,6 +97,19 @@ test.describe('exam mode', () => {
       await viewer.keyboard.press('ControlOrMeta+z');
       expect((await state()).value.endsWith('\n' + ' '.repeat(tabSize)), 'Ctrl-Z undoes the outdent').toBe(true);
 
+      // Copilot review on #320: Tab on a selection inside one line replaced the
+      // selected code with spaces. It must indent the line and keep the code.
+      await viewer.keyboard.type('y = abc');
+      const lineOf = (v) => v.slice(v.lastIndexOf('\n') + 1);
+      const lineBefore = lineOf((await state()).value);
+      await ta.evaluate((t) => t.setSelectionRange(t.value.length - 3, t.value.length));
+      await viewer.keyboard.press('Tab');
+      s = await state();
+      expect(lineOf(s.value), 'Tab on a selected word indents its line and keeps the word')
+        .toBe(' '.repeat(tabSize) + lineBefore);
+      expect(await ta.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd)), 'the word stays selected')
+        .toBe('abc');
+
       // The caret survives leaving the editor and coming back.
       const before = (await state()).caret;
       expect(before).toBeGreaterThan(0);
