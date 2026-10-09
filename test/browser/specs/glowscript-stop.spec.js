@@ -1,13 +1,17 @@
 const { test, expect } = require('@playwright/test');
 
 // The Web VPython (glowscript) Stop button, end to end against the real
-// runtime. Needs the local stack with the vendored 3.2.3 runtime
-// (test/browser/README.md). Spec:
-// docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
+// runtime. Needs the local stack built from this branch: the Dockerfile vendors
+// the 3.2.3 runtime and builds the CSS (test/browser/README.md covers the
+// stack). Spec: docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
 
 const LOOP = 'Web VPython 3.2\nb = box()\nn = 0\nwhile True:\n    rate(30)\n    n = n + 1\n    b.rotate(angle=0.05, axis=vec(0, 1, 0))\n    print(n)\n';
 const FINITE = 'Web VPython 3.2\nsphere()\nfor i in range(3):\n    rate(10)\n';
 const BROKEN = 'Web VPython 3.2\nwhile True\n    rate(30)\n';
+
+// A Stop within 500 ms of a Run is ignored as the second click of a double-click
+// on Run (STOP_GRACE_MS in glowscript-run-state.js), so these tests wait past it.
+const PAST_DOUBLE_CLICK_GUARD_MS = 600;
 
 async function run(page, code) {
   await page.goto('/embed/glowscript');
@@ -33,29 +37,44 @@ test.describe('Web VPython Stop button', () => {
   test('Stop freezes the program in place and returns to Run', async ({ page }) => {
     await run(page, LOOP);
     await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
-    await page.waitForTimeout(600); // past the double-click guard
+    await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
     await runControl(page).click();
     await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 5_000 });
     await expect(runControl(page).locator('label')).toHaveText('Run');
+    await expect(runControl(page).locator('svg.run-stop-trace')).toBeHidden();
+
+    // Parked, not torn down: the runner is still there and no stopped note shows.
+    await expect(page.locator('#glowscriptOutput')).toHaveCount(1);
+    await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
 
     const frozen = await printed(page);
     await page.waitForTimeout(1_500);
     expect(await printed(page)).toBe(frozen);
-    await expect(page.locator('#glowscriptOutput')).toHaveCount(1);
-    await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
   });
 
   test('a program that finishes returns to Run on its own', async ({ page }) => {
     await run(page, FINITE);
     await expect(runControl(page)).toHaveClass(/run-state-running/);
     await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 60_000 });
+    // Finished, not errored or given up loading: no alert banner was raised.
+    await expect(page.locator('#statusMessages')).toHaveCount(0);
   });
 
   test('a compile error returns to Run', async ({ page }) => {
     await run(page, BROKEN);
+    await expect(runControl(page)).toHaveClass(/run-state-running/);
     await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 60_000 });
+    // The program's error banner, not the runtime-load failure one.
+    await expect(page.locator('#statusMessages').first()).toBeAttached();
+    await expect(page.getByText(/could not be loaded/)).toHaveCount(0);
   });
 
+  // Enter on the output-only toolbar's <button> used to dispatch twice: embed.js
+  // acts on the keypress and the browser then synthesizes a click. A Stop before
+  // the runner is ready tears the run down at once, so the second dispatch (by
+  // then Run again) restarted the program; glowscript.js now cancels that click.
+  // The page is kept from ever seeing the runner's ready message, so this test
+  // always takes that teardown path instead of racing the runtime's load time.
   test('Enter on the output-only Stop button stops the program instead of restarting it', async ({ page }) => {
     const res = await page.request.post('/api/trinkets', {
       data: { lang: 'glowscript', code: LOOP, name: 'stop-enter-' + Date.now() },
@@ -64,16 +83,23 @@ test.describe('Web VPython Stop button', () => {
     const body = await res.json();
     const shortCode = (body.data || body).shortCode;
 
+    await page.addInitScript(() => {
+      window.addEventListener('message', (e) => {
+        if (typeof e.data === 'string' && e.data.includes('glowscript.ready')) { e.stopImmediatePropagation(); }
+      }, true);
+    });
+
     await page.goto('/embed/glowscript/' + shortCode + '?outputOnly=true');
     const control = page.locator('button.run-it');
     await expect(control).toBeVisible();
 
-    await control.focus();
-    await page.keyboard.press('Enter');                       // Run
+    await control.press('Enter');                                          // Run
     await expect(control).toHaveClass(/run-state-running/);
-    await page.waitForTimeout(600);                           // past the double-click guard
-    await control.focus();
-    await page.keyboard.press('Enter');                       // Stop
+    await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
+    await expect(control.locator('label')).toHaveText('Stop');
+    // runCode() moved focus to #honeypot; press() focuses the control again.
+    await control.press('Enter');                                          // Stop
+    await expect(page.locator('.glowscript-stopped-note')).toBeVisible();  // the teardown path ran
     await expect(control).not.toHaveClass(/run-state-/, { timeout: 5_000 });
     await page.waitForTimeout(1_500);
     await expect(control, 'Stop must not restart the program').not.toHaveClass(/run-state-/);
