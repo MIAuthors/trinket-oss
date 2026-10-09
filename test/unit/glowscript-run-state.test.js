@@ -6,19 +6,19 @@
 
 const { create, STOP_TIMEOUT_MS, STOP_GRACE_MS } = require('../../public/js/embed/glowscript-run-state');
 
-function harness() {
+function harness(overrides) {
   const effects = { states: [], requestStop: 0, teardown: 0 };
   const timers = new Map();
   let nextTimer = 1;
   let clock = 0;
-  const ctl = create({
+  const ctl = create(Object.assign({
     onState: (s) => effects.states.push(s),
     requestStop: () => { effects.requestStop += 1; },
     teardown: () => { effects.teardown += 1; },
     setTimer: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
     clearTimer: (id) => { timers.delete(id); },
     now: () => clock,
-  });
+  }, overrides));
   return {
     ctl, effects, timers,
     advance: (ms) => { clock += ms; },
@@ -149,6 +149,16 @@ describe('stop', () => {
     expect(h.effects.teardown).toBe(0);
   });
 
+  it('the second click of a double-click lands before the runner reports in and still does not stop it', () => {
+    const h = harness();
+    h.ctl.launched();
+    h.advance(STOP_GRACE_MS - 1);
+    h.ctl.stop();
+    expect(h.ctl.state()).toBe('running');
+    expect(h.effects.teardown).toBe(0);
+    expect(h.effects.requestStop).toBe(0);
+  });
+
   it('is ignored while stopping and while idle', () => {
     const h = readyRun();
     h.ctl.stop();
@@ -195,6 +205,14 @@ describe('receive', () => {
     }
   });
 
+  it('ends the run on any runner error, even one with an empty or missing message', () => {
+    for (const data of [{ 'glowscript.error': '', type: 'runtime' }, { type: 'runtime' }, { type: 'compile' }]) {
+      const h = readyRun();
+      h.ctl.receive(data, true);
+      expect(h.ctl.state()).toBe('idle');
+    }
+  });
+
   it('ignores messages from any other runner, and non-runner messages', () => {
     const h = readyRun();
     h.ctl.receive({ 'glowscript.done': true }, false);
@@ -208,5 +226,30 @@ describe('defaults', () => {
   it('uses a 2 s stop window and a 500 ms double-click guard', () => {
     expect(STOP_TIMEOUT_MS).toBe(2000);
     expect(STOP_GRACE_MS).toBe(500);
+  });
+});
+
+describe('a failing effect', () => {
+  it('a throwing requestStop still leaves the stop window armed, so the runner is torn down', () => {
+    const h = harness({ requestStop: () => { throw new Error('no runner'); } });
+    h.ctl.launched();
+    h.ctl.ready();
+    h.advance(STOP_GRACE_MS);
+    expect(() => h.ctl.stop()).toThrow('no runner');
+    expect(h.ctl.state()).toBe('stopping');
+    expect(h.timers.size).toBe(1);
+    h.fireTimers();
+    expect(h.effects.teardown).toBe(1);
+    expect(h.ctl.state()).toBe('idle');
+  });
+
+  it('a throwing teardown still returns the control to Run', () => {
+    const h = harness({ teardown: () => { throw new Error('dom gone'); } });
+    h.ctl.launched();
+    h.ctl.ready();
+    h.advance(STOP_GRACE_MS);
+    h.ctl.stop();
+    expect(() => h.fireTimers()).toThrow('dom gone');
+    expect(h.ctl.state()).toBe('idle');
   });
 });

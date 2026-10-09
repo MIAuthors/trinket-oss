@@ -51,8 +51,7 @@
       cancelTimer();
       generation += 1;
       ready = false;
-      teardown();
-      enter('idle');
+      try { teardown(); } finally { enter('idle'); }
     }
 
     var api = {
@@ -83,12 +82,14 @@
         if (state !== 'running') { return; }
         if (now() - launchedAt < stopGraceMs) { return; }
         if (!ready) { tearDown(); return; }
-        enter('stopping');
-        requestStop();
+        // Arm the fallback first, so a failing effect below cannot strand the
+        // control in Stopping… with nothing left to end it.
         timer = setTimer(function () {
           timer = null;
           if (state === 'stopping') { tearDown(); }
         }, stopTimeoutMs);
+        enter('stopping');
+        requestStop();
       },
       // The runner parked the program; its scene stays, frozen.
       stopped: function () {
@@ -100,7 +101,10 @@
       receive: function (data, fromCurrentRunner) {
         if (!data || !fromCurrentRunner) { return; }
         if (data['glowscript.ready']) { api.ready(); }
-        else if (data['glowscript.done'] || data['glowscript.error']) { api.finished(); }
+        // Any runner error ends the run, including one whose message is empty or
+        // missing: every runner error carries a type of runtime or compile.
+        else if (data['glowscript.done'] || 'glowscript.error' in data ||
+                 data.type === 'runtime' || data.type === 'compile') { api.finished(); }
         else if (data['glowscript.stopped']) { api.stopped(); }
       },
       state: function () { return state; },
