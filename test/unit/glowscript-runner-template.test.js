@@ -9,7 +9,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { JSDOM } = require('jsdom');
+const { JSDOM, VirtualConsole } = require('jsdom');
 const shim = require('../../public/js/embed/glowscript-stop-shim');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -24,7 +24,7 @@ function compileTemplate() {
 }
 
 // Fill the template the way runCode() in glowscript.js does.
-function runnerHtml(version) {
+function runnerHtml(version, stopShim) {
   return compileTemplate()({
     prog: 'Web VPython 3.2\nbox()\n',
     url: 'https://trinket.test',
@@ -37,7 +37,7 @@ function runnerHtml(version) {
     versionStringAdded: false,
     jqueryList: '',
     glowscriptTextarea: 'block',
-    stopShim: shim.source(),
+    stopShim: stopShim === undefined ? shim.source() : stopShim,
   });
 }
 
@@ -58,10 +58,14 @@ function fakeJQuery(window) {
 }
 
 // Load the runner page with a fake runtime whose compiler returns `compiled`.
-function loadRunner(version, compiled, waits) {
+function loadRunner(version, compiled, waits, stopShim) {
   const messages = [];
-  const dom = new JSDOM(runnerHtml(version), {
+  const warnings = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on('warn', (...args) => warnings.push(args.join(' ')));
+  const dom = new JSDOM(runnerHtml(version, stopShim), {
     runScripts: 'dangerously',
+    virtualConsole,
     beforeParse(window) {
       window.$ = fakeJQuery(window);
       window.reportScriptError = () => '';
@@ -73,7 +77,7 @@ function loadRunner(version, compiled, waits) {
       });
     },
   });
-  return { window: dom.window, messages };
+  return { window: dom.window, messages, warnings };
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -147,4 +151,19 @@ describe('GlowScript 1.1 to 2.7 (callback style)', () => {
     expect(window.ticks).toBe(parkedAt);
     expect(kinds(messages)).not.toContain('glowscript.done');
   });
+});
+
+describe('a failing stop shim', () => {
+  const cases = [
+    ['3.2.3', 'async function __main__() { await rate(30); }', promiseRate],
+    ['2.7.5', '(function (done) { rate(30, function () { done(); }); })', callbackRate],
+  ];
+  for (const [version, compiled, waits] of cases) {
+    it(`never keeps the program from running (GlowScript ${version})`, async () => {
+      const { messages, warnings } = loadRunner(version, compiled, waits, 'throw new Error("shim");');
+      await until(() => kinds(messages).includes('glowscript.done'));
+      expect(kinds(messages)).toEqual(['glowscript.done']);
+      expect(warnings.join('\n')).toContain('Stop button unavailable');
+    });
+  }
 });

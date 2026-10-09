@@ -94,6 +94,8 @@ function currentRunnerWindow() {
 
 // No confirmation from the runner (or it was never ready): remove it outright.
 function tearDownRunner() {
+  // A torn-down run is over: there is nothing left to rebuild.
+  lastRunnerHtml = null;
   $('#glowscriptIframeContainer').empty().append(
     $('<p>', { 'class': 'glowscript-stopped-note', text: 'Program stopped. Press Run to start it again.' })
   );
@@ -440,6 +442,14 @@ window.TrinketAPI = {
     $(document).on('trinket.code.run',  $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop', function() { if (runState) { runState.stop(); } });
 
+    // embed.js acts on Enter's keypress; cancel the click the browser would
+    // synthesize from it, so a <button> Run/Stop control is dispatched once.
+    // Otherwise Enter on Stop while the runtime loads tears the run down and
+    // the synthesized click, by then Run again, restarts it.
+    $(document).on('keypress', '.run-it', function(evt) {
+      if ((evt.keyCode || evt.which) === 13 && this.tagName === 'BUTTON') { evt.preventDefault(); }
+    });
+
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
     $(document).on('trinket.instructions.view', $.proxy(api.showInstructions, api));
 
@@ -534,8 +544,12 @@ window.TrinketAPI = {
         data = JSON.parse(e.data);
       } catch(e) {}
 
+      // Only the current run's runner may move the Run/Stop control or ask for
+      // a rebuild: a message from a replaced or torn-down runner is history.
+      var fromCurrentRunner = e.source === currentRunnerWindow() && e.source !== ignoredRunner;
+
       if (data && typeof data["glowscript.loadfail"] !== 'undefined') {
-        handleRunnerLoadFailure(data["glowscript.loadfail"], e.source);
+        if (fromCurrentRunner) { handleRunnerLoadFailure(data["glowscript.loadfail"], e.source); }
         return;
       }
 
@@ -543,9 +557,8 @@ window.TrinketAPI = {
         api.showMessage('alert', data["glowscript.error"]);
       }
 
-      // Only the current run's runner moves the Run/Stop control.
       if (runState) {
-        runState.receive(data, e.source === currentRunnerWindow() && e.source !== ignoredRunner);
+        runState.receive(data, fromCurrentRunner);
       }
     });
 
