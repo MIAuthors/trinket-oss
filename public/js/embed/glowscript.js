@@ -81,8 +81,10 @@ var runnerRetry = (typeof trinketRunnerRetry !== 'undefined')
 // runState decides, runButton draws, and this file owns the DOM and the runner.
 var runState  = null;
 var runButton = null;
-// A runner that reported a load failure and is about to be rebuilt: the compile
-// error it reports next is expected and must not end the run.
+// A runner whose messages must not move the Run/Stop control: the previous
+// run's runner, until this run's runner replaces it (external sandbox mode waits
+// on a POST first), or a runner that reported a load failure and is about to be
+// rebuilt (the compile error it reports next is expected).
 var ignoredRunner = null;
 
 function currentRunnerWindow() {
@@ -178,6 +180,10 @@ function runCodeExternal(html) {
           $('#glowscriptOutput').focus();
         });
       }
+    })
+    .fail(function() {
+      // The sandbox never got the program: the run is over before it began.
+      if (runState && runState.generation() === generation) { runState.loadFailed(); }
     });
 }
 
@@ -309,8 +315,9 @@ function runCode() {
   lastRunnerHtml = glowscriptHtml;
   if (runnerRetry) { runnerRetry.reset(); }
 
-  // The control is Stop for as long as this run lasts.
-  ignoredRunner = null;
+  // The control is Stop for as long as this run lasts. The outgoing runner stays
+  // the current iframe until this run's runner replaces it, so it is ignored now.
+  ignoredRunner = currentRunnerWindow();
   if (runState) { runState.launched(); }
 
   // Choose rendering mode based on configuration
