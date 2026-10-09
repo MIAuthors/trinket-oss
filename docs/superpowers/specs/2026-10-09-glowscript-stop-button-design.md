@@ -76,6 +76,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 | running | `ready` | running | Runner marked ready |
 | running or stopping | `done` or `error` | idle | Cancel stop timer |
 | running or stopping | `loadFailed` (retry budget exhausted) | idle | Cancel stop timer |
+| running, within 500 ms of `launched` | `stop` | running | Ignored: the second click of a double-click on Run (added during planning) |
 | running, runner ready | `stop` | stopping | `requestStop()`; start the 2000 ms stop timer |
 | running, runner not ready | `stop` | idle | `teardown()`; new generation |
 | stopping | `stopped` | idle | Cancel stop timer; scene stays frozen |
@@ -109,6 +110,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 
 ## Edge cases
 
+- A double-click on Run: the second click lands on the new Stop within 500 ms of the launch and is ignored, so the program keeps running.
 - Stop while the runtime is still loading, before `glowscript.ready`: immediate teardown.
 - A program that finishes on its own, including a static scene with no loop: back to Run when `glowscript.done` arrives; the scene stays interactive exactly as today.
 - Compile or runtime error: the existing alert banner, and back to Run.
