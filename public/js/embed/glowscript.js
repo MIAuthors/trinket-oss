@@ -77,6 +77,31 @@ var runnerRetry = (typeof trinketRunnerRetry !== 'undefined')
   ? trinketRunnerRetry.create()
   : null;
 
+// Run/Stop button (docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md).
+// runState decides, runButton draws, and this file owns the DOM and the runner.
+var runState  = null;
+var runButton = null;
+// A runner that reported a load failure and is about to be rebuilt: the compile
+// error it reports next is expected and must not end the run.
+var ignoredRunner = null;
+
+function currentRunnerWindow() {
+  var frame = document.getElementById('glowscriptOutput');
+  return frame ? frame.contentWindow : null;
+}
+
+// No confirmation from the runner (or it was never ready): remove it outright.
+function tearDownRunner() {
+  $('#glowscriptIframeContainer').empty().append(
+    $('<p>', { 'class': 'glowscript-stopped-note', text: 'Program stopped. Press Run to start it again.' })
+  );
+  $('#loadingContent').hide();
+}
+
+function stopShimSource() {
+  return (typeof trinketGlowscriptStopShim !== 'undefined') ? trinketGlowscriptStopShim.source() : '';
+}
+
 // A runtime file failed inside the runner (reported by the srcdoc's __lf).
 // Rebuild after the policy's backoff: under the cold-start herd that shed the
 // file, the fleet is warm by the first retry. In a lockdown browser (Safe
@@ -93,16 +118,23 @@ function rebuildRunner() {
   }
 }
 
-function handleRunnerLoadFailure(src) {
+function handleRunnerLoadFailure(src, source) {
   if (!runnerRetry || !lastRunnerHtml) { return; }
   var verdict = runnerRetry.onLoadFailure(src);
   if (verdict.retry) {
-    setTimeout(rebuildRunner, verdict.delayMs);
+    ignoredRunner = source || null;
+    var generation = runState ? runState.generation() : null;
+    setTimeout(function() {
+      // A Stop, or a newer Run, since this was scheduled: don't resurrect it.
+      if (runState && runState.generation() !== generation) { return; }
+      rebuildRunner();
+    }, verdict.delayMs);
   }
   else if (verdict.reason === 'exhausted') {
     api.showMessage('alert',
       'The 3D runtime could not be loaded after several tries. ' +
       'Please check your connection and press Run again.');
+    if (runState) { runState.loadFailed(); }
   }
 }
 
@@ -132,8 +164,12 @@ function runCodeExternal(html) {
   var sandboxUrl = trinketSandboxConfig.protocol + '://' + trinketSandboxConfig.subdomain + trinketSandboxConfig.domain + '/';
   var files = { 'index.html': html };
 
+  var generation = runState ? runState.generation() : null;
+
   $.post(sandboxUrl, {files: files})
     .done(function(data, status) {
+      // A Stop, or a newer Run, since this was sent: don't resurrect it.
+      if (runState && runState.generation() !== generation) { return; }
       if (status === "success") {
         $('#glowscriptIframeContainer').empty();
         $('#glowscriptIframeContainer').html("<iframe id='glowscriptOutput' src='" + sandboxUrl + data.token + "/index.html'></iframe>");
@@ -262,7 +298,8 @@ function runCode() {
     version    : trinketVersion,
     versionStringAdded: versionStringAdded,
     jqueryList : jquerySrcs.join("\n"),
-    glowscriptTextarea : glowscriptTextarea
+    glowscriptTextarea : glowscriptTextarea,
+    stopShim   : stopShimSource()
   });
 
   $("#loadingContent").show();
@@ -271,6 +308,10 @@ function runCode() {
   // load failure can rebuild this exact runner (see handleRunnerLoadFailure).
   lastRunnerHtml = glowscriptHtml;
   if (runnerRetry) { runnerRetry.reset(); }
+
+  // The control is Stop for as long as this run lasts.
+  ignoredRunner = null;
+  if (runState) { runState.launched(); }
 
   // Choose rendering mode based on configuration
   if (trinketSandboxConfig.mode === 'local') {
@@ -327,6 +368,19 @@ window.TrinketAPI = {
     runMode = $('#runMode-value').val();
     autoRun = (start === 'result');
 
+    // Before anything can start a run (start=result runs from api.reset below).
+    if (typeof trinketGlowscriptRunState !== 'undefined' && typeof trinketRunStopButton !== 'undefined') {
+      runButton = trinketRunStopButton.create(document.querySelectorAll('.run-it'), $);
+      runState = trinketGlowscriptRunState.create({
+        onState     : function(state) { runButton.set(state); },
+        requestStop : function() {
+          var runner = currentRunnerWindow();
+          if (runner) { runner.postMessage('glowscript.stop', '*'); }
+        },
+        teardown    : tearDownRunner
+      });
+    }
+
     var uiType = api.getUIType();
 
     editor = $('#editor').codeEditor({
@@ -377,6 +431,7 @@ window.TrinketAPI = {
 
     $(document).on('trinket.code.edit', $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',  $.proxy(this.showResult, this));
+    $(document).on('trinket.code.stop', function() { if (runState) { runState.stop(); } });
 
     $(document).on('trinket.output.view',       $.proxy(api.showOutput, api));
     $(document).on('trinket.instructions.view', $.proxy(api.showInstructions, api));
@@ -473,12 +528,17 @@ window.TrinketAPI = {
       } catch(e) {}
 
       if (data && typeof data["glowscript.loadfail"] !== 'undefined') {
-        handleRunnerLoadFailure(data["glowscript.loadfail"]);
+        handleRunnerLoadFailure(data["glowscript.loadfail"], e.source);
         return;
       }
 
       if (data && data["glowscript.error"]) {
         api.showMessage('alert', data["glowscript.error"]);
+      }
+
+      // Only the current run's runner moves the Run/Stop control.
+      if (runState) {
+        runState.receive(data, e.source === currentRunnerWindow() && e.source !== ignoredRunner);
       }
     });
 
