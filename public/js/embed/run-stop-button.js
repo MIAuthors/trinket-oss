@@ -24,12 +24,55 @@
     else { el.setAttribute(name, value); }
   }
 
+  // This project's Foundation 5.5 builds a control's tooltip once, at page init,
+  // from its title, blanking the title as it does, and never rebuilds one. So a
+  // control with a built tooltip keeps its title as Foundation left it and the
+  // view rewrites the tooltip's text in place; a control without one carries
+  // the wording in its title attribute. Foundation keys a tooltip by the
+  // control's id, else by the data-selector it assigns.
+  function tooltipOf(el) {
+    var selector = el.getAttribute('id') || el.getAttribute('data-selector');
+    if (!selector) { return null; }
+    return el.ownerDocument.querySelector('span.tooltip[data-selector="' + selector + '"]');
+  }
+
+  // A tooltip is its text followed by Foundation's .nub (and, on touch devices,
+  // a .tap-to-close); only the text in front of the nub is the wording.
+  function isNub(node) {
+    return node.nodeType === 1 && node.classList.contains('nub');
+  }
+
+  function tooltipText(tip) {
+    var text = '';
+    for (var node = tip.firstChild; node && !isNub(node); node = node.nextSibling) {
+      text += node.textContent;
+    }
+    return text;
+  }
+
+  function setTooltipText(tip, text) {
+    var nub = null;
+    for (var node = tip.firstChild; node; node = node.nextSibling) {
+      if (isNub(node)) { nub = node; break; }
+    }
+    while (tip.firstChild && tip.firstChild !== nub) { tip.removeChild(tip.firstChild); }
+    tip.insertBefore(tip.ownerDocument.createTextNode(text || ''), nub);
+  }
+
+  function setTitle(el, title) {
+    var tip = tooltipOf(el);
+    if (tip) { setTooltipText(tip, title); }
+    else { setAttr(el, 'title', title); }
+  }
+
   function snapshot(el) {
     var icon = el.querySelector('i');
     var label = el.querySelector('label');
+    var tip = tooltipOf(el);
     return {
       action: el.getAttribute('data-action'),
-      title: el.getAttribute('title'),
+      // The wording to restore: a built tooltip's text, else the title.
+      title: tip ? tooltipText(tip) : el.getAttribute('title'),
       aria: el.getAttribute('aria-label'),
       icon: icon ? icon.getAttribute('class') : null,
       label: label ? label.textContent : null
@@ -55,13 +98,18 @@
     el.appendChild(svg);
   }
 
-  // Foundation builds a control's tooltip lazily from its title and caches it;
-  // drop the cached one so the next hover rebuilds it from the new title.
-  function dropTooltip(el) {
-    var selector = el.getAttribute('data-selector');
-    if (!selector) { return; }
-    var tips = el.ownerDocument.querySelectorAll('span.tooltip[data-selector="' + selector + '"]');
-    Array.prototype.forEach.call(tips, function (tip) { tip.parentNode.removeChild(tip); });
+  // The control's width with its widest label (Run, Stop or Stopping…), so the
+  // toolbar does not shift as the label changes.
+  function widestWidth(el, label, texts) {
+    if (!label) { return el.offsetWidth; }
+    var saved = label.textContent;
+    var widest = 0;
+    texts.forEach(function (text) {
+      label.textContent = text;
+      widest = Math.max(widest, el.offsetWidth);
+    });
+    label.textContent = saved;
+    return widest;
   }
 
   function setAction(el, action, $) {
@@ -86,7 +134,7 @@
 
       if (next === 'idle') {
         setAction(el, orig.action, $);
-        setAttr(el, 'title', orig.title);
+        setTitle(el, orig.title);
         setAttr(el, 'aria-label', orig.aria);
         el.removeAttribute('aria-disabled');
         if (icon) { setAttr(icon, 'class', orig.icon); }
@@ -94,20 +142,20 @@
         el.style.minWidth = '';
       } else {
         var s = STATES[next];
-        // Keep Run's width so the toolbar does not shift between Run, Stop and Stopping….
-        if (current === 'idle') { el.style.minWidth = el.offsetWidth ? el.offsetWidth + 'px' : ''; }
+        if (current === 'idle') {
+          var widest = widestWidth(el, label, [orig.label, STATES.running.label, STATES.stopping.label]);
+          el.style.minWidth = widest ? widest + 'px' : '';
+        }
         addTrace(el);
         el.classList.add(s.cls);
         setAction(el, 'code.stop', $);
-        setAttr(el, 'title', s.title);
+        setTitle(el, s.title);
         setAttr(el, 'aria-label', s.aria);
         if (next === 'stopping') { el.setAttribute('aria-disabled', 'true'); }
         else { el.removeAttribute('aria-disabled'); }
         if (icon) { icon.setAttribute('class', s.icon); }
         if (label) { label.textContent = s.label; }
       }
-
-      dropTooltip(el);
     }
 
     return {

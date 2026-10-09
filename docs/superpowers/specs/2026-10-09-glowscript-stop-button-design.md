@@ -97,8 +97,8 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - The strip is an `aria-hidden` SVG injected once into the control: inset 3px from each edge, a `rect` with `width="100%" height="100%" rx="3" pathLength="100"`, stroke 2px in `currentColor`, `stroke-dasharray: 24 76`, animated by `stroke-dashoffset` from 0 to -100 over 1.6 s, linear, infinite.
 - Hover and keyboard focus while running fill the control with `#C62828` and turn the icon, label and strip white; focus also shows a visible 2px ring.
 - `prefers-reduced-motion: reduce` replaces the moving strip with a static 1.5px outline in the same color.
-- On entering running, the control's current width is kept as its minimum width until it returns to idle, so the toolbar does not shift between Run, Stop and Stopping….
-- The title follows the state: "Stop the program." while running and "Stopping the program." while stopping. Because the editor toolbar's control uses a Foundation tooltip built lazily from the title, any tooltip already built for it is removed on each state change so the next hover rebuilds it from the new title.
+- On entering running, the control's minimum width is set to its width with its widest label (Run, Stop or Stopping…) until it returns to idle, so the toolbar does not shift as the label changes.
+- The title follows the state: "Stop the program." while running and "Stopping the program." while stopping. The editor toolbar's control has a Foundation tooltip, which this project's Foundation 5.5 builds once at page init from the title, blanking the title as it does, and never rebuilds; for such a control the view rewrites the tooltip's text in place and leaves the title as Foundation left it. A control without a tooltip carries the wording in its title attribute.
 - Clicks in stopping are ignored by the controller.
 
 ### Wiring in glowscript.js
