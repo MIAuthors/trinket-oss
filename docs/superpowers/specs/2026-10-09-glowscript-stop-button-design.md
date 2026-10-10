@@ -119,7 +119,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - An error raised outside the main flow while the program runs (an event handler, a widget callback, a timer), on 2.9 and later: `window.onerror` tags its report `glowscript.background`. The existing alert banner still shows it, and the control stays Stop, because the main flow is still running.
 - Enter on the output-only toolbar's `<button>` Run/Stop control: `embed.js` acts on the keypress, so `glowscript.js` cancels the click the browser would synthesize from it, and each Enter is dispatched once. Otherwise Enter on Stop before the runner is ready would tear the run down, and the synthesized click, by then on Run, would restart it.
 - Ctrl/Cmd-Enter or the "Run your code first" modal while running or stopping: a fresh run replaces the old one, as today, and the button stays in Stop for the new run.
-- External sandbox mode, load-failure retries and thumbnail snapshots all respect the generation guard. A frozen runner still answers `glowscript.snapshot`; after a teardown the existing snapshot code already skips a missing iframe. The runtime's screenshot goes through the waits the shim parks, so the runner template exempts the screenshot's own waits: decided per call, only after a confirmed stop, and for at most 5 s.
+- External sandbox mode, load-failure retries and thumbnail snapshots all respect the generation guard. A frozen runner still answers `glowscript.snapshot`; after a teardown the existing snapshot code already skips a missing iframe. The runtime's screenshot goes through the waits the shim parks, so the runner template asks the shim for a window in which the screenshot's own new waits pass through: the window is granted only after a confirmed stop, each wait is decided when it is made, and the window closes within 5 s.
 - Output-only embeds (`default-toolbar.html`) and calculator run mode behave the same as the editor view.
 
 ## Known limits
@@ -129,7 +129,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - A loop with no `rate()` or `sleep()` can freeze the browser tab before Stop can be clicked, as with Python on the main thread. No button can fix that.
 - Only the 3.2.3 runtime is checked in a browser during this work. The other versions rely on unit tests of both calling styles and on the teardown fallback.
 - Before GlowScript 2.9, any error report ends the run, including one from an event handler: there, the main flow's own errors may surface only through `window.onerror`, so the runner cannot tell the two apart.
-- A snapshot requested while a stop is still unconfirmed (the control shows Stopping…) parks with the program, so that save gets no thumbnail.
+- A snapshot started before a stop is confirmed may not complete: one requested while the control shows Stopping…, or one still under way when Stop is pressed, parks with the program, so that save keeps no new thumbnail.
 
 ## Out of scope
 

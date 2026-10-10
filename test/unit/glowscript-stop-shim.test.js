@@ -300,6 +300,26 @@ describe('allowWaits: a snapshot after a confirmed stop', () => {
     await tick();
     expect(resumed).toBe(false);
   });
+
+  it('never exempts a wait through a window opened before the stop was confirmed, even once it is', () => {
+    const runtime = controlledRate();
+    const timers = [];
+    const win = fakeWindow({ rate: runtime.rate, setTimeout: (fn, ms) => { timers.push(ms); } });
+    install(win);
+    win.send('glowscript.stop');
+    const early = win.__trinketStop.allowWaits();
+    win.rate(60);
+    expect(stoppedCount(win)).toBe(1);
+    // The stop is confirmed now, and that window was never released.
+    win.rate(30);
+    expect(runtime.calls).toHaveLength(0);
+    expect(timers).toEqual([]);
+    // Its release() does nothing, so a window opened now still works.
+    early();
+    win.__trinketStop.allowWaits();
+    win.rate(60);
+    expect(runtime.calls).toHaveLength(1);
+  });
 });
 
 describe('messages', () => {

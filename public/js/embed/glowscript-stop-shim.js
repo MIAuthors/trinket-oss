@@ -38,8 +38,9 @@
     //                in flight finds the program parked in it, so it confirms
     //                at once.
     //   confirmed  - glowscript.stopped has been posted. It is posted once.
-    //   exempt     - how many allowWaits() windows are open. While one is
-    //                open after a confirmed stop, new waits pass through.
+    //   exempt     - how many allowWaits() windows are open. A window opens
+    //                only after a confirmed stop; while one is open, new
+    //                waits pass through.
     //   allowWaits - opens such a window (below).
     var stop = { requested: false, pending: 0, confirmed: false, exempt: 0 };
     win.__trinketStop = stop;
@@ -72,12 +73,18 @@
 
     // A stopped program is still asked for snapshots (the thumbnail saved with
     // the trinket), and the runtime's screenshot goes through the same waits
-    // that keep the program parked. The runner template opens this window
-    // around a screenshot: after a confirmed stop, a wait that starts while it
-    // is open passes through, while the program's own waits, which started
-    // before it, stay parked. release() closes it once, and so does a timer,
-    // in case the screenshot never finishes.
+    // that keep the program parked. The runner template asks for this window
+    // around a screenshot: a wait that starts while it is open passes through,
+    // while the program's own waits, which started before it, stay parked.
+    // release() closes it once, and so does a timer, in case the screenshot
+    // never finishes.
+    //
+    // Granted only once the stop is confirmed. Before that the program may
+    // still be on its way to its next wait; a window opened then would still
+    // be open after the confirmation and would let that wait through. So the
+    // answer is a release() that does nothing: no window, no timer.
     stop.allowWaits = function () {
+      if (!stop.confirmed) { return function () {}; }
       var released = false;
       function release() {
         if (released) { return; }
@@ -95,12 +102,12 @@
       if (typeof original !== 'function' || original.__trinketStoppable) { return; }
 
       var wrapped = function () {
-        // Decided once, when the call is made, and only after a confirmed stop:
-        // before that the program may still be on its way to its next wait,
-        // where it must park. An exempt wait goes straight to the runtime, and
-        // so do its result and continuation. It is not counted in pending,
-        // which only decides whether a stop request confirms at once: exempt
-        // waits happen after the stop is confirmed, when nothing reads it.
+        // Decided once, when the call is made. A window only opens after a
+        // confirmed stop; checking confirmed here as well is a second guard.
+        // An exempt wait goes straight to the runtime, and so do its result
+        // and continuation. It is not counted in pending, which only decides
+        // whether a stop request confirms at once: exempt waits happen after
+        // the stop is confirmed, when nothing reads it.
         var exempt = stop.exempt > 0 && stop.confirmed;
         if (exempt) { return original.apply(this, arguments); }
 
