@@ -96,6 +96,7 @@ describe('stop', () => {
     h.ctl.stop();
     h.ctl.stopped();
     expect(h.ctl.state()).toBe('idle');
+    expect(h.effects.states).toEqual(['running', 'stopping', 'idle']);
     expect(h.effects.teardown).toBe(0);
     expect(h.timers.size).toBe(0);
   });
@@ -107,6 +108,7 @@ describe('stop', () => {
     h.fireTimers();
     expect(h.effects.teardown).toBe(1);
     expect(h.ctl.state()).toBe('idle');
+    expect(h.effects.states).toEqual(['running', 'stopping', 'idle']);
     expect(h.ctl.generation()).toBe(before + 1);
   });
 
@@ -213,6 +215,14 @@ describe('receive', () => {
     }
   });
 
+  it('ends the run on an error report with no type and a falsy message: the key alone counts', () => {
+    for (const data of [{ 'glowscript.error': '' }, { 'glowscript.error': null }, { 'glowscript.error': 0 }, { 'glowscript.error': false }]) {
+      const h = readyRun();
+      h.ctl.receive(data, true);
+      expect(h.ctl.state()).toBe('idle');
+    }
+  });
+
   it('ignores a JSON primitive a program posts, instead of throwing', () => {
     const h = readyRun();
     for (const data of ['boom', 42, true]) {
@@ -278,6 +288,18 @@ describe('a failing effect', () => {
     expect(() => h.ctl.stop()).toThrow('no runner');
     expect(h.ctl.state()).toBe('stopping');
     expect(h.timers.size).toBe(1);
+    h.fireTimers();
+    expect(h.effects.teardown).toBe(1);
+    expect(h.ctl.state()).toBe('idle');
+  });
+
+  it("a throwing onState('stopping') still leaves the stop window armed, so the runner is torn down", () => {
+    const h = harness({ onState: (s) => { if (s === 'stopping') { throw new Error('view broke'); } } });
+    h.ctl.launched();
+    h.ctl.ready();
+    h.advance(STOP_GRACE_MS);
+    expect(() => h.ctl.stop()).toThrow('view broke');
+    expect([...h.timers.values()].map((t) => t.ms)).toEqual([STOP_TIMEOUT_MS]);
     h.fireTimers();
     expect(h.effects.teardown).toBe(1);
     expect(h.ctl.state()).toBe('idle');
