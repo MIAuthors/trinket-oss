@@ -49,6 +49,14 @@ describe('install', () => {
     expect(win.sleep).toBeUndefined();
     expect(win.rate.__trinketStoppable).toBe(true);
   });
+
+  it('returns the stop state it publishes on the window, and the same one on a second install', () => {
+    const win = fakeWindow();
+    const state = install(win);
+    expect(state).toBe(win.__trinketStop);
+    expect(state).toEqual({ requested: false, pending: 0, confirmed: false });
+    expect(install(win)).toBe(state);
+  });
 });
 
 describe('promise-style waits (GlowScript 2.9 and later)', () => {
@@ -72,6 +80,37 @@ describe('promise-style waits (GlowScript 2.9 and later)', () => {
     pending.resolve();
     await tick();
     expect(resumed).toBe(false);
+  });
+
+  it('returns a non-promise result untouched, and does not count it as a wait in progress', () => {
+    const win = fakeWindow({ rate: () => 7 });
+    install(win);
+    expect(win.rate(1)).toBe(7);
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(0);
+  });
+
+  it('a stop after a completed wait confirms at the next wait, not at once', async () => {
+    const win = fakeWindow({ rate: () => Promise.resolve() });
+    install(win);
+    await win.rate(30);
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(0);
+    win.rate(30);
+    expect(stoppedCount(win)).toBe(1);
+  });
+
+  it('a stop after a failed wait confirms at the next wait, not at once', async () => {
+    const failing = deferred();
+    const win = fakeWindow({ sleep: () => failing.promise });
+    install(win);
+    win.sleep(1).catch(() => {});
+    failing.reject(new Error('nope'));
+    await tick();
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(0);
+    win.sleep(1);
+    expect(stoppedCount(win)).toBe(1);
   });
 
   it('a stop while the program computes confirms at its next wait, which never returns', async () => {
@@ -133,6 +172,18 @@ describe('callback-style waits (GlowScript 1.1 to 2.7)', () => {
     win.rate(30, () => { resumed = true; });
     pendingCallback();
     expect(resumed).toBe(true);
+  });
+
+  it('a stop after a completed wait confirms at the next wait, not at once', () => {
+    let pendingCallback = null;
+    const win = fakeWindow({ rate: (n, cb) => { pendingCallback = cb; } });
+    install(win);
+    win.rate(30, () => {});
+    pendingCallback();
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(0);
+    win.rate(30, () => {});
+    expect(stoppedCount(win)).toBe(1);
   });
 
   it('a stop while parked confirms at once and swallows the continuation', () => {
