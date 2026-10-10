@@ -8,6 +8,8 @@ const { test, expect } = require('@playwright/test');
 const LOOP = 'Web VPython 3.2\nb = box()\nn = 0\nwhile True:\n    rate(30)\n    n = n + 1\n    b.rotate(angle=0.05, axis=vec(0, 1, 0))\n    print(n)\n';
 const FINITE = 'Web VPython 3.2\nsphere()\nfor i in range(3):\n    rate(10)\n';
 const BROKEN = 'Web VPython 3.2\nwhile True\n    rate(30)\n';
+// A button whose handler raises, beside a main loop that keeps going.
+const HANDLER_ERROR = 'Web VPython 3.2\nb = box()\ndef boom(evt):\n    raise ValueError("boom")\nbutton(bind=boom, text="Boom")\nn = 0\nwhile True:\n    rate(30)\n    n = n + 1\n    print(n)\n';
 
 // A Stop within 500 ms of a Run is ignored as the second click of a double-click
 // on Run (STOP_GRACE_MS in glowscript-run-state.js), so these tests wait past it.
@@ -23,7 +25,8 @@ async function run(page, code) {
 }
 
 const runControl = (page) => page.locator('.run-it').first();
-const printed = (page) => page.frameLocator('#glowscriptOutput').locator('textarea#print').inputValue();
+// Fails fast if the runner or its print area is missing, instead of at the test timeout.
+const printed = (page) => page.frameLocator('#glowscriptOutput').locator('textarea#print').inputValue({ timeout: 5_000 });
 const printedLines = async (page) => (await printed(page)).split('\n').filter(Boolean).length;
 
 test.describe('Web VPython Stop button', () => {
@@ -47,6 +50,58 @@ test.describe('Web VPython Stop button', () => {
     await expect(page.locator('#glowscriptOutput')).toHaveCount(1);
     await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
 
+    const frozen = await printed(page);
+    await page.waitForTimeout(1_500);
+    expect(await printed(page)).toBe(frozen);
+  });
+
+  // Save asks the runner for a thumbnail. The runtime's screenshot goes through
+  // the waits that keep a stopped program parked, so the runner lets them
+  // through for the screenshot alone.
+  test('a stopped program still answers a snapshot request', async ({ page }) => {
+    await run(page, LOOP);
+    await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
+    await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
+    await runControl(page).click();
+    await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 5_000 });
+    await expect(runControl(page).locator('label')).toHaveText('Run');
+    // Parked, not torn down: the runner that has to answer is still there.
+    await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
+
+    const snapshot = await page.evaluate(() => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('no snapshot within 5 s')), 5_000);
+      window.addEventListener('message', function onMessage(e) {
+        let data;
+        try { data = JSON.parse(e.data); } catch (err) { return; }
+        if (data && data.snapshot) {
+          clearTimeout(timer);
+          window.removeEventListener('message', onMessage);
+          resolve(data.snapshot);
+        }
+      });
+      document.getElementById('glowscriptOutput').contentWindow.postMessage('glowscript.snapshot', '*');
+    }));
+    expect(snapshot).toMatch(/^data:image\/png/);
+  });
+
+  // An error raised outside the program's main flow leaves that flow running,
+  // so the control must stay Stop. Whether 3.2.3 reports a handler's error to
+  // the page at all is unconfirmed; this pins the outcome either way, and does
+  // not look at the error banner.
+  test('an error in an event handler does not end a running program', async ({ page }) => {
+    await run(page, HANDLER_ERROR);
+    await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
+    await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
+    await page.frameLocator('#glowscriptOutput').getByRole('button', { name: 'Boom' }).click();
+    // Half a second of the loop going on: time for any error report to arrive.
+    const afterClick = await printedLines(page);
+    await expect.poll(() => printedLines(page)).toBeGreaterThan(afterClick + 15);
+    await expect(runControl(page)).toHaveClass(/run-state-running/);
+    await expect(runControl(page).locator('label')).toHaveText('Stop');
+
+    await runControl(page).click();
+    await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 5_000 });
+    await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
     const frozen = await printed(page);
     await page.waitForTimeout(1_500);
     expect(await printed(page)).toBe(frozen);
