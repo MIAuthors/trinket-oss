@@ -63,6 +63,12 @@ function loadRunner(version, compiled, waits, stopShim) {
   const warnings = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('warn', (...args) => warnings.push(args.join(' ')));
+  // Forward the runner page's own errors (an uncaught exception, a missing
+  // browser API): otherwise they vanish, and the test only reports 'timed out'.
+  virtualConsole.on('jsdomError', (error) => {
+    console.error('runner page:', error.message);
+    if (error.detail) { console.error(error.detail); }
+  });
   const dom = new JSDOM(runnerHtml(version, stopShim), {
     runScripts: 'dangerously',
     virtualConsole,
