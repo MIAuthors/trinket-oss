@@ -14,7 +14,7 @@
 
 The plan below is kept as written. Where the committed code differs from a code block, the code and the spec are authoritative. Each block listed was superseded by a ruling made during execution (recorded in the SDD ledger, which git ignores); the final review's fix wave counts as one ruling.
 
-- **Task 2, Steps 1 and 3** (shim tests, `glowscript-stop-shim.js`): e7deb86, 2a47f2f and 8fb69ec, all from the fix wave. Bookkeeping tests from the Task 2 review; one `settled()` helper, `confirmStopped()` and a documented stop state; the snapshot exemption (`allowWaits()`, `exempt`).
+- **Task 2, Steps 1 and 3** (shim tests, `glowscript-stop-shim.js`): e7deb86, 2a47f2f, 8fb69ec and 73c7679, all from the fix wave. Bookkeeping tests from the Task 2 review; one `settled()` helper, `confirmStopped()` and a documented stop state; the snapshot exemption (`allowWaits()`, `exempt`), granted only after a confirmed stop.
 - **Task 3, Steps 1 and 3** (controller tests, `glowscript-run-state.js`): 4ce03f6, then d3ea392, 27bdb73 and 126609a from the fix wave. The stop timer is armed before any effect runs and teardown ends in try/finally; an error with an empty or missing message still ends the run. Fix wave: a background error leaves the run going, a non-object message is ignored, and the stop paths are pinned more tightly.
 - **Task 4, Steps 2, 4 and 6** (view tests, `run-stop-button.js`, `_run_stop.scss`): a18b02f, then 27bdb73 from the fix wave. Foundation builds its tooltips once at init, so the view rewrites the tooltip's text in place instead of removing it; the width is locked to the widest label; while running, `:focus` is transparent, the strip joins every color list, and `:hover` is split from `:focus-visible`. Fix wave: the focus ring moves to `outline-offset: -6px`.
 - **Task 5, Step 1** (template tests): 3e70567, then 9c98f12, 8fb69ec and d3ea392 from the fix wave. Tests for the template's fail-open guard; fix wave: runner-page errors forwarded to the test output, snapshot-after-Stop and background-error tests.
@@ -23,7 +23,7 @@ The plan below is kept as written. Where the committed code differs from a code 
 - **Task 5, Steps 8, 11.2 and 14** (page-side helpers, launch, message routing): 1f0b6ee and 3e70567. `ignoredRunner` also covers the outgoing runner from launch; load-failure reports count only from the current runner; a torn-down run clears `lastRunnerHtml`, so it is never rebuilt.
 - **Task 5, Step 12** (`initialize`): 27bdb73, fix wave. `onState` catches a throwing view, so drawing the control can never block Run or Stop.
 - **Task 5, Step 16.2** (What's New): fix wave. The wording no longer implies that Run comes back later.
-- **Task 6, Step 1** (browser spec): 8a6e67b, 84b09fb, then fb71697 from the fix wave. A fifth, keyboard test; tests 3 to 5 made to fail when their behaviour is gone; fix wave: snapshot after Stop, an error in an event handler, and a 5 s timeout in `printed()`.
+- **Task 6, Step 1** (browser spec): 8a6e67b, 84b09fb, then fb71697 from the fix wave. A fifth, keyboard test; tests 3 to 5 made to fail when their behaviour is gone; fix wave: snapshot after Stop, an error in an event handler, and a 5 s timeout in `printed()`, which the polls read as no output yet rather than as a failure.
 
 Added with no plan block: the Enter keypress guard in `glowscript.js` (3e70567), and the `.fail` handler on the external-sandbox POST (1f0b6ee).
 

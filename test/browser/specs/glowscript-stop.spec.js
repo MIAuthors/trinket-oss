@@ -27,7 +27,11 @@ async function run(page, code) {
 const runControl = (page) => page.locator('.run-it').first();
 // Fails fast if the runner or its print area is missing, instead of at the test timeout.
 const printed = (page) => page.frameLocator('#glowscriptOutput').locator('textarea#print').inputValue({ timeout: 5_000 });
-const printedLines = async (page) => (await printed(page)).split('\n').filter(Boolean).length;
+// For expect.poll. The print area appears only at the program's first print(),
+// after the runtime loads, and a generator that rejects ends the poll on its
+// first call (Playwright 1.48) instead of being retried. So a read that fails
+// counts as no output yet, and the poll's own timeout decides.
+const printedLines = async (page) => (await printed(page).catch(() => '')).split('\n').filter(Boolean).length;
 
 test.describe('Web VPython Stop button', () => {
   test('Run turns into Stop, with the strip, while a program runs', async ({ page }) => {
@@ -56,8 +60,8 @@ test.describe('Web VPython Stop button', () => {
   });
 
   // Save asks the runner for a thumbnail. The runtime's screenshot goes through
-  // the waits that keep a stopped program parked, so the runner lets them
-  // through for the screenshot alone.
+  // the waits that keep a stopped program parked, so the runner lets new waits
+  // through while the screenshot is taken.
   test('a stopped program still answers a snapshot request', async ({ page }) => {
     await run(page, LOOP);
     await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);

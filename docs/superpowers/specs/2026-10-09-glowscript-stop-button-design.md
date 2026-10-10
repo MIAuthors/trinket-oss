@@ -44,7 +44,7 @@ code is actively running the Stop button shows a subtle animation.
    - wraps the wait functions `win.rate`, `win.sleep`, `win.waitfor`, `win.pause`, and `win.canvas.prototype.waitfor` and `.pause`, each only if it exists and is a function, and only once;
    - listens for the `glowscript.stop` message;
    - while no stop is requested, every wrapper is a pass-through;
-   - after a stop request, a wait that is in progress never hands control back to the program, a new call never starts (except the waits of a snapshot's screenshot; see Edge cases), and the runner posts `glowscript.stopped` once.
+   - after a stop request, a wait that is in progress never hands control back to the program, a new call never starts (except while a snapshot of the stopped program is being taken; see Edge cases), and the runner posts `glowscript.stopped` once.
 
    Both GlowScript calling styles are handled: a promise result (2.9 and later) and a continuation callback as the last argument (1.1 to 2.7). If a stop arrives while at least one wrapped wait is pending, the confirmation is immediate; otherwise it is sent when the program next calls a wrapped function.
 2. **Runner template change** in `glowscript.html`. Insert `{{stopShim}}`, and post `glowscript.done` when the program finishes normally: after `await __main__()` returns, and in the `userMain` callback when there is no error. Error paths are unchanged, except that on 2.9 and later `window.onerror` tags an error raised while the main flow runs (see the message protocol).
@@ -119,7 +119,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - An error raised outside the main flow while the program runs (an event handler, a widget callback, a timer), on 2.9 and later: `window.onerror` tags its report `glowscript.background`. The existing alert banner still shows it, and the control stays Stop, because the main flow is still running.
 - Enter on the output-only toolbar's `<button>` Run/Stop control: `embed.js` acts on the keypress, so `glowscript.js` cancels the click the browser would synthesize from it, and each Enter is dispatched once. Otherwise Enter on Stop before the runner is ready would tear the run down, and the synthesized click, by then on Run, would restart it.
 - Ctrl/Cmd-Enter or the "Run your code first" modal while running or stopping: a fresh run replaces the old one, as today, and the button stays in Stop for the new run.
-- External sandbox mode, load-failure retries and thumbnail snapshots all respect the generation guard. A frozen runner still answers `glowscript.snapshot`; after a teardown the existing snapshot code already skips a missing iframe. The runtime's screenshot goes through the waits the shim parks, so the runner template asks the shim for a window in which the screenshot's own new waits pass through: the window is granted only after a confirmed stop, each wait is decided when it is made, and the window closes within 5 s.
+- External sandbox mode, load-failure retries and thumbnail snapshots all respect the generation guard. A frozen runner still answers `glowscript.snapshot`; after a teardown the existing snapshot code already skips a missing iframe. The runtime's screenshot goes through the waits the shim parks, so the runner template asks the shim for a window in which new waits pass through and the screenshot can finish: the window is granted only after a confirmed stop, each wait is decided when it is made, and the window closes when the screenshot settles, or after 5 s at most.
 - Output-only embeds (`default-toolbar.html`) and calculator run mode behave the same as the editor view.
 
 ## Known limits
@@ -130,6 +130,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - Only the 3.2.3 runtime is checked in a browser during this work. The other versions rely on unit tests of both calling styles and on the teardown fallback.
 - Before GlowScript 2.9, any error report ends the run, including one from an event handler: there, the main flow's own errors may surface only through `window.onerror`, so the runner cannot tell the two apart.
 - A snapshot started before a stop is confirmed may not complete: one requested while the control shows Stopping…, or one still under way when Stop is pressed, parks with the program, so that save keeps no new thumbnail.
+- The snapshot window exempts every wait that starts while it is open, not only the screenshot's. An event handler's flow can therefore advance while a snapshot of a stopped program is taken, for at most 5 s. In a rare case the main flow can too: when it was in an await the shim does not wrap at the moment another flow's wait confirmed the stop. It parks again at its first wait after the window closes.
 
 ## Out of scope
 
@@ -147,16 +148,19 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 
    If interception fails, work stops and the approach is revisited with the requester before anything else is built.
 2. Unit tests (Vitest), named after their units:
-   - `glowscript-stop-shim.test.js` covers both calling styles, pass-through, stop while parked, stop while computing, the single confirmation, and idempotent install.
-   - `glowscript-run-state.test.js` covers every row of the transition table.
+   - `glowscript-stop-shim.test.js` covers both calling styles, pass-through, stop while parked, stop while computing, the single confirmation, idempotent install, the pending bookkeeping, and the snapshot window: granted only after a confirmed stop, decided per wait, idempotent release and the 5 s auto-release.
+   - `glowscript-run-state.test.js` covers every row of the transition table, including background errors and non-object messages, and the order of drawn states on the stop paths.
    - `run-stop-button.test.js` (jsdom) covers each state's action, label, icon, aria, title, tooltip text rewrite, strip injection and width lock, and the exact restore of both toolbars' originals.
-   - `glowscript-runner-template.test.js` loads the template from `glowscript.html`, fills it the way `glowscript.js` does, and runs it against a fake runtime. It checks that the shim installs before the program runs and that ready then done is posted on both version paths.
+   - `glowscript-runner-template.test.js` loads the template from `glowscript.html`, fills it the way `glowscript.js` does, and runs it against a fake runtime. It checks that the shim installs before the program runs, that ready then done is posted on both version paths, that a failing shim never keeps the program from running, that a stopped program still answers a snapshot request, and that `window.onerror` tags background errors only while the 2.9+ main flow runs.
 3. `npm run build:css` succeeds with the new partial.
 4. `test/browser/specs/glowscript-stop.spec.js` (Playwright, local stack) covers:
    - Run shows Stop with the strip;
-   - Stop returns to Run and the program stops progressing;
+   - Stop returns to Run and the program is frozen in place, parked rather than torn down;
+   - a stopped program still answers a snapshot request;
+   - an error in an event handler does not end a running program;
    - a finite program returns to Run on its own;
-   - a compile error returns to Run.
+   - a compile error returns to Run;
+   - Enter on the output-only Stop button stops the program instead of restarting it.
 
    It needs the local stack and the vendored runtime. If that is not available during the work, it is committed unrun and marked as such.
 5. The full unit suite passes.

@@ -11,7 +11,8 @@
 // (camera rotation and zoom belong to the runtime, not the program). The runner
 // confirms with glowscript.stopped once the program is parked. The one
 // exception: while the runner template takes a snapshot of a stopped program,
-// the screenshot's own new waits pass through (allowWaits below).
+// waits that start during the snapshot pass through, so the screenshot can
+// finish (allowWaits below).
 //
 // Spec: docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
 // UMD-lite: window global for the embed page, module.exports for the tests.
@@ -76,8 +77,9 @@
     // that keep the program parked. The runner template asks for this window
     // around a screenshot: a wait that starts while it is open passes through,
     // while the program's own waits, which started before it, stay parked.
-    // release() closes it once, and so does a timer, in case the screenshot
-    // never finishes.
+    // That is any wait, not only the screenshot's, so an event handler's flow
+    // can advance while the window is open. release() closes it once, and so
+    // does a timer, in case the screenshot never finishes.
     //
     // Granted only once the stop is confirmed. Before that the program may
     // still be on its way to its next wait; a window opened then would still

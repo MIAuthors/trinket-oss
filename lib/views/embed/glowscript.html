@@ -286,9 +286,11 @@ while True:
 
           // Stop button: after a stop the program's waits are parked
           // (glowscript-stop-shim.js), and a screenshot goes through them.
-          // Let the screenshot's own waits through until the returned function
-          // is called. A failure here must never keep a snapshot from being
-          // taken, so it falls back to doing nothing.
+          // Let waits that start from now on through, so the screenshot can
+          // finish, until the returned function is called. The shim lets any
+          // flow's waits through meanwhile, not only the screenshot's. A failure
+          // here must never keep a snapshot from being taken, so it falls back
+          // to doing nothing.
           function allowSnapshotWaits() {
             var release = function () {};
             try {
