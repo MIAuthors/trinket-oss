@@ -21,17 +21,30 @@
   'use strict';
 
   function install(win) {
+    // Repeated on purpose: source() stringifies install on its own, which
+    // leaves the factory's directive behind, so in the runner page this is
+    // the only 'use strict' install gets.
     'use strict';
     if (win.__trinketStop) { return win.__trinketStop; }
 
+    // The stop state, published as win.__trinketStop:
+    //   requested - the page asked for a stop; from then on the waits park.
+    //   pending   - wrapped waits in flight. A stop that arrives while one is
+    //               in flight finds the program parked in it, so it confirms
+    //               at once.
+    //   confirmed - glowscript.stopped has been posted. It is posted once.
     var stop = { requested: false, pending: 0, confirmed: false };
     win.__trinketStop = stop;
 
     function post(message) {
+      // Deliberately empty catch: a runner that cannot reach the page has no
+      // one to report to, and the page's teardown fallback covers a lost
+      // ready or stopped message.
       try { win.parent.postMessage(JSON.stringify(message), '*'); } catch (e) {}
     }
 
-    function confirm() {
+    // Not named confirm: that would shadow the runner page's window.confirm.
+    function confirmStopped() {
       if (stop.confirmed) { return; }
       stop.confirmed = true;
       post({ 'glowscript.stopped': true });
@@ -41,13 +54,21 @@
       return new Promise(function () {});
     }
 
+    // A counted wait has settled. True: the program goes on. False: a stop
+    // arrived meanwhile, so the program stays parked and the stop is confirmed.
+    function settled() {
+      stop.pending -= 1;
+      if (stop.requested) { confirmStopped(); return false; }
+      return true;
+    }
+
     function wrap(owner, name) {
       var original = owner && owner[name];
       if (typeof original !== 'function' || original.__trinketStoppable) { return; }
 
       var wrapped = function () {
         if (stop.requested) {
-          confirm();
+          confirmStopped();
           return parkForever();
         }
 
@@ -59,9 +80,7 @@
           var resume = args[last];
           stop.pending += 1;
           args[last] = function () {
-            stop.pending -= 1;
-            if (stop.requested) { confirm(); return undefined; }
-            return resume.apply(this, arguments);
+            return settled() ? resume.apply(this, arguments) : undefined;
           };
           return original.apply(this, args);
         }
@@ -72,13 +91,9 @@
         stop.pending += 1;
         return new Promise(function (resolve, reject) {
           result.then(function (value) {
-            stop.pending -= 1;
-            if (stop.requested) { confirm(); return; }
-            resolve(value);
+            if (settled()) { resolve(value); }
           }, function (error) {
-            stop.pending -= 1;
-            if (stop.requested) { confirm(); return; }
-            reject(error);
+            if (settled()) { reject(error); }
           });
         });
       };
@@ -96,7 +111,7 @@
     win.addEventListener('message', function (event) {
       if (event.data !== 'glowscript.stop' || stop.requested) { return; }
       stop.requested = true;
-      if (stop.pending > 0) { confirm(); }
+      if (stop.pending > 0) { confirmStopped(); }
     });
 
     post({ 'glowscript.ready': true });
