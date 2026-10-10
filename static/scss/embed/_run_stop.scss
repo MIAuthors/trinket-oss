@@ -69,9 +69,11 @@ $run-stopping-color: #6B6B6B;  // 5.3:1 on white
 
   &:focus-visible {
     background: $run-stop-color !important;
-    // Outside the strip's band (2-4 px in), so the lap stays visible.
+    // 4-6 px in: on the red fill, so the ring shows (at -2px it merged with
+    // the white toolbar), and just inside the strip's band (2-4 px in), so
+    // the lap stays visible.
     outline: 2px solid #fff;
-    outline-offset: -2px;
+    outline-offset: -6px;
 
     &,
     > i,

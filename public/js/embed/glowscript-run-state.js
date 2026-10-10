@@ -99,7 +99,9 @@
       },
       // Route a parsed runner message. Only the current run's runner counts.
       receive: function (data, fromCurrentRunner) {
-        if (!data || !fromCurrentRunner) { return; }
+        // A program can post any JSON, a bare string or number included; only
+        // an object can be a runner message (and `in` throws on a primitive).
+        if (!data || typeof data !== 'object' || !fromCurrentRunner) { return; }
         if (data['glowscript.ready']) { api.ready(); }
         // An error raised outside the main flow (an event handler, a timer)
         // leaves the program running, so the run goes on.

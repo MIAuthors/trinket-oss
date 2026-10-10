@@ -381,7 +381,10 @@ window.TrinketAPI = {
     if (typeof trinketGlowscriptRunState !== 'undefined' && typeof trinketRunStopButton !== 'undefined') {
       runButton = trinketRunStopButton.create(document.querySelectorAll('.run-it'), $);
       runState = trinketGlowscriptRunState.create({
-        onState     : function(state) { runButton.set(state); },
+        // Drawing the control must never keep Run or Stop from happening.
+        onState     : function(state) {
+          try { runButton.set(state); } catch (e) { console.warn('Run/Stop control update failed:', e); }
+        },
         requestStop : function() {
           var runner = currentRunnerWindow();
           if (runner) { runner.postMessage('glowscript.stop', '*'); }

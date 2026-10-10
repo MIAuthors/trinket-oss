@@ -213,6 +213,14 @@ describe('receive', () => {
     }
   });
 
+  it('ignores a JSON primitive a program posts, instead of throwing', () => {
+    const h = readyRun();
+    for (const data of ['boom', 42, true]) {
+      expect(() => h.ctl.receive(data, true)).not.toThrow();
+    }
+    expect(h.ctl.state()).toBe('running');
+  });
+
   it('ignores messages from any other runner, and non-runner messages', () => {
     const h = readyRun();
     h.ctl.receive({ 'glowscript.done': true }, false);
