@@ -51,6 +51,8 @@ function fakeJQuery(window) {
       remove: () => { if (el) { el.remove(); } },
       css: () => {},
       append: () => {},
+      // The pre-2.9 snapshot code waits for its image to load; a fake image already has.
+      load: (fn) => { fn.call(el); },
     };
   };
   $.find = () => [];
@@ -58,6 +60,8 @@ function fakeJQuery(window) {
 }
 
 // Load the runner page with a fake runtime whose compiler returns `compiled`.
+// `waits` holds the runtime's wait functions, or installs a fuller runtime
+// when it is a function of the runner's window.
 function loadRunner(version, compiled, waits, stopShim) {
   const messages = [];
   const warnings = [];
@@ -77,7 +81,7 @@ function loadRunner(version, compiled, waits, stopShim) {
       window.reportScriptError = () => '';
       window.glowscript_compile = () => compiled;
       window.ticks = 0;
-      Object.assign(window, waits);
+      if (typeof waits === 'function') { waits(window); } else { Object.assign(window, waits); }
       window.addEventListener('message', (e) => {
         try { messages.push(JSON.parse(e.data)); } catch (err) { /* plain-string messages */ }
       });
@@ -100,6 +104,49 @@ const kinds = (messages) => messages.map((m) => Object.keys(m)[0]);
 const promiseRate = { rate: () => new Promise((resolve) => setTimeout(resolve, 1)) };
 // GlowScript 1.1 to 2.7: rate(n, continuation).
 const callbackRate = { rate: (n, next) => { setTimeout(next, 1); } };
+
+// A canvas whose screenshot goes through the wrapped waits, as GlowScript's
+// does: the renderer waits for canvas.waitfor('draw_complete'), which polls
+// the global rate(60) until the runtime's render loop (which Stop leaves
+// running) has drawn a frame. jsdom has no 2D canvas, so the drawing the
+// snapshot code does afterwards is stubbed.
+const SNAPSHOT = 'data:image/png;base64,c25hcHNob3Q=';
+function snapshotCanvas(window, screenshot, waitfor) {
+  function canvas() {
+    const scene = this;
+    scene.drawn = false;
+    (function renderLoop() { scene.drawn = true; window.setTimeout(renderLoop, 5); }());
+    scene.__renderer = { screenshot: screenshot(scene) };
+  }
+  canvas.prototype.waitfor = waitfor;
+  canvas.activated = [];
+  window.canvas = canvas;
+  window.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: () => {} });
+  window.HTMLCanvasElement.prototype.toDataURL = () => SNAPSHOT;
+}
+const IMAGE = { width: 400, height: 300 };
+// GlowScript 2.9 and later, shaped like 3.2.2.
+function snapshotRuntimePromise(window) {
+  Object.assign(window, promiseRate);
+  snapshotCanvas(window,
+    (scene) => async () => { await scene.waitfor('draw_complete'); return IMAGE; },
+    async function (event) {
+      this.drawn = false;
+      while (!this.drawn) { await window.rate(60); }
+      return event;
+    });
+}
+// GlowScript 1.1 to 2.7, shaped like 2.7.5: continuations instead of promises.
+function snapshotRuntimeCallback(window) {
+  Object.assign(window, callbackRate);
+  snapshotCanvas(window,
+    (scene) => (done) => { scene.waitfor('draw_complete', () => done(null, IMAGE)); },
+    function (event, next) {
+      const scene = this;
+      scene.drawn = false;
+      (function poll() { if (scene.drawn) { next(event); } else { window.rate(60, poll); } }());
+    });
+}
 
 describe('the runner template', () => {
   it('installs the stop shim before compiling or running the program', () => {
@@ -157,6 +204,75 @@ describe('GlowScript 1.1 to 2.7 (callback style)', () => {
     expect(window.ticks).toBe(parkedAt);
     expect(kinds(messages)).not.toContain('glowscript.done');
   });
+});
+
+describe('a snapshot requested after Stop', () => {
+  const cases = [
+    ['3.2.3', snapshotRuntimePromise,
+      'async function __main__() { window.scene = new canvas(); while (true) { await rate(30); window.ticks += 1; } }',
+      (window, done) => { window.rate(30).then(done); }],
+    ['2.7.5', snapshotRuntimeCallback,
+      '(function (done) { window.scene = new canvas(); function loop() { window.ticks += 1; rate(30, loop); } loop(); })',
+      (window, done) => { window.rate(30, done); }],
+  ];
+  for (const [version, runtime, compiled, wait] of cases) {
+    it(`is answered while the program stays parked (GlowScript ${version})`, async () => {
+      const { window, messages } = loadRunner(version, compiled, runtime);
+      try {
+        await until(() => window.ticks > 3);
+        window.postMessage('glowscript.stop', '*');
+        await until(() => kinds(messages).includes('glowscript.stopped'));
+        const parkedAt = window.ticks;
+
+        window.postMessage('glowscript.snapshot', '*');
+        // Posted only once the runtime's screenshot has resolved.
+        await until(() => kinds(messages).includes('snapshot'));
+        expect(messages.find((m) => m.snapshot).snapshot).toBe(SNAPSHOT);
+
+        // The screenshot's waits were let through only while it ran.
+        let resumed = false;
+        wait(window, () => { resumed = true; });
+        await sleep(30);
+        expect(resumed).toBe(false);
+        expect(window.ticks).toBe(parkedAt);
+      } finally {
+        window.close();
+      }
+    });
+  }
+});
+
+describe('a snapshot when the stop shim is missing or broken', () => {
+  const RUNNING = {
+    '3.2.3': 'async function __main__() { window.scene = new canvas(); while (!window.finish) { await rate(30); } }',
+    '2.7.5': '(function (done) { window.scene = new canvas(); function loop() { if (!window.finish) { rate(30, loop); } } loop(); })',
+  };
+  const RUNTIME = { '3.2.3': snapshotRuntimePromise, '2.7.5': snapshotRuntimeCallback };
+  const cases = [
+    ['3.2.3', 'no stop shim', 'throw new Error("shim");', null],
+    ['3.2.3', 'an older stop shim without allowWaits', 'window.__trinketStop = {};', null],
+    ['3.2.3', 'allowWaits throws', 'window.__trinketStop = { allowWaits: function () { throw new Error("broken"); } };',
+      'snapshot waits not allowed'],
+    ['2.7.5', 'allowWaits returns no release function', 'window.__trinketStop = { allowWaits: function () { return 1; } };',
+      'snapshot waits not closed'],
+  ];
+  for (const [version, what, stopShim, warning] of cases) {
+    it(`is still answered with ${what} (GlowScript ${version})`, async () => {
+      const { window, messages, warnings } = loadRunner(version, RUNNING[version], RUNTIME[version], stopShim);
+      try {
+        await until(() => window.scene);
+        window.postMessage('glowscript.snapshot', '*');
+        await until(() => kinds(messages).includes('snapshot'));
+        // A shim that has no window to offer is not a failure: nothing to warn about.
+        const snapshotWarnings = warnings.filter((w) => w.includes('snapshot waits'));
+        if (warning) { expect(snapshotWarnings.join('\n')).toContain(warning); }
+        else { expect(snapshotWarnings).toEqual([]); }
+      } finally {
+        window.finish = true;
+        window.close();
+      }
+    });
+  }
 });
 
 describe('a failing stop shim', () => {

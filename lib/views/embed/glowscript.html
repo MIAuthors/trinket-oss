@@ -272,6 +272,22 @@ while True:
             window.parent.postMessage(JSON.stringify({ snapshot: snapshot }), "*");
           }
 
+          // Stop button: after a stop the program's waits are parked
+          // (glowscript-stop-shim.js), and a screenshot goes through them.
+          // Let the screenshot's own waits through until the returned function
+          // is called. A failure here must never keep a snapshot from being
+          // taken, so it falls back to doing nothing.
+          function allowSnapshotWaits() {
+            var release = function () {};
+            try {
+              var shim = window.__trinketStop;
+              if (shim && typeof shim.allowWaits === 'function') { release = shim.allowWaits(); }
+            } catch (e) { if (window.console) { console.warn('Stop button: snapshot waits not allowed:', e); } }
+            return function () {
+              try { release(); } catch (e) { if (window.console) { console.warn('Stop button: snapshot waits not closed:', e); } }
+            };
+          }
+
           try {
             compiled = window.glowscript_compile(prog, { lang : '{{lang}}', version : '{{version}}' });
           } catch(e) {
@@ -332,30 +348,36 @@ while True:
                 }
               }
               if (scene) {
+                // Released when the screenshot completes or fails; a failure
+                // still surfaces exactly as it did before.
+                var release = allowSnapshotWaits();
                 if (parseFloat('{{version}}') >= 2.9) {
-                  async_screenshot(scene);
+                  async_screenshot(scene).then(release, function (err) { release(); throw err; });
                 }
                 else {
-                  (scene.__renderer || scene.renderer).screenshot(function (err, img) {
-                    if (!err) {
-                      $(img).load(function () {
-                        // Rescale the image to 128px max dimension and save it as a screenshot
-                        var targetSize = 270;
-                        var aspect = img.width / img.height;
-                        var w = aspect >= 1 ? targetSize : targetSize * aspect;
-                        var h = aspect >= 1 ? targetSize / aspect : targetSize;
+                  try {
+                    (scene.__renderer || scene.renderer).screenshot(function (err, img) {
+                      release();
+                      if (!err) {
+                        $(img).load(function () {
+                          // Rescale the image to 128px max dimension and save it as a screenshot
+                          var targetSize = 270;
+                          var aspect = img.width / img.height;
+                          var w = aspect >= 1 ? targetSize : targetSize * aspect;
+                          var h = aspect >= 1 ? targetSize / aspect : targetSize;
 
-                        var canvas = document.createElement("canvas");
-                        canvas.width = w;
-                        canvas.height = h;
-                        var cx = canvas.getContext('2d');
-                        cx.drawImage(img, 0, 0, w, h);
-                        var snapshot = canvas.toDataURL("image/png");
+                          var canvas = document.createElement("canvas");
+                          canvas.width = w;
+                          canvas.height = h;
+                          var cx = canvas.getContext('2d');
+                          cx.drawImage(img, 0, 0, w, h);
+                          var snapshot = canvas.toDataURL("image/png");
 
-                        window.parent.postMessage(JSON.stringify({ snapshot: snapshot }), "*");
-                      });
-                    }
-                  });
+                          window.parent.postMessage(JSON.stringify({ snapshot: snapshot }), "*");
+                        });
+                      }
+                    });
+                  } catch (err) { release(); throw err; }
                 }
               }
               else {

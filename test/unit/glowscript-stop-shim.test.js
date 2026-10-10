@@ -54,7 +54,7 @@ describe('install', () => {
     const win = fakeWindow();
     const state = install(win);
     expect(state).toBe(win.__trinketStop);
-    expect(state).toEqual({ requested: false, pending: 0, confirmed: false });
+    expect(state).toEqual({ requested: false, pending: 0, confirmed: false, exempt: 0, allowWaits: expect.any(Function) });
     expect(install(win)).toBe(state);
   });
 });
@@ -195,6 +195,109 @@ describe('callback-style waits (GlowScript 1.1 to 2.7)', () => {
     win.send('glowscript.stop');
     expect(stoppedCount(win)).toBe(1);
     pendingCallback();
+    expect(resumed).toBe(false);
+  });
+});
+
+// The page opens allowWaits() around a snapshot request: after Stop the
+// program is parked, and the runtime's screenshot goes through the same waits.
+describe('allowWaits: a snapshot after a confirmed stop', () => {
+  // rate() as the runtime provides it: each call is a wait the test settles,
+  // and reaching it at all shows the call was not parked by the shim.
+  function controlledRate() {
+    const calls = [];
+    return { calls, rate: () => { const wait = deferred(); calls.push(wait); return wait.promise; } };
+  }
+
+  // A program parked in its rate() wait by a confirmed stop.
+  function parkedProgram(extra) {
+    const runtime = controlledRate();
+    const win = fakeWindow(Object.assign({ rate: runtime.rate, setTimeout: () => 0 }, extra));
+    install(win);
+    let resumed = false;
+    win.rate(30).then(() => { resumed = true; });
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(1);
+    return { win, calls: runtime.calls, resumed: () => resumed };
+  }
+
+  it('lets a wait made while the window is open through, and it resolves', async () => {
+    const { win, calls } = parkedProgram();
+    win.__trinketStop.allowWaits();
+    const snapshotWait = win.rate(60);
+    expect(calls).toHaveLength(2);
+    calls[1].resolve('drawn');
+    await expect(snapshotWait).resolves.toBe('drawn');
+    expect(stoppedCount(win)).toBe(1);
+  });
+
+  it('keeps a wait made before the window parked when it resolves inside it', async () => {
+    const { win, calls, resumed } = parkedProgram();
+    win.__trinketStop.allowWaits();
+    calls[0].resolve();
+    await tick();
+    expect(resumed()).toBe(false);
+  });
+
+  it('closes on release(), and a second release() closes nothing more', () => {
+    const { win, calls } = parkedProgram();
+    const release = win.__trinketStop.allowWaits();
+    release();
+    win.rate(60);
+    expect(calls).toHaveLength(1);
+    release();
+    win.__trinketStop.allowWaits();
+    win.rate(60);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('closes on its own after 5 s, so a snapshot that never finishes cannot hold it open', () => {
+    const timers = [];
+    const { win, calls } = parkedProgram({ setTimeout: (fn, ms) => { timers.push({ fn, ms }); } });
+    const release = win.__trinketStop.allowWaits();
+    expect(timers.map((t) => t.ms)).toEqual([5000]);
+    win.rate(60);
+    expect(calls).toHaveLength(2);
+    timers[0].fn();
+    win.rate(60);
+    expect(calls).toHaveLength(2);
+    // The snapshot finishing late does not close a window opened after it.
+    release();
+    win.__trinketStop.allowWaits();
+    win.rate(60);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('lets a callback-style wait and its continuation through too (GlowScript 1.1 to 2.7)', () => {
+    const continuations = [];
+    const win = fakeWindow({ rate: (n, cb) => { continuations.push(cb); }, setTimeout: () => 0 });
+    install(win);
+    let resumed = false;
+    win.rate(30, () => { resumed = true; });
+    win.send('glowscript.stop');
+    win.__trinketStop.allowWaits();
+    let drawn = false;
+    win.rate(60, () => { drawn = true; });
+    expect(continuations).toHaveLength(2);
+    continuations[1]();
+    expect(drawn).toBe(true);
+    continuations[0]();
+    expect(resumed).toBe(false);
+    expect(stoppedCount(win)).toBe(1);
+  });
+
+  it('gives nothing while a stop is requested but not yet confirmed: the wait confirms and parks', async () => {
+    const runtime = controlledRate();
+    const win = fakeWindow({ rate: runtime.rate, setTimeout: () => 0 });
+    install(win);
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(0);
+    win.__trinketStop.allowWaits();
+    let resumed = false;
+    win.rate(60).then(() => { resumed = true; });
+    expect(runtime.calls).toHaveLength(0);
+    expect(stoppedCount(win)).toBe(1);
+    await tick();
     expect(resumed).toBe(false);
   });
 });
