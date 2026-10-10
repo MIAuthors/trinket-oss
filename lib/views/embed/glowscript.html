@@ -208,8 +208,17 @@ while True:
 <script id="glowscript_source" type="text/plain">{{prog}}</script>
 
         <script type="text/javascript">
+          // Stop button: true while the program's main flow runs (runProgram,
+          // GlowScript 2.9 and later). There the main flow's own errors arrive
+          // through runProgram, so an error window.onerror sees meanwhile came
+          // from outside it (an event handler, a timer), and is reported as a
+          // background error, which does not end the run.
+          var __trinketMainRunning = false;
+
           window.onerror = function(msg, url, line, col, err) {
-            window.parent.postMessage(JSON.stringify({ "glowscript.error": "SRCDOC ERROR: " + msg + " at " + url + ":" + line, type: "runtime" }), "*");
+            var report = { "glowscript.error": "SRCDOC ERROR: " + msg + " at " + url + ":" + line, type: "runtime" };
+            if (parseFloat('{{version}}') >= 2.9 && __trinketMainRunning) { report["glowscript.background"] = true; }
+            window.parent.postMessage(JSON.stringify(report), "*");
             return false;
           };
 
@@ -243,6 +252,7 @@ while True:
           async function runProgram(program) {
             try {
               eval(program);
+              __trinketMainRunning = true;
               await __main__();
               window.parent.postMessage(JSON.stringify({ "glowscript.done": true }), "*");
             } catch(err) {
@@ -254,6 +264,8 @@ while True:
               else {
                 window.parent.postMessage(JSON.stringify({ "glowscript.error" : err.message, type : "runtime" }), "*");
               }
+            } finally {
+              __trinketMainRunning = false;
             }
           }
 

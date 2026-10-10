@@ -206,6 +206,55 @@ describe('GlowScript 1.1 to 2.7 (callback style)', () => {
   });
 });
 
+// window.onerror reports an error the runner did not catch. On GlowScript 2.9
+// and later the main flow's own errors arrive through runProgram instead, so
+// one window.onerror sees while that flow runs came from outside it. Each test
+// fires the program's event handler on the runner's own timer queue, as the
+// runtime would; the uncaught error it raises is forwarded to the test output.
+describe('an error raised outside the main flow', () => {
+  const HANDLER = 'window.handler = function () { undefinedThing.x = 1; };';
+  const handlerReport = (messages) => messages.find((m) => String(m['glowscript.error']).includes('undefinedThing'));
+
+  it('is tagged background while the main flow runs (GlowScript 2.9 and later)', async () => {
+    const { window, messages } = loadRunner('3.2.3',
+      HANDLER + 'async function __main__() { while (!window.finish) { await rate(30); window.ticks += 1; } }', promiseRate);
+    await until(() => window.ticks > 3);
+    window.setTimeout(window.handler, 0);
+    await until(() => handlerReport(messages));
+    const ticks = window.ticks;
+    await until(() => window.ticks > ticks);
+    window.finish = true;
+    await until(() => kinds(messages).includes('glowscript.done'));
+    expect(handlerReport(messages)).toMatchObject({ type: 'runtime', 'glowscript.background': true });
+  });
+
+  const settledMains = [
+    ['finished', 'async function __main__() { await rate(30); }', 'glowscript.done'],
+    ['failed', 'async function __main__() { await rate(30); throw new Error("main failed"); }', 'glowscript.error'],
+  ];
+  for (const [how, main, settled] of settledMains) {
+    it(`is not tagged once the main flow has ${how}`, async () => {
+      const { window, messages } = loadRunner('3.2.3', HANDLER + main, promiseRate);
+      await until(() => kinds(messages).includes(settled));
+      window.setTimeout(window.handler, 0);
+      await until(() => handlerReport(messages));
+      expect(handlerReport(messages)).not.toHaveProperty(['glowscript.background']);
+    });
+  }
+
+  it('is not tagged before GlowScript 2.9, where main-flow errors may arrive only this way', async () => {
+    const { window, messages } = loadRunner('2.7.5',
+      HANDLER + '(function (done) { function loop() { window.ticks += 1; if (window.finish) { done(); } else { rate(30, loop); } } loop(); })',
+      callbackRate);
+    await until(() => window.ticks > 3);
+    window.setTimeout(window.handler, 0);
+    await until(() => handlerReport(messages));
+    window.finish = true;
+    await until(() => kinds(messages).includes('glowscript.done'));
+    expect(handlerReport(messages)).not.toHaveProperty(['glowscript.background']);
+  });
+});
+
 describe('a snapshot requested after Stop', () => {
   const cases = [
     ['3.2.3', snapshotRuntimePromise,

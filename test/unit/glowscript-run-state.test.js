@@ -222,6 +222,38 @@ describe('receive', () => {
   });
 });
 
+describe('background errors', () => {
+  // The runner's window.onerror report of an error raised outside the program's
+  // main flow (an event handler, a timer) while that flow runs, GlowScript 2.9+.
+  const BACKGROUND = {
+    'glowscript.error': 'SRCDOC ERROR: Uncaught ReferenceError: boom is not defined at about:srcdoc:1',
+    type: 'runtime',
+    'glowscript.background': true,
+  };
+
+  it('leave the program running, and Stop still stops it', () => {
+    const h = readyRun();
+    h.ctl.receive(BACKGROUND, true);
+    expect(h.ctl.state()).toBe('running');
+    h.ctl.stop();
+    expect(h.ctl.state()).toBe('stopping');
+    expect(h.effects.requestStop).toBe(1);
+    h.ctl.receive({ 'glowscript.stopped': true }, true);
+    expect(h.ctl.state()).toBe('idle');
+  });
+
+  it('an error without the background tag still ends the run', () => {
+    for (const data of [
+      { 'glowscript.error': BACKGROUND['glowscript.error'], type: 'runtime' },
+      Object.assign({}, BACKGROUND, { 'glowscript.background': false }),
+    ]) {
+      const h = readyRun();
+      h.ctl.receive(data, true);
+      expect(h.ctl.state()).toBe('idle');
+    }
+  });
+});
+
 describe('defaults', () => {
   it('uses a 2 s stop window and a 500 ms double-click guard', () => {
     expect(STOP_TIMEOUT_MS).toBe(2000);

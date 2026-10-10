@@ -101,8 +101,11 @@
       receive: function (data, fromCurrentRunner) {
         if (!data || !fromCurrentRunner) { return; }
         if (data['glowscript.ready']) { api.ready(); }
-        // Any runner error ends the run, including one whose message is empty or
-        // missing: every runner error carries a type of runtime or compile.
+        // An error raised outside the main flow (an event handler, a timer)
+        // leaves the program running, so the run goes on.
+        else if (data['glowscript.background']) { return; }
+        // Any other runner error ends the run, including one whose message is
+        // empty or missing: every runner error carries a type of runtime or compile.
         else if (data['glowscript.done'] || 'glowscript.error' in data ||
                  data.type === 'runtime' || data.type === 'compile') { api.finished(); }
         else if (data['glowscript.stopped']) { api.stopped(); }
