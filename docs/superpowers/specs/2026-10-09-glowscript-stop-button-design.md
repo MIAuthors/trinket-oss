@@ -49,7 +49,7 @@ code is actively running the Stop button shows a subtle animation.
    Both GlowScript calling styles are handled: a promise result (2.9 and later) and a continuation callback as the last argument (1.1 to 2.7). If a stop arrives while at least one wrapped wait is pending, the confirmation is immediate; otherwise it is sent when the program next calls a wrapped function.
 2. **Runner template change** in `glowscript.html`. Insert `{{stopShim}}`, and post `glowscript.done` when the program finishes normally: after `await __main__()` returns, and in the `userMain` callback when there is no error. Error paths are unchanged, except that on 2.9 and later `window.onerror` tags an error raised while the main flow runs (see the message protocol).
 3. **Run-state controller**, `public/js/embed/glowscript-run-state.js`. Pure, UMD-lite, no DOM and no clock of its own: the page passes in timer functions and callbacks (`onState`, `requestStop`, `teardown`). It owns the states, the 2 s stop window, and a generation number.
-4. **Run/Stop button view**, `public/js/embed/run-stop-button.js`. Given the `.run-it` elements on the page, it records each one's original action, title, aria-label, icon class and label text, and applies the three visual states. Returning to idle restores the recorded originals exactly, so both toolbars keep their own wording. Styles live in a new `static/scss/embed/_run_stop.scss`, imported by `embed.scss`; every rule is scoped to state classes that only this view adds, so other runtimes are unaffected.
+4. **Run/Stop button view**, `public/js/embed/run-stop-button.js`. Given the `.run-it` elements on the page, it records each one's original action, title, aria-label, icon class, label text and inline width, min-width, padding and white-space, and applies the three visual states. Returning to idle restores the recorded originals exactly, so both toolbars keep their own wording and size. Styles live in a new `static/scss/embed/_run_stop.scss`, imported by `embed.scss`; every rule is scoped to state classes that only this view adds, so other runtimes are unaffected.
 
 `glowscript.js` wires them together and owns the DOM: it builds the controller and the view, injects the shim source, routes messages, handles `trinket.code.stop`, and guards asynchronous rebuilds with the generation number.
 
@@ -94,13 +94,13 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 |---|---|---|---|---|---|
 | idle | original (`fa-play`) | original (`Run`) | original (`code.run`) | original | Unchanged from today |
 | running | `fa-stop` | `Stop` | `code.stop` | `Stop program` | Icon and label red `#C62828` (5.6:1 on white); one strip laps the inside edge |
-| stopping | `fa-stop` | `Stopping…` | `code.stop` | `Stopping program` | Icon and label gray `#6B6B6B`; strip paused at half opacity; no hover fill; `aria-disabled="true"` |
+| stopping | `fa-stop` | `Stop` | `code.stop` | `Stopping program` | The running control, dimmed: icon and label gray `#6B6B6B`; strip paused at half opacity; no hover fill; `aria-disabled="true"` |
 
 - The strip is an `aria-hidden` SVG injected once into the control: inset 3px from each edge, a `rect` with `width="100%" height="100%" rx="3" pathLength="100"`, stroke 2px in `currentColor`, `stroke-dasharray: 24 76`, animated by `stroke-dashoffset` from 0 to -100 over 1.6 s, linear, infinite.
 - Hover and keyboard focus while running fill the control with `#C62828` and turn the icon, label and strip white; focus also shows a visible 2px ring.
 - `prefers-reduced-motion: reduce` replaces the moving strip with a static 1.5px outline in the same color.
-- On entering running, the control's minimum width is set to its width with its widest label (Run, Stop or Stopping…) until it returns to idle, so the toolbar does not shift as the label changes.
-- The title follows the state: "Stop the program." while running and "Stopping the program." while stopping. The editor toolbar's control has a Foundation tooltip, which this project's Foundation 5.5 builds once at page init from the title, blanking the title as it does, and never rebuilds; for such a control the view rewrites the tooltip's text in place and leaves the title as Foundation left it. A control without a tooltip carries the wording in its title attribute.
+- The control keeps the exact width it has as Run in every state, so nothing in the toolbar moves. The view measures that width, to the sub-pixel, as the control leaves idle. Stop comes out a few pixels wider than Run (about 4 px with the label showing, about 1 px with only the icon) and takes the few pixels it needs from the control's inner padding, half from each side, so the content stays centered. The content is held to one line, so a rounding step in the browser's layout cannot wrap the label under the icon. Running and stopping share the width, so only leaving idle measures; a control that is not rendered (a hidden toolbar) is left alone. Returning to idle restores any inline width, min-width, padding and white-space the control's markup had.
+- The visible label reads Stop while stopping, so the aria-label ("Stopping program") and the tooltip are what say that it is stopping. The title follows the state: "Stop the program." while running and "Stopping the program." while stopping. The editor toolbar's control has a Foundation tooltip, which this project's Foundation 5.5 builds once at page init from the title, blanking the title as it does, and never rebuilds; for such a control the view rewrites the tooltip's text in place and leaves the title as Foundation left it. A control without a tooltip carries the wording in its title attribute.
 - Clicks in stopping are ignored by the controller.
 
 ### Wiring in glowscript.js
@@ -129,7 +129,8 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - A loop with no `rate()` or `sleep()` can freeze the browser tab before Stop can be clicked, as with Python on the main thread. No button can fix that.
 - Only the 3.2.3 runtime is checked in a browser during this work. The other versions rely on unit tests of both calling styles and on the teardown fallback.
 - Before GlowScript 2.9, any error report ends the run, including one from an event handler: there, the main flow's own errors may surface only through `window.onerror`, so the runner cannot tell the two apart.
-- A snapshot started before a stop is confirmed may not complete: one requested while the control shows Stopping…, or one still under way when Stop is pressed, parks with the program, so that save keeps no new thumbnail.
+- If the viewport crosses the large breakpoint while a program runs, which shows or hides the editor toolbar's Run label, the locked width holds until Run returns: the control is then wider than its content, or its content overflows it, for the rest of that run. The next run measures again.
+- A snapshot started before a stop is confirmed may not complete: one requested while the control is in its dimmed stopping state, or one still under way when Stop is pressed, parks with the program, so that save keeps no new thumbnail.
 - The snapshot window exempts every wait that starts while it is open, not only the screenshot's. An event handler's flow can therefore advance while a snapshot of a stopped program is taken, for at most 5 s. In a rare case the main flow can too: when it was in an await the shim does not wrap at the moment another flow's wait confirmed the stop. It parks again at its first wait after the window closes.
 
 ## Out of scope
@@ -150,17 +151,18 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 2. Unit tests (Vitest), named after their units:
    - `glowscript-stop-shim.test.js` covers both calling styles, pass-through, stop while parked, stop while computing, the single confirmation, idempotent install, the pending bookkeeping, and the snapshot window: granted only after a confirmed stop, decided per wait, idempotent release and the 5 s auto-release.
    - `glowscript-run-state.test.js` covers every row of the transition table, including background errors and non-object messages, and the order of drawn states on the stop paths.
-   - `run-stop-button.test.js` (jsdom) covers each state's action, label, icon, aria, title, tooltip text rewrite, strip injection and width lock, and the exact restore of both toolbars' originals.
+   - `run-stop-button.test.js` (jsdom) covers each state's action, label, icon, aria, title, tooltip text rewrite and strip injection; the width hold (Run's width kept through Stop and Stopping, sub-pixel, the difference taken from the padding and clamped, no new measurement while stopping, an unrendered control left alone, a content-box control); and the exact restore of both toolbars' originals, inline size included. jsdom has no layout, so the tests state what a browser would measure.
    - `glowscript-runner-template.test.js` loads the template from `glowscript.html`, fills it the way `glowscript.js` does, and runs it against a fake runtime. It checks that the shim installs before the program runs, that ready then done is posted on both version paths, that a failing shim never keeps the program from running, that a stopped program still answers a snapshot request, and that `window.onerror` tags background errors only while the 2.9+ main flow runs.
 3. `npm run build:css` succeeds with the new partial.
 4. `test/browser/specs/glowscript-stop.spec.js` (Playwright, local stack) covers:
    - Run shows Stop with the strip;
+   - the control keeps its width and height through Run, Stop and Run again, with the label showing and, below the large breakpoint, with only the icon;
    - Stop returns to Run and the program is frozen in place, parked rather than torn down;
    - a stopped program still answers a snapshot request;
    - an error in an event handler does not end a running program;
    - a finite program returns to Run on its own;
    - a compile error returns to Run;
-   - Enter on the output-only Stop button stops the program instead of restarting it.
+   - Enter on the output-only Stop button stops the program instead of restarting it, and that control keeps its size through the Run and the teardown.
 
    It needs the local stack and the vendored runtime. If that is not available during the work, it is committed unrun and marked as such.
 5. The full unit suite passes.
