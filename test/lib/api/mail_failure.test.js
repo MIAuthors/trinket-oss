@@ -4,6 +4,8 @@ const Store    = require('../../../lib/util/store');
 const mailer   = require('../../../lib/util/mailer');
 const nunjucks = require('../../../lib/util/nunjucks');
 const users    = require('../../../lib/controllers/users');
+const config   = require('config');
+const admin    = require('../../../lib/controllers/admin');
 
 // These handlers answer the user first and send the email afterwards, so a failed
 // send used to be an unhandled rejection that nobody saw. Here every send fails
@@ -133,6 +135,40 @@ describe('A failed mail send is logged and never an unhandled rejection', () => 
       expect(failureLines()).toHaveLength(1);
       expect(failureLines()[0]).toContain('type=confirm-email-change');
       expect(failureLines()[0]).toContain('to=new@example.com');
+    });
+  });
+
+  describe('session alert (admin.ohnoes)', () => {
+    let adminEmailWas;
+    beforeEach(() => { adminEmailWas = config.app.adminEmail; });
+    afterEach(() => { config.app.adminEmail = adminEmailWas; });
+
+    const alertLog = [{ time: 't', path: '/p', referrer: '', user: 'u', userAgent: 'ua', sesh: 's' }];
+
+    it('logs a failed alert', async () => {
+      config.app.adminEmail = 'admin@example.com';
+      const request = fakeRequest({ log: alertLog });
+      admin.ohnoes(request, vi.fn());
+      await settle();
+
+      expect(request.success).toHaveBeenCalled();
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      expect(unhandled).toEqual([]);
+      expect(failureLines()).toHaveLength(1);
+      expect(failureLines()[0]).toContain('type=session-alert');
+      expect(failureLines()[0]).toContain('to=admin@example.com');
+    });
+
+    it('does nothing when no admin address is configured (the shipped default)', async () => {
+      config.app.adminEmail = '';
+      const request = fakeRequest({ log: alertLog });
+      admin.ohnoes(request, vi.fn());
+      await settle();
+
+      expect(request.success).toHaveBeenCalled();
+      expect(mailer.send).not.toHaveBeenCalled();
+      expect(unhandled).toEqual([]);
+      expect(failureLines()).toEqual([]);
     });
   });
 });
