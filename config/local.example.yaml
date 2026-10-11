@@ -38,6 +38,9 @@ db:
 # OPTIONAL: Email (for password reset)
 # =============================================================================
 # Without email, users can still register and log in, but password reset won't work.
+# A failed send is logged as one "MAIL_SEND_FAILED type=... to=... message=..." line in the
+# app log (users are still told "success"), so grep for it if mail is not arriving.
+# Mailgun sandbox domains only deliver to authorized recipients.
 
 # app:
 #   mail:
