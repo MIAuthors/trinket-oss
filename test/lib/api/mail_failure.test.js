@@ -171,4 +171,30 @@ describe('A failed mail send is logged and never an unhandled rejection', () => 
       expect(failureLines()).toEqual([]);
     });
   });
+
+  describe('trinket share by email (trinket.email)', () => {
+    it('logs a failed send and responds exactly as before', async () => {
+      const trinketCtl     = require('../../../lib/controllers/trinket');
+      const globalNunjucks = require('nunjucks');   // trinket.js renders with the global (synchronous) nunjucks
+      vi.spyOn(globalNunjucks, 'render').mockReturnValue('<html>share</html>');
+
+      const request = fakeRequest({ email: 'friend@example.com', name: 'Todd' });
+      request.pre   = { trinket: { id: 't1', lang: 'python', shortCode: 'abc123', snapshot: '' } };
+      const reply   = vi.fn();
+
+      trinketCtl.email(request, reply);
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled(), { timeout: 5000 });
+      await settle();
+
+      // behaviour unchanged: the existing .catch still calls reply() once, with no arguments
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(reply).toHaveBeenCalledWith();
+      expect(request.success).not.toHaveBeenCalled();
+
+      expect(unhandled).toEqual([]);
+      expect(failureLines()).toHaveLength(1);
+      expect(failureLines()[0]).toContain('type=trinket-share');
+      expect(failureLines()[0]).toContain('to=friend@example.com');
+    });
+  });
 });
