@@ -81,3 +81,80 @@ for (const [label, query] of [['worker', '?runtime=worker'], ['main', '?runtime=
     });
   });
 }
+
+// #333, the two ways a worker stops being warm. The loop above only proves the
+// WARM path; the guard is `!!worker && ready`, and the `!!worker` half exists for
+// exactly these. Stop destroys the worker, so the next Run is a cold boot and has
+// to announce it again. A bare `ready` flag stays true for a worker that no longer
+// exists, and the boot after Stop would then say nothing at all.
+//
+// Worker runtime only: the main thread has no worker to destroy.
+async function waitForText(page, text, timeout) {
+  await expect(async () => {
+    expect(await consoleText(page)).toContain(text);
+  }).toPass({ timeout });
+}
+
+async function setCode(page, src) {
+  await page.evaluate((s) => {
+    document.querySelector('.ace_editor').env.editor.setValue(s, 1);
+  }, src);
+}
+
+const statusLines = async (page) => (await consoleText(page)).split('\n')
+  .map((l) => l.trim()).filter((l) => l.startsWith('Loading Python'));
+
+test.describe('worker runtime: a run after the worker is replaced or reset (#333)', () => {
+  test('a run after Stop is a cold boot and says so', async ({ page }) => {
+    await editorRun(page, '/embed/python3?runtime=worker', 'print("WARMED")\n');
+    await waitForText(page, 'WARMED', 120_000);
+
+    await setCode(page, 'print("LOOPING")\nwhile True:\n    pass\n');
+    await page.locator('.run-it').first().click();
+    await waitForText(page, 'LOOPING', 60_000);
+    const stop = page.locator('.stop-it');
+    await expect(stop).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(500);                  // let the button settle
+    await stop.click();
+    await expect(stop).toBeHidden({ timeout: 60_000 });
+
+    await setCode(page, 'print("AFTER-STOP")\n');
+    await page.locator('.run-it').first().click();
+    await waitForText(page, 'AFTER-STOP', 120_000);
+
+    const lines = (await consoleText(page)).split('\n').map((l) => l.trim()).filter(Boolean);
+    expect(lines, 'Stop destroyed the worker, so this run booted a new one and must say so')
+      .toContain('Loading Python (Pyodide)… ready');
+    expect(lines.filter((l) => l.startsWith('Loading Python') && l !== 'Loading Python (Pyodide)… ready'),
+      'and the status line must be closed, not joined to program output').toEqual([]);
+  });
+
+  // Not known in advance whether Clear memory replaces the worker or only resets
+  // its globals (pyodide.js says it keeps the loaded interpreter). Both are fine;
+  // what is not fine is a status line left open. So this pins the invariant that
+  // holds either way and logs which behaviour it saw, which is the answer #333 asks for.
+  test('a run after Clear memory leaves no status line open', async ({ page }) => {
+    await editorRun(page, '/embed/python3?runtime=worker', 'x = 1\nprint("BEFORE-CLEAR")\n');
+    await waitForText(page, 'BEFORE-CLEAR', 120_000);
+
+    const clicked = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('a,button')]
+        .find((e) => /clear memory/i.test(e.textContent || ''));
+      if (!el) return false;
+      el.click();
+      return true;
+    });
+    expect(clicked, 'the embed offers a Clear memory control').toBe(true);
+    await page.waitForTimeout(2500);
+
+    await setCode(page, 'print("AFTER-CLEAR")\n');
+    await page.locator('.run-it').first().click();
+    await waitForText(page, 'AFTER-CLEAR', 120_000);
+
+    const status = await statusLines(page);
+    console.log('  [run after Clear memory] status lines: ' + JSON.stringify(status)
+      + (status.length ? '  (worker was replaced)' : '  (worker was reused)'));
+    expect(status.filter((l) => l !== 'Loading Python (Pyodide)… ready'),
+      'any status line after Clear memory must be closed, never joined to output').toEqual([]);
+  });
+});
