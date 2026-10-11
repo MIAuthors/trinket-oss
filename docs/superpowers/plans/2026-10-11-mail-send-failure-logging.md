@@ -17,6 +17,7 @@
 - The log line format is exactly `MAIL_SEND_FAILED type=<type> to=<address> code=<code> responseCode=<n> message="<text>"`, written with a single `console.error` call (same channel the neighbouring code uses). Field names and order must not change.
 - User-visible behaviour must not change: same responses, same status codes. The only intended behaviour change is `admin.ohnoes` doing nothing when `config.app.adminEmail` is empty.
 - `mailer.sendSafe` must call `module.exports.send` (not a closed-over reference) so `vi.spyOn(mailer, 'send')` in existing and new tests intercepts it.
+- `lib/util/mailer.js` changes are **additive only**: do not modify `send`, `isConfigured`, `createTransport` or their behaviour. Eight modules import the mailer (see Impact Analysis) and five of them are not edited at all, so they must behave exactly as before.
 - Firestore cost rule (CLAUDE.md): this change adds no database reads or writes.
 - Commit with conventional messages (`fix(mail): …`, `test(mail): …`) and end each commit message with the trailer line `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Never use `--force`. Do not push.
 - Test commands run from the worktree root. The first vitest run in a fresh session can time out in the global setup while the in-memory Mongo binary starts; if you see `Hook timed out in 10000ms` on a suite with all tests skipped, run again (it is a cold start, not a failure of your change).
@@ -28,6 +29,23 @@
 3. `admin.ohnoes` with an empty `adminEmail` (the shipped default) must not attempt a send and must not log a failure. Pinned in Task 3.
 4. A template-render failure after the reset response is sent must be logged, must not attempt a send, and must not become an unhandled rejection. Pinned in Task 2.
 5. The success path is untouched: `sendSafe` returns exactly what `send` returns, and the existing `forgot_pass` and `trinket` suites keep passing. Pinned in Tasks 1 and 4.
+
+## Impact Analysis (code-review-graph and graphify, checked 2026-10-11)
+
+`importers_of lib/util/mailer.js` (code-review-graph) returns 10 files, cross-checked with a repo-wide grep (`mailer.send` appears 8 times in `lib/`; nothing outside `mailer.js` touches nodemailer, `sendMail` or `createTransport`):
+
+| Importer | Uses | This plan |
+|---|---|---|
+| `lib/controllers/users.js` | `send` x3 (dropped promise), `isConfigured` | **Task 2** |
+| `lib/controllers/admin.js` | `send` x1 (dropped promise) | **Task 3** |
+| `lib/controllers/trinket.js` | `send` x1 (own `.catch`, silent) | **Task 4** (log only) |
+| `lib/models/courseInvitation.js` | `send`, already `.catch`es and logs | untouched |
+| `lib/workers/exports.js` | `send` x2, rejection propagates into the job's failure path | untouched |
+| `lib/controllers/course.js` | `isConfigured` only (lines 771, 818) | untouched |
+| `lib/controllers/pages.js`, `app.js` | import only, no call | untouched |
+| `test/lib/api/forgot_pass.test.js`, `trinket.test.js` | spy on `send` / `isConfigured` | must keep passing (Tasks 2 and 4) |
+
+Consequences for the work: the mailer changes must be additive (Global Constraints), so the five untouched importers cannot change behaviour; the call-site tasks are the only places user-visible flow is edited. The coordinator re-runs code-review-graph `detect_changes` / impact on the finished branch (graph built for this worktree) and compares the changed-function list with this table before the final review.
 
 ---
 
