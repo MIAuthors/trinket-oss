@@ -43,6 +43,26 @@ describe('mailer.logFailure', () => {
     expect(out[1]).toBe('MAIL_SEND_FAILED type=unknown to= code= responseCode= message=""');
     expect(out).toHaveLength(3);
   });
+
+  it('strips control characters (ESC, NUL) that whitespace collapsing leaves behind', () => {
+    mailer.logFailure(new Error('a\x1b[31mred\x00b'), { type: 't', to: 'a@b.edu' });
+    const out = lines();
+    expect(out).toHaveLength(1);
+    expect(out[0]).not.toContain('\x1b');
+    expect(out[0]).not.toContain('\x00');
+    expect(out[0]).toContain('message="a [31mred b"');
+  });
+
+  it('never throws and still writes exactly one line, even when stringifying the error throws', () => {
+    const hostile = { toString() { throw new Error('x'); }, message: { toString() { throw new Error('y'); } } };
+    expect(() => mailer.logFailure(Object.create(null))).not.toThrow();
+    expect(() => mailer.logFailure(hostile)).not.toThrow();
+    const out = lines();
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/^MAIL_SEND_FAILED/);
+    expect(out[1]).toMatch(/^MAIL_SEND_FAILED/);
+    expect(out[0]).toBe('MAIL_SEND_FAILED type=unknown to= code= responseCode= message="(unloggable error)"');
+  });
 });
 
 describe('mailer.sendSafe', () => {
@@ -73,5 +93,16 @@ describe('mailer.sendSafe', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(mailer, 'send').mockRejectedValue(new Error('x'));
     await expect(mailer.sendSafe('a@b.edu', 'Hi')).resolves.toMatchObject({ failed: true });
+  });
+
+  it('still resolves when send() rejects with a value that cannot be stringified', async () => {
+    const hostile = { toString() { throw new Error('x'); }, message: { toString() { throw new Error('y'); } } };
+    const errSpy  = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(mailer, 'send').mockRejectedValue(hostile);
+    const result = await mailer.sendSafe('a@b.edu', 'Hi', { type: 'password-reset' });
+    expect(result.failed).toBe(true);
+    expect(result.error).toBe(hostile);
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls[0][0]).toMatch(/^MAIL_SEND_FAILED/);
   });
 });
