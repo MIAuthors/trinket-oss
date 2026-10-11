@@ -9,7 +9,7 @@ Four controllers send email fire-and-forget and drop the promise `mailer.send()`
 | Site | Handler | What the user sees |
 |---|---|---|
 | `lib/controllers/users.js` | `sendPassReset` | "success", before the email is even rendered |
-| `lib/controllers/users.js` | `send_email_confirmation` (via `sendEmailChange`, `resendEmailChange`) | "success" |
+| `lib/controllers/users.js` | `send_email_confirmation` (via `resendEmailChange`; `sendEmailChange` also calls it but never reaches it, see out of scope) | "success" |
 | `lib/controllers/users.js` | `send_email_verification` (via `sendEmailVerification`) | "success" |
 | `lib/controllers/admin.js` | `ohnoes` (`POST /api/ohnoes`) | "success" |
 
@@ -45,6 +45,10 @@ User-visible responses are identical. The handlers still answer "success" before
 - Telling the user their email failed. Reset flows answer "success" regardless on purpose (no account enumeration); changing UX is a separate product decision.
 - Found while planning: when the share-by-email send fails, the HTTP request **never completes** (its `.catch` calls the legacy `reply()` shim from inside a callback, after the handler has returned). Pre-existing and separate; this change leaves the response behaviour exactly as it was and pins it with a test.
 - Retry or queueing of failed sends.
+- Found during implementation (all pre-existing, none fixed here; each deserves its own issue):
+  - `users.sendEmailChange` never answers and never sends. It calls `Store.set(key, val, callback)`, but `Store.set` takes two arguments and ignores the callback (`lib/util/store.js`), so the change-email request hangs and its `send_email_confirmation` call is unreachable. `resendEmailChange` is the only live path to that mail, so the test for that flow goes through it.
+  - `admin.ohnoes` builds the alert text from `var msg;` without initialising it, so every alert starts with the literal word "undefined".
+  - `sendPassReset` and `sendEmailVerification` `await Store.set/expire` outside any `try`; a Store failure there is still an unhandled rejection with no response sent. It is not a mail-send failure, so it is outside this change.
 
 ## Monitoring contract
 

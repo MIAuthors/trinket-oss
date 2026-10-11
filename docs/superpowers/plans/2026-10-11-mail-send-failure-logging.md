@@ -256,6 +256,7 @@ const defaults = require('../../helpers/defaults');
 const mailer   = require('../../../lib/util/mailer');
 const nunjucks = require('../../../lib/util/nunjucks');
 const users    = require('../../../lib/controllers/users');
+const Store    = require('../../../lib/util/store');
 
 // These handlers answer the user first and send the email afterwards, so a failed
 // send used to be an unhandled rejection that nobody saw. Here every send fails
@@ -365,10 +366,18 @@ describe('A failed mail send is logged and never an unhandled rejection', () => 
     });
   });
 
-  describe('email change confirmation (users.sendEmailChange)', () => {
+  // This goes through resendEmailChange, not sendEmailChange, although both end in
+  // send_email_confirmation: sendEmailChange never completes (it passes a callback to
+  // Store.set, which ignores it, so it neither answers nor sends). That is pre-existing
+  // and out of scope here; resendEmailChange is the live path to the same mail.
+  describe('email change confirmation (users.resendEmailChange)', () => {
     it('logs the failed send to the NEW address', async () => {
-      const request = fakeRequest({ email: 'new@example.com' });
-      users.sendEmailChange(request, vi.fn());
+      await Store.set(
+        Store.user.change_email_key('u1'),
+        JSON.stringify({ key: 'abc12345', new_email: 'new@example.com' })
+      );
+      const request = fakeRequest({});
+      users.resendEmailChange(request, vi.fn());
       await vi.waitFor(() => expect(request.success).toHaveBeenCalled());
       await settle();
 
@@ -621,7 +630,7 @@ Add this block inside the outer `describe` in `test/lib/api/mail_failure.test.js
       const reply   = vi.fn();
 
       trinketCtl.email(request, reply);
-      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled(), { timeout: 5000 });
       await settle();
 
       // behaviour unchanged: the existing .catch still calls reply() once, with no arguments
