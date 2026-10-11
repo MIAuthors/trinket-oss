@@ -82,7 +82,10 @@
       icon: icon ? icon.getAttribute('class') : null,
       label: label ? label.textContent : null,
       // The inline size and wrapping the markup itself carries, if any (usually
-      // none): the width hold below overrides them while a program runs.
+      // none), restored when the program ends: the width hold below overrides
+      // width, padding and white-space while a program runs. It never writes
+      // min-width; that is captured and restored defensively, in case markup
+      // or an older view left one.
       width: el.style.width,
       minWidth: el.style.minWidth,
       paddingLeft: el.style.paddingLeft,
