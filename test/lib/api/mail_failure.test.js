@@ -197,4 +197,32 @@ describe('A failed mail send is logged and never an unhandled rejection', () => 
       expect(failureLines()[0]).toContain('to=friend@example.com');
     });
   });
+
+  // courseInvitation.js already caught and logged its own failures, but with a line that
+  // carried no marker, so the health check could not see instructor invitations fail.
+  describe('course invitation (CourseInvitation.sendEmails)', () => {
+    it('logs a failed send with the marker, and behaves exactly as before otherwise', async () => {
+      const CourseInvitation = require('../../../lib/models/courseInvitation');
+      const invitation = { status: 'pending', email: 'student@example.com', token: 'tok123', save: vi.fn() };
+      const course     = { name: 'Physics 101', description: 'd' };
+      const user       = { fullname: 'Prof', email: 'prof@example.com' };
+
+      // behaviour unchanged: the operation still resolves
+      await expect(CourseInvitation.sendEmails([invitation], course, user)).resolves.toBeDefined();
+      await settle();
+
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      expect(invitation.save).not.toHaveBeenCalled();   // a failed send is not recorded as sent
+      expect(invitation.status).toBe('pending');
+      expect(unhandled).toEqual([]);
+
+      expect(failureLines()).toHaveLength(1);
+      expect(failureLines()[0]).toContain('type=course-invitation');
+      expect(failureLines()[0]).toContain('to=student@example.com');
+
+      // the pre-existing log line is still written, unchanged
+      const oldLine = errSpy.mock.calls.filter((c) => c[0] === 'Failed to send course invitation email:');
+      expect(oldLine).toHaveLength(1);
+    });
+  });
 });
