@@ -1,6 +1,8 @@
 // Page-side view of the GlowScript Stop button: morphs the toolbar's Run
-// control(s) between Run, Stop and Stopping…, and back to exactly what each
-// one was, so the editor and output-only toolbars keep their own wording.
+// control(s) into Stop while a program runs, dimmed while it stops, and back to
+// exactly what each one was, so the editor and output-only toolbars keep their
+// own wording. The control keeps the exact width it has as Run in every state, so
+// nothing in the toolbar moves.
 //
 // Spec: docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
 // UMD-lite: window global for the embed page, module.exports for the tests.
@@ -12,10 +14,13 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
+  // Stopping shows what running shows, so the control does not change size; the
+  // stylesheet dims it, and only the wording read aloud and in the tooltip says
+  // that it is stopping.
   var STATES = {
     running:  { cls: 'run-state-running',  icon: 'fa fa-stop', label: 'Stop',
                 aria: 'Stop program',     title: 'Stop the program.' },
-    stopping: { cls: 'run-state-stopping', icon: 'fa fa-stop', label: 'Stopping…',
+    stopping: { cls: 'run-state-stopping', icon: 'fa fa-stop', label: 'Stop',
                 aria: 'Stopping program', title: 'Stopping the program.' }
   };
 
@@ -75,7 +80,14 @@
       title: tip ? tooltipText(tip) : el.getAttribute('title'),
       aria: el.getAttribute('aria-label'),
       icon: icon ? icon.getAttribute('class') : null,
-      label: label ? label.textContent : null
+      label: label ? label.textContent : null,
+      // The inline size and wrapping the markup itself carries, if any (usually
+      // none): the width hold below overrides them while a program runs.
+      width: el.style.width,
+      minWidth: el.style.minWidth,
+      paddingLeft: el.style.paddingLeft,
+      paddingRight: el.style.paddingRight,
+      whiteSpace: el.style.whiteSpace
     };
   }
 
@@ -98,18 +110,39 @@
     el.appendChild(svg);
   }
 
-  // The control's width with its widest label (Run, Stop or Stopping…), so the
-  // toolbar does not shift as the label changes.
-  function widestWidth(el, label, texts) {
-    if (!label) { return el.offsetWidth; }
-    var saved = label.textContent;
-    var widest = 0;
-    texts.forEach(function (text) {
-      label.textContent = text;
-      widest = Math.max(widest, el.offsetWidth);
-    });
-    label.textContent = saved;
-    return widest;
+  function px(value) { return parseFloat(value) || 0; }
+
+  // Holds the control at runWidth, the outer width it measured as Run, now that it
+  // shows Stop. Stop's icon and label come out a few pixels wider than Run's (about
+  // 4 px, or 1 px where only the icon shows), so the difference comes out of the
+  // control's own side padding, half from each side, which keeps the content
+  // centered. A control that Stop fits in is only held. The caller has swapped in
+  // Stop's content and nothing here has overridden the size yet, so the width read
+  // now is Stop's natural one. Sub-pixel widths are kept: rounding them moves the
+  // toolbar by a pixel.
+  function holdWidth(el, runWidth) {
+    var stopWidth = el.getBoundingClientRect().width;
+    // Live: it follows the inline style below, so everything is read before any write.
+    var style = el.ownerDocument.defaultView.getComputedStyle(el);
+    var squeeze = Math.max(0, stopWidth - runWidth) / 2;
+    var left = Math.max(0, px(style.paddingLeft) - squeeze);
+    var right = Math.max(0, px(style.paddingRight) - squeeze);
+    // Foundation 5 gives every element border-box, where width is the outer width.
+    // A content-box control's width leaves out its padding and border.
+    var width = runWidth;
+    if (style.boxSizing === 'content-box') {
+      width = Math.max(0, runWidth - left - right - px(style.borderLeftWidth) - px(style.borderRightWidth));
+    }
+    if (squeeze > 0) {
+      el.style.paddingLeft = left + 'px';
+      el.style.paddingRight = right + 'px';
+    }
+    el.style.width = width + 'px';
+    // The fit is exact, and a layout engine that rounds a length to its grid (1/64 px
+    // in Blink and WebKit, 1/60 px in Gecko) can leave the content box one step short
+    // of Stop's content. Then the label drops under the icon and the control grows
+    // 16 px taller. One line it stays: a shortfall overflows by a step, unseen.
+    el.style.whiteSpace = 'nowrap';
   }
 
   function setAction(el, action, $) {
@@ -129,6 +162,9 @@
       var orig = item.orig;
       var icon = el.querySelector('i');
       var label = el.querySelector('label');
+      // Leaving idle: the control exactly as it shows Run, before anything below
+      // changes it. Running and stopping are the same size, so they never measure.
+      var runWidth = current === 'idle' && next !== 'idle' ? el.getBoundingClientRect().width : 0;
 
       el.classList.remove('run-state-running', 'run-state-stopping');
 
@@ -139,13 +175,13 @@
         el.removeAttribute('aria-disabled');
         if (icon) { setAttr(icon, 'class', orig.icon); }
         if (label) { label.textContent = orig.label; }
-        el.style.minWidth = '';
+        el.style.width = orig.width;
+        el.style.minWidth = orig.minWidth;
+        el.style.paddingLeft = orig.paddingLeft;
+        el.style.paddingRight = orig.paddingRight;
+        el.style.whiteSpace = orig.whiteSpace;
       } else {
         var s = STATES[next];
-        if (current === 'idle') {
-          var widest = widestWidth(el, label, [orig.label, STATES.running.label, STATES.stopping.label]);
-          el.style.minWidth = widest ? widest + 'px' : '';
-        }
         addTrace(el);
         el.classList.add(s.cls);
         setAction(el, 'code.stop', $);
@@ -155,6 +191,8 @@
         else { el.removeAttribute('aria-disabled'); }
         if (icon) { icon.setAttribute('class', s.icon); }
         if (label) { label.textContent = s.label; }
+        // A control that is not rendered (a hidden toolbar) has no width to keep.
+        if (runWidth > 0) { holdWidth(el, runWidth); }
       }
     }
 

@@ -15,12 +15,16 @@ const HANDLER_ERROR = 'Web VPython 3.2\nb = box()\ndef boom(evt):\n    raise Val
 // on Run (STOP_GRACE_MS in glowscript-run-state.js), so these tests wait past it.
 const PAST_DOUBLE_CLICK_GUARD_MS = 600;
 
-async function run(page, code) {
+async function open(page, code) {
   await page.goto('/embed/glowscript');
   await expect(page.locator('.ace_editor')).toBeVisible();
   await page.evaluate((src) => {
     document.querySelector('.ace_editor').env.editor.setValue(src, 1);
   }, code);
+}
+
+async function run(page, code) {
+  await open(page, code);
   await page.locator('.run-it').first().click();
 }
 
@@ -33,12 +37,59 @@ const printed = (page) => page.frameLocator('#glowscriptOutput').locator('textar
 // counts as no output yet, and the poll's own timeout decides.
 const printedLines = async (page) => (await printed(page).catch(() => '')).split('\n').filter(Boolean).length;
 
+// A control's rendered size, to the sub-pixel (offsetWidth would round it).
+const size = async (locator) => {
+  const { width, height } = await locator.boundingBox();
+  return { width, height };
+};
+// Within half a pixel (numDigits 0). The height is held too: a label that wrapped
+// under its icon would make the control 16 px taller.
+function expectSameSize(actual, expected, when) {
+  expect(actual.width, 'width ' + when).toBeCloseTo(expected.width, 0);
+  expect(actual.height, 'height ' + when).toBeCloseTo(expected.height, 0);
+}
+
+// The Run control keeps the size it has as Run through a run and a Stop, so nothing
+// in the toolbar moves. Stop is wider than Run (about 4 px with the label showing,
+// about 1 px with only the icon) and takes the difference from the control's padding.
+async function expectSizeHeld(page, { labelShown }) {
+  await open(page, LOOP);
+  const label = runControl(page).locator('label');
+  if (labelShown) { await expect(label).toBeVisible(); } else { await expect(label).toBeHidden(); }
+  const idle = await size(runControl(page));
+  expect(idle.width, 'the control is rendered').toBeGreaterThan(20);
+
+  await runControl(page).click();
+  await expect(runControl(page)).toHaveClass(/run-state-running/);
+  expectSameSize(await size(runControl(page)), idle, 'as soon as it runs');
+
+  await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
+  expectSameSize(await size(runControl(page)), idle, 'while the program prints');
+
+  await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
+  await runControl(page).click();
+  await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 5_000 });
+  await expect(label).toHaveText('Run');
+  expectSameSize(await size(runControl(page)), idle, 'after Stop');
+}
+
 test.describe('Web VPython Stop button', () => {
   test('Run turns into Stop, with the strip, while a program runs', async ({ page }) => {
     await run(page, LOOP);
     await expect(runControl(page)).toHaveClass(/run-state-running/);
     await expect(runControl(page).locator('label')).toHaveText('Stop');
     await expect(runControl(page).locator('svg.run-stop-trace')).toBeVisible();
+  });
+
+  test('the control keeps its width through Run, Stop and Run again', async ({ page }) => {
+    await expectSizeHeld(page, { labelShown: true });
+  });
+
+  // Below the large breakpoint the editor's label is hidden and only the icon shows;
+  // Stop's icon is then about 1 px wider than Run's, and the same rule has to hold.
+  test('the control keeps its width through Run, Stop and Run again when only the icon shows', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 720 });
+    await expectSizeHeld(page, { labelShown: false });
   });
 
   test('Stop freezes the program in place and returns to Run', async ({ page }) => {
@@ -151,15 +202,19 @@ test.describe('Web VPython Stop button', () => {
     await page.goto('/embed/glowscript/' + shortCode + '?outputOnly=true');
     const control = page.locator('button.run-it');
     await expect(control).toBeVisible();
+    const idle = await size(control);
+    expect(idle.width, 'the control is rendered').toBeGreaterThan(20);
 
     await control.press('Enter');                                          // Run
     await expect(control).toHaveClass(/run-state-running/);
+    expectSameSize(await size(control), idle, 'while running');
     await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
     await expect(control.locator('label')).toHaveText('Stop');
     // runCode() moved focus to #honeypot; press() focuses the control again.
     await control.press('Enter');                                          // Stop
     await expect(page.locator('.glowscript-stopped-note')).toBeVisible();  // the teardown path ran
     await expect(control).not.toHaveClass(/run-state-/, { timeout: 5_000 });
+    expectSameSize(await size(control), idle, 'after the teardown');
     await page.waitForTimeout(1_500);
     await expect(control, 'Stop must not restart the program').not.toHaveClass(/run-state-/);
   });
