@@ -1,0 +1,51 @@
+# Log failed email sends instead of leaving them as unhandled rejections
+
+Status: planned on `fix/mail-send-errors` (RED-first). Plan: `docs/superpowers/plans/2026-10-11-mail-send-failure-logging.md`.
+
+## Problem
+
+Four controllers send email fire-and-forget and drop the promise `mailer.send()` returns:
+
+| Site | Handler | What the user sees |
+|---|---|---|
+| `lib/controllers/users.js` | `sendPassReset` | "success", before the email is even rendered |
+| `lib/controllers/users.js` | `send_email_confirmation` (via `sendEmailChange`, `resendEmailChange`) | "success" |
+| `lib/controllers/users.js` | `send_email_verification` (via `sendEmailVerification`) | "success" |
+| `lib/controllers/admin.js` | `ohnoes` (`POST /api/ohnoes`) | "success" |
+
+When SMTP refuses the message (Mailgun sandbox `421`, bad login `535`, DNS or port failure) or, for `ohnoes`, when `config.app.adminEmail` is empty (the default) so nodemailer has no recipient, `send()` rejects and nothing handles it:
+
+1. The failure is invisible. A self-hosted deployment ran for weeks with password reset silently broken (Mailgun sandbox, `421 … Free accounts are for test purposes only`); the only trace was an unhandled-rejection dump in `docker compose logs`.
+2. On Node 20 (the Docker image) an unhandled rejection terminates the process by default, and the repo installs no `unhandledRejection` handler, so a refused send can take the app container down.
+
+`lib/controllers/trinket.js` (share by email) already has a `.catch`, but it logs nothing, so those failures are invisible too.
+
+## Decision
+
+Add two helpers to `lib/util/mailer.js` and use them at the call sites that drop the promise:
+
+- `mailer.logFailure(err, ctx)` writes **one stable line**, `MAIL_SEND_FAILED type=<type> to=<address> code=<code> responseCode=<n> message="<text>"`, with the message collapsed to one line, quote-neutralised and capped. The fixed `MAIL_SEND_FAILED` marker is what monitoring greps for.
+- `mailer.sendSafe(to, subject, options)` wraps `send()`; it **never rejects**, logs failures through `logFailure`, returns `send()`'s value on success and `{ failed: true, error }` on failure. It calls `module.exports.send`, so existing `vi.spyOn(mailer, 'send')` tests keep working.
+
+Call sites:
+
+- `sendPassReset`: render and send inside one `try/catch`; any failure is logged with `type=password-reset`.
+- `send_email_confirmation` / `send_email_verification`: `sendSafe` inside the `.then`, plus a trailing `.catch` for render failures.
+- `admin.ohnoes`: skip entirely when no admin address is configured; otherwise `sendSafe` with `type=session-alert`.
+- `trinket.js` share: log with `type=trinket-share` and rethrow, so the existing `.catch` still decides the response.
+
+## What does not change
+
+User-visible responses are identical. The handlers still answer "success" before the email goes out; the only difference is that a failure is now logged on one greppable line and cannot become an unhandled rejection. `ohnoes` with no admin address configured now does nothing instead of attempting a send to `''`.
+
+## Deliberately out of scope
+
+- `courseInvitation.js` (already catches and logs) and `workers/exports.js` (propagates the rejection into the job's own failure handling).
+- A process-wide `unhandledRejection` handler. Other, non-mail code can still reject unhandled; that is a separate decision.
+- Telling the user their email failed. Reset flows answer "success" regardless on purpose (no account enumeration); changing UX is a separate product decision.
+- Found while planning: when the share-by-email send fails, the HTTP request **never completes** (its `.catch` calls the legacy `reply()` shim from inside a callback, after the handler has returned). Pre-existing and separate; this change leaves the response behaviour exactly as it was and pins it with a test.
+- Retry or queueing of failed sends.
+
+## Monitoring contract
+
+The log line is the interface between this change and the deployment's health check (kept in a separate repo, `monitoring_trinket_server/trinket_scheduled_check.sh`). Its `MAIL SEND FAILURES` section currently matches the raw nodemailer error headers that an unhandled rejection prints (`Error: Message failed: …`). After this change those headers no longer appear, so the check must also match the `MAIL_SEND_FAILED` marker; the old patterns stay for servers still running an older Trinket. Do not rename the marker or reorder its `key=value` fields without updating that script.
