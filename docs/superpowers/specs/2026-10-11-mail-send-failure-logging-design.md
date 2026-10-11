@@ -1,6 +1,6 @@
 # Log failed email sends instead of leaving them as unhandled rejections
 
-Status: planned on `fix/mail-send-errors` (RED-first). Plan: `docs/superpowers/plans/2026-10-11-mail-send-failure-logging.md`.
+Status: implemented on `fix/mail-send-errors` (RED-first); final review: ready to merge with fixes (all applied). Plan: `docs/superpowers/plans/2026-10-11-mail-send-failure-logging.md`.
 
 ## Problem
 
@@ -16,7 +16,7 @@ Four controllers send email fire-and-forget and drop the promise `mailer.send()`
 When SMTP refuses the message (Mailgun sandbox `421`, bad login `535`, DNS or port failure) or, for `ohnoes`, when `config.app.adminEmail` is empty (the default) so nodemailer has no recipient, `send()` rejects and nothing handles it:
 
 1. The failure is invisible. A self-hosted deployment ran for weeks with password reset silently broken (Mailgun sandbox, `421 … Free accounts are for test purposes only`); the only trace was an unhandled-rejection dump in `docker compose logs`.
-2. On Node 20 (the Docker image) an unhandled rejection terminates the process by default, and the repo installs no `unhandledRejection` handler, so a refused send can take the app container down.
+2. An unhandled rejection is fatal under plain `node` (and in tests), whereas the production image runs `pm2-docker`, which is expected to log it instead of exiting (to be verified on the server with `docker compose exec trinket sh -c 'grep -n unhandledRejection $(npm root -g)/pm2/lib/ProcessContainer*.js'`); the failure is invisible either way. The repo installs no `unhandledRejection` handler.
 
 `lib/controllers/trinket.js` (share by email) already has a `.catch`, but it logs nothing, so those failures are invisible too.
 
@@ -33,6 +33,7 @@ Call sites:
 - `send_email_confirmation` / `send_email_verification`: `sendSafe` inside the `.then`, plus a trailing `.catch` for render failures.
 - `admin.ohnoes`: skip entirely when no admin address is configured; otherwise `sendSafe` with `type=session-alert`.
 - `trinket.js` share: log with `type=trinket-share` and rethrow, so the existing `.catch` still decides the response.
+- `courseInvitation.js` (added after the final review): log with `type=course-invitation` around `mailer.send`, then rethrow, keeping its existing final catch. It already caught and logged its own failures, but its line (`Failed to send course invitation email: ...`) carried no marker, so the health check could not see instructor invitations fail. A later `invitation.save()` failure is still not reported as a mail failure, and the old log line is still written.
 
 ## What does not change
 
@@ -40,9 +41,9 @@ User-visible responses are identical. The handlers still answer "success" before
 
 ## Deliberately out of scope
 
-- `courseInvitation.js` (already catches and logs) and `workers/exports.js` (propagates the rejection into the job's own failure handling).
+- `workers/exports.js`: it propagates the rejection into the job's own failure handling, so export-ready and export-failed notification failures surface through the export job's failure handling, not through the `MAIL_SEND_FAILED` line.
 - A process-wide `unhandledRejection` handler. Other, non-mail code can still reject unhandled; that is a separate decision.
-- Telling the user their email failed. Reset flows answer "success" regardless on purpose (no account enumeration); changing UX is a separate product decision.
+- Telling the user their email failed. Changing what users see is a separate product decision.
 - Found while planning: when the share-by-email send fails, the HTTP request **never completes** (its `.catch` calls the legacy `reply()` shim from inside a callback, after the handler has returned). Pre-existing and separate; this change leaves the response behaviour exactly as it was and pins it with a test.
 - Retry or queueing of failed sends.
 - Found during implementation (all pre-existing, none fixed here; each deserves its own issue):
@@ -52,4 +53,4 @@ User-visible responses are identical. The handlers still answer "success" before
 
 ## Monitoring contract
 
-The log line is the interface between this change and the deployment's health check (kept in a separate repo, `monitoring_trinket_server/trinket_scheduled_check.sh`). Its `MAIL SEND FAILURES` section currently matches the raw nodemailer error headers that an unhandled rejection prints (`Error: Message failed: …`). After this change those headers no longer appear, so the check must also match the `MAIL_SEND_FAILED` marker; the old patterns stay for servers still running an older Trinket. Do not rename the marker or reorder its `key=value` fields without updating that script.
+The log line is the interface between this change and the deployment's health check (kept in a separate repo, `monitoring_trinket_server/trinket_scheduled_check.sh`). Its `MAIL SEND FAILURES` section currently matches the raw nodemailer error headers that an unhandled rejection prints (`Error: Message failed: …`). After this change those headers no longer appear, so the check must also match the `MAIL_SEND_FAILED` marker; the old patterns stay for servers still running an older Trinket. Do not rename the marker or reorder its `key=value` fields without updating that script. Roll out the updated health-check script BEFORE the Trinket change: the new script on an old Trinket behaves identically, whereas the new Trinket logs a marker the old script does not match.

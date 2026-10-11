@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Work only in the worktree `/Users/zimmermant/Dropbox/claude_sandbox/workspace/Software_Development/trinket-oss-picup-fork/.claude/worktrees/mail-send-error-handling` on branch `fix/mail-send-errors`. Do **not** touch the main checkout (`trinket-oss-picup-fork/`, branch `stop-button`). Exception: Task 5 edits a different repo, named in that task.
+- Work only in the worktree `<trinket worktree>` on branch `fix/mail-send-errors`. Do **not** touch the main checkout (`trinket-oss-picup-fork/`, branch `stop-button`). Exception: Task 5 edits a different repo, named in that task.
 - Match surrounding style: `var`, comma-first/aligned-colon object literals as in the file you are editing, 2-space indent. No new dependencies.
 - The log line format is exactly `MAIL_SEND_FAILED type=<type> to=<address> code=<code> responseCode=<n> message="<text>"`, written with a single `console.error` call (same channel the neighbouring code uses). Field names and order must not change.
 - User-visible behaviour must not change: same responses, same status codes. The only intended behaviour change is `admin.ohnoes` doing nothing when `config.app.adminEmail` is empty.
@@ -693,12 +693,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ### Task 5: Teach the deployment health check the new marker (separate repo)
 
-This task edits a **different repository**: `/Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server` (its own git repo, branch `main`). Run its git commands with `git -C` that path. Do not commit anything to the Trinket worktree for this task.
+This task edits a **different repository**: `<monitoring_trinket_server repo>` (its own git repo, branch `main`). Run its git commands with `git -C` that path. Do not commit anything to the Trinket worktree for this task.
 
 **Files:**
-- Modify: `/Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server/trinket_scheduled_check.sh` (the `MAIL SEND FAILURES` section)
-- Create: `/Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server/tests/mail_section_test.sh`
-- Modify: `/Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server/trinket_monitoring_context.md`, `lab_notebook.md`
+- Modify: `<monitoring_trinket_server repo>/trinket_scheduled_check.sh` (the `MAIL SEND FAILURES` section)
+- Create: `<monitoring_trinket_server repo>/tests/mail_section_test.sh`
+- Modify: `<monitoring_trinket_server repo>/trinket_monitoring_context.md`, `lab_notebook.md`
 
 **Interfaces:**
 - Consumes: the log line written by Task 1's `logFailure`: `MAIL_SEND_FAILED type=<type> to=<address> code=<code> responseCode=<n> message="<text>"`.
@@ -774,7 +774,7 @@ expect     "FLAG_COUNT=0"                                    "clean log raises n
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `bash /Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server/tests/mail_section_test.sh`
+Run: `bash <monitoring_trinket_server repo>/tests/mail_section_test.sh`
 Expected: `FAIL` on "counts 2 marker lines + 1 old-format header = 3" (the section currently counts only the 1 old-format header, so the flag says `1 mail send failure(s)`), plus the dependent "prints a marker line's detail" and "prints the second marker line" checks; exit code 1.
 
 - [ ] **Step 3: Teach the section the marker**
@@ -818,20 +818,20 @@ Then update the bash comment block above that section: replace the sentence begi
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `bash /Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server/tests/mail_section_test.sh`
+Run: `bash <monitoring_trinket_server repo>/tests/mail_section_test.sh`
 Expected: every line `ok`, final line `ALL PASSED`, exit code 0.
 
 - [ ] **Step 5: Update the reviewer context doc and lab notebook**
 
-In `trinket_monitoring_context.md`, in the section "Mail-send failure flags are always real", add one sentence after the first paragraph: `Servers running Trinket 2026-10-11 or later log each failure as a single MAIL_SEND_FAILED type=... to=... message="..." line (the type says which flow: password-reset, verify-email, confirm-email-change, session-alert, trinket-share); older versions show the raw nodemailer "Error: Message failed: ..." header instead. Both are matched.`
+In `trinket_monitoring_context.md`, in the section "Mail-send failure flags are always real", add one sentence after the first paragraph: `Servers running a Trinket build that includes the MAIL_SEND_FAILED change (branch `fix/mail-send-errors`; name the merge commit here once merged) log each failure as a single MAIL_SEND_FAILED type=... to=... message="..." line (the type says which flow: password-reset, verify-email, confirm-email-change, session-alert, trinket-share); older versions show the raw nodemailer "Error: Message failed: ..." header instead. Both are matched.`
 
-Add a new top entry to `lab_notebook.md` (newest first, real date from `date +%F`) recording: the Trinket-side change (branch `fix/mail-send-errors`, helpers `mailer.logFailure`/`sendSafe`, marker format), this script change, the new `tests/mail_section_test.sh`, and the open item "deploy: `git pull` the Trinket branch once merged, then copy `trinket_scheduled_check.sh` to the server".
+Add a new top entry to `lab_notebook.md` (newest first, real date from `date +%F`) recording: the Trinket-side change (branch `fix/mail-send-errors`, helpers `mailer.logFailure`/`sendSafe`, marker format), this script change, the new `tests/mail_section_test.sh`, and the open item "deploy in this order: copy the updated `trinket_scheduled_check.sh` to the server FIRST (it is backward compatible: it behaves identically against an old Trinket), then pull/restart Trinket".
 
 - [ ] **Step 6: Commit (in the monitoring repo)**
 
 ```bash
-git -C /Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server add trinket_scheduled_check.sh tests/mail_section_test.sh trinket_monitoring_context.md lab_notebook.md
-git -C /Users/zimmermant/Dropbox/claude_sandbox/workspace/monitoring_trinket_server commit -m "feat(health-check): match Trinket's MAIL_SEND_FAILED log line
+git -C <monitoring_trinket_server repo> add trinket_scheduled_check.sh tests/mail_section_test.sh trinket_monitoring_context.md lab_notebook.md
+git -C <monitoring_trinket_server repo> commit -m "feat(health-check): match Trinket's MAIL_SEND_FAILED log line
 
 Trinket now logs failed sends as one MAIL_SEND_FAILED line instead of letting
 them escape as unhandled rejections, so the raw nodemailer header the check
@@ -849,3 +849,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - **Placeholders:** none; every code step shows the code.
 - **Type consistency:** `logFailure(err, ctx)` and `sendSafe(to, subject, options)` are identical everywhere they are used; the `type` strings (`password-reset`, `verify-email`, `confirm-email-change`, `session-alert`, `trinket-share`) match between code, tests and the Task 5 context-doc sentence.
 - **Review Focus:** items 1-2 are Task 1 tests, 3 is Task 3's second test, 4 is Task 2's two "template-render failure" tests, 5 is Task 1's success-path test plus the existing suites run in Tasks 2 and 4.
+
+## Post-implementation amendments
+
+Changes made after the final whole-branch review, so the plan above is not the whole story:
+
+- `lib/models/courseInvitation.js` was added to scope (it logged its own failures, but with no marker, so the health check could not see them): log with `type=course-invitation`, rethrow, keep the existing catch. Fix-wave Commit 1.
+- `mailer.logFailure` was made total (it can no longer throw on an unstringifiable error) and `oneLine` now strips control characters. Fix-wave Commit 2.
+- Docs corrected: what the marker covers (and does not: export notifications), the Node/pm2 claim, the spec's out-of-scope wording, the rollout order (health-check script first, then Trinket), and absolute paths replaced with placeholders. Fix-wave Commit 3 (this commit).
+- Health-check amendments in the monitoring repo: a single-count regression guard in `tests/mail_section_test.sh`, a longer `MAIL_LAST`, flag wording, and accurate coverage notes. Fix-wave Commit 4.
