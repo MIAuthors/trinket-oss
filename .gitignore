@@ -97,28 +97,3 @@ build-info.json
 # Captured deploy sessions — live credentials, never commit.
 test/browser/.auth/
 test/browser/.mathoutput-noop/
-
-# Code-intelligence graph tooling — local, machine-specific, regenerated on demand.
-# Anchored to the repo root, where the tools write them: an unanchored name
-# would also ignore a project file of that name anywhere in the tree.
-# graphify: knowledge graph, extraction cache, HTML and report output.
-/graphify-out/
-# code-review-graph: SQLite graph database (holds absolute paths).
-/.code-review-graph/
-# ...and the integration files `code-review-graph install` writes for other
-# editors and agents: MCP server configs (absolute cwd), rules, skills, hooks.
-# (.claude/ is already ignored above, which covers its skills and hooks.)
-/.mcp.json
-.vscode/mcp.json
-/.cursorrules
-/.windsurfrules
-/opencode.jsonc
-/AGENTS.md
-/CODEBUDDY.md
-/GEMINI.md
-/QODER.md
-/.codebuddy/
-/.gemini/
-/.qoder/
-.kiro/steering/code-review-graph.md
-.github/instructions/code-review-graph.instructions.md
