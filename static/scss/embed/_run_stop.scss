@@ -11,8 +11,8 @@
 
 $run-stop-color: #C62828;      // 5.6:1 on white
 $run-stopping-color: #6B6B6B;  // 5.3:1 on white
-$run-edited-color: #525252;    // the Run control's own text, $icon-bar-font-color
-$run-edited-fill: #008AFF;     // its hover fill, $icon-bar-hover-color
+$run-edited-color: $icon-bar-font-color;   // the Run control's own text
+$run-edited-fill: $icon-bar-hover-color;   // its hover fill
 
 .run-it .run-stop-trace {
   display: none;

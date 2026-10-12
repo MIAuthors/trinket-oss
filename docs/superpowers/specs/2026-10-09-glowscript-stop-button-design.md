@@ -132,7 +132,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 - Compile or runtime error: the existing alert banner, and back to Run.
 - An error raised outside the main flow while the program runs (an event handler, a widget callback, a timer), on 2.9 and later: `window.onerror` tags its report `glowscript.background`. The existing alert banner still shows it, and the control stays Stop, because the main flow is still running.
 - Enter on the output-only toolbar's `<button>` Run/Stop control: `embed.js` acts on the keypress, so `glowscript.js` cancels the click the browser would synthesize from it, and each Enter is dispatched once. Otherwise Enter on Stop before the runner is ready would tear the run down, and the synthesized click, by then on Run, would restart it.
-- Ctrl/Cmd-Enter or the "Run your code first" modal while running or stopping: a fresh run replaces the old one, as today, and the button is Stop for the new run, whether or not it read ↻ Run before.
+- Ctrl/Cmd-Enter while running or stopping, and a click on ↻ Run: a fresh run replaces the old one, as today, and the button is Stop for the new run, whether or not it read ↻ Run before. The "Run your code first" modal's Run is not a way to re-run: its handler throws (a bare `sendInterfaceAnalytics`, which is not defined) before it reaches `runCode()`, so it starts no run, whatever the state. That predates this work and is out of scope here; it is tracked separately.
 - An edit while the control is stopping: nothing changes. It stays Stopping, with no ↻ Run, since the program is already being ended; after the stop it is plain Run.
 - A second click right after ↻ Run: the control is Stop as soon as the first click has run, so the second lands on Stop within 500 ms of the launch and is ignored, as for a double-click on Run.
 - An edit in a file that is not showing counts, and so does undoing it: the comparison is of every file.
@@ -143,6 +143,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 
 - Event handlers the program registered, such as `scene.bind` or widget `bind=` callbacks, still respond after Stop. The main program flow is halted; handlers are not.
 - After an edit the control restarts the program rather than stops it. To stop without restarting, undo the edit, or stop the new run.
+- An edit that makes the program's first line an unknown version, such as `Web VPython 9.9`, leaves ↻ Run with nothing to run: `runCode()` shows the "Invalid version of GlowScript." alert and returns before it launches anything. The old program keeps running and the control stays ↻ Run, so the program cannot be stopped from the control meanwhile, until the line is fixed or the edit is undone.
 - Edited is a comparison of the whole serialized program, so adding or removing an inline comment counts as an edit too.
 - A program parked in an await the shim does not wrap, or computing for more than 2 s without calling a wrapped function, gets the teardown and the note instead of a freeze.
 - A loop with no `rate()` or `sleep()` can freeze the browser tab before Stop can be clicked, as with Python on the main thread. No button can fix that.
