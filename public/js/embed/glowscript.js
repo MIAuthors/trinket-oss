@@ -781,6 +781,10 @@ window.TrinketAPI = {
       this.showCode();
       resetOutput();
     }
+    // The editor's text was just replaced without a change event, and a running
+    // program is not touched by that: the Reset button, a restored session and the
+    // remix version toggle all come through here. Work out ↻ Run or Stop again.
+    syncEditedLook();
   },
   focus : function() {
     if (!$('body').data('is-mobile') && $('body').data('autofocus')) {

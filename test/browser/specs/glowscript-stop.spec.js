@@ -31,6 +31,9 @@ async function setCode(page, code) {
   }, code);
 }
 
+// The text main.py's editor holds (the first one; the tests that read it have one file).
+const getCode = (page) => page.evaluate(() => document.querySelector('.ace_editor').env.editor.getValue());
+
 async function open(page, code) {
   await page.goto('/embed/glowscript');
   await expect(page.locator('.ace_editor')).toBeVisible();
@@ -40,6 +43,23 @@ async function open(page, code) {
 async function run(page, code) {
   await open(page, code);
   await page.locator('.run-it').first().click();
+}
+
+// A saved trinket, made through the API, so that its editor has an original to go back to.
+async function createTrinket(page, code, name) {
+  const res = await page.request.post('/api/trinkets', { data: { lang: 'glowscript', code, name } });
+  expect(res.ok(), 'trinket create should succeed').toBeTruthy();
+  const body = await res.json();
+  return (body.data || body).shortCode;
+}
+
+// The Reset control as a person uses it: the menu, Reset, and "Yes, I am sure." in the
+// confirmation. The original comes back into the editor a moment later (a draft is
+// discarded first), so a test waits for the text it expects.
+async function resetThroughTheUI(page) {
+  await page.locator('.left-off-canvas-toggle').click();
+  await page.locator('a.reset-it').click();
+  await page.locator('#confirmResetModal [data-action="code.confirm-reset"]').click();
 }
 
 const runControl = (page) => page.locator('.run-it').first();
@@ -274,12 +294,7 @@ test.describe('Web VPython Stop button', () => {
   // The page is kept from ever seeing the runner's ready message, so this test
   // always takes that teardown path instead of racing the runtime's load time.
   test('Enter on the output-only Stop button stops the program instead of restarting it', async ({ page }) => {
-    const res = await page.request.post('/api/trinkets', {
-      data: { lang: 'glowscript', code: LOOP, name: 'stop-enter-' + Date.now() },
-    });
-    expect(res.ok(), 'trinket create should succeed').toBeTruthy();
-    const body = await res.json();
-    const shortCode = (body.data || body).shortCode;
+    const shortCode = await createTrinket(page, LOOP, 'stop-enter-' + Date.now());
 
     await page.addInitScript(() => {
       window.addEventListener('message', (e) => {
@@ -524,5 +539,82 @@ test.describe('Web VPython Stop button', () => {
     await pointerAway();
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect.poll(look).toMatchObject({ text: TEXT_GRAY, strip: STRIP_GRAY, lap: 'none', dashes: 'none', stroke: '1.5px' });
+  });
+
+  // A Reset puts the saved text into the editor without a change event, and it leaves the
+  // running program alone. So the control has to be worked out again from what the editor
+  // holds and what runs, in both directions.
+  test('a Reset back to the text that runs is Stop again', async ({ page }) => {
+    const shortCode = await createTrinket(page, PRINT_A, 'stop-reset-back-' + Date.now());
+    await page.goto('/embed/glowscript/' + shortCode);
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    expect(await getCode(page), 'the saved trinket opens as A').toBe(PRINT_A);
+    const control = runControl(page);
+
+    await control.click();
+    await expect(control).toHaveClass(/run-state-running/);
+    await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
+    await setCode(page, PRINT_B);
+    await expect(control).toHaveClass(/run-state-edited/);
+
+    await resetThroughTheUI(page);
+    await expect.poll(() => getCode(page), { message: 'the Reset puts A back' }).toBe(PRINT_A);
+    // A runs on, and the editor holds it again: Stop, with nothing to restart.
+    await expect(control).not.toHaveClass(/run-state-edited/);
+    await expect(control).toHaveClass(/run-state-running/);
+    await expect(control.locator('label')).toHaveText('Stop');
+    await expect(control).toHaveAttribute('data-action', 'code.stop');
+    const lines = await printedLines(page);
+    await expect.poll(() => printedLines(page)).toBeGreaterThan(lines + 5);
+  });
+
+  test('a Reset away from the text that runs is ↻ Run', async ({ page }) => {
+    const shortCode = await createTrinket(page, PRINT_A, 'stop-reset-away-' + Date.now());
+    await page.goto('/embed/glowscript/' + shortCode);
+    await expect(page.locator('.ace_editor')).toBeVisible();
+    const control = runControl(page);
+
+    await setCode(page, PRINT_B);
+    await control.click();
+    await expect(control).toHaveClass(/run-state-running/);
+    await expect(control).not.toHaveClass(/run-state-edited/);
+    await expect.poll(() => printed(page).catch(() => ''), { timeout: 60_000 }).toContain('B');
+
+    await resetThroughTheUI(page);
+    await expect.poll(() => getCode(page), { message: 'the Reset puts A back' }).toBe(PRINT_A);
+    // B runs on, and the editor no longer holds it: ↻ Run, which runs what is there.
+    await expect(control).toHaveClass(/run-state-edited/);
+    await expect(control.locator('label')).toHaveText('Run');
+    await expect(control).toHaveAttribute('data-action', 'code.run');
+    await expect(control).toHaveAttribute('aria-label', 'Run your changes');
+    const lines = await printedLines(page);
+    await expect.poll(() => printedLines(page)).toBeGreaterThan(lines + 5);
+
+    await control.click();
+    await expect(control).toHaveClass(/run-state-running/);
+    await expect(control).not.toHaveClass(/run-state-edited/);
+    await expect.poll(() => printed(page).catch(() => ''), { timeout: 60_000 }).toContain('A');
+    expect(await printed(page)).not.toContain('B');
+  });
+
+  // The Reset control is one way into the editor's reset(); a restored session and the
+  // remix version toggle call it without the control, and the look has to follow there too.
+  test('the editor reset() called on its own, as a restored session or the remix toggle does, follows the text', async ({ page }) => {
+    await run(page, PRINT_A);
+    const control = runControl(page);
+    await expect(control).toHaveClass(/run-state-running/);
+    await expect(control).not.toHaveClass(/run-state-edited/);
+
+    await setCode(page, PRINT_B);
+    await expect(control).toHaveClass(/run-state-edited/);
+    await page.evaluate((code) => window.TrinketApp.reset({ code }), PRINT_A);
+    expect(await getCode(page), 'the reset puts A back').toBe(PRINT_A);
+    await expect(control).not.toHaveClass(/run-state-edited/);
+    await expect(control.locator('label')).toHaveText('Stop');
+
+    await page.evaluate((code) => window.TrinketApp.reset({ code }), PRINT_B);
+    expect(await getCode(page), 'the reset puts B in').toBe(PRINT_B);
+    await expect(control).toHaveClass(/run-state-edited/);
+    await expect(control.locator('label')).toHaveText('Run');
   });
 });
