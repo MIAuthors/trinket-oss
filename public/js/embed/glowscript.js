@@ -81,6 +81,9 @@ var runnerRetry = (typeof trinketRunnerRetry !== 'undefined')
 // runState decides, runButton draws, and this file owns the DOM and the runner.
 var runState  = null;
 var runButton = null;
+// The serialized program (api.getValue(), every file) the current run launched
+// with. While the editor holds anything else, the control offers ↻ Run.
+var launchedCode = null;
 // A runner whose messages must not move the Run/Stop control: the previous
 // run's runner, until this run's runner replaces it (external sandbox mode waits
 // on a POST first), or a runner that reported a load failure and is about to be
@@ -90,6 +93,17 @@ var ignoredRunner = null;
 function currentRunnerWindow() {
   var frame = document.getElementById('glowscriptOutput');
   return frame ? frame.contentWindow : null;
+}
+
+// ↻ Run while a running program is no longer what the editor holds, Stop again
+// once the editor holds it again. Only a running program has anything to be
+// edited from: the view ignores the rest too, so a stopping control stays as it
+// is, and an idle one is plain Run.
+function syncEditedLook() {
+  if (!runState || runState.state() !== 'running') { return; }
+  // Drawing the control must never keep an edit or a Run from happening.
+  try { runButton.edited(api.getValue() !== launchedCode); }
+  catch (e) { console.warn('Run/Stop control update failed:', e); }
 }
 
 // No confirmation from the runner (or it was never ready): remove it outright.
@@ -320,7 +334,15 @@ function runCode() {
   // The control is Stop for as long as this run lasts. The outgoing runner stays
   // the current iframe until this run's runner replaces it, so it is ignored now.
   ignoredRunner = currentRunnerWindow();
-  if (runState) { runState.launched(); }
+  launchedCode = serializedCode;
+  if (runState) {
+    runState.launched();
+    // A run launched while another is going (↻ Run, Ctrl/Cmd-Enter) leaves the
+    // controller in 'running', which draws nothing: the control would stay ↻ Run
+    // for a run the editor matches. Check it against what was just launched, so
+    // every run starts as Stop (and a click right after is a double-click's).
+    syncEditedLook();
+  }
 
   // Choose rendering mode based on configuration
   if (trinketSandboxConfig.mode === 'local') {
@@ -444,6 +466,8 @@ window.TrinketAPI = {
     $(document).on('trinket.code.edit', $.proxy(this.showCode, this));
     $(document).on('trinket.code.run',  $.proxy(this.showResult, this));
     $(document).on('trinket.code.stop', function() { if (runState) { runState.stop(); } });
+    // Fired on every change to the code (api.triggerChange, below): ↻ Run follows the text.
+    $(document).on('trinket.code.change', syncEditedLook);
 
     // embed.js acts on Enter's keypress; cancel the click the browser would
     // synthesize from it, so a <button> Run/Stop control is dispatched once.

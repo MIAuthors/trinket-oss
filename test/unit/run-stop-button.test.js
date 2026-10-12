@@ -4,7 +4,8 @@
 // toolbars that carry a .run-it: the editor toolbar (glowscript.html) as
 // Foundation leaves it after building its tooltip (wording moved into a
 // span.tooltip keyed by the control's data-selector, title blanked), and the
-// output-only toolbar (default-toolbar.html), which has no tooltip.
+// output-only toolbar (default-toolbar.html), which has no tooltip. It covers the
+// ↻ Run look a running control takes while the editor holds something else (edited()).
 // Spec: docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
 
 const { JSDOM } = require('jsdom');
@@ -75,6 +76,67 @@ const inline = (el) => ({
 });
 const NO_INLINE = { width: '', minWidth: '', paddingLeft: '', paddingRight: '', whiteSpace: '' };
 const px = (value) => parseFloat(value);
+
+// Where a test needs the content re-centered, it also says how wide the content inside a
+// control is: what its icon, its label and the gap between them come to, for the look the
+// control shows (its icon class and its label text say which). A label with no width is
+// hidden, as below the large breakpoint. `reads` collects the inline width the control was
+// held at each time its content was measured.
+const CONTENT = {
+  icon: { 'fa fa-play': 12.6, 'fa fa-stop': 13.7, 'fa fa-repeat': 13.7 },
+  label: { Run: 27.0, Stop: 29.9 },
+  gap: 4.8,
+};   // Run 44.4, Stop 48.4 (the 4 px more that RUN_STOP says), ↻ Run 45.5
+const BOTH = { editor: CONTENT, output: CONTENT };
+
+function layOutContent(p, content = BOTH, reads = []) {
+  for (const name of ['editor', 'output']) {
+    const el = p[name];
+    const { icon: iconWidths, label: labelWidths, gap, labelHidden = false } = content[name];
+    const icon = el.querySelector('i');
+    const label = el.querySelector('label');
+    const iconWidth = () => iconWidths[icon.getAttribute('class')];
+    // Where the icon sits is the control's business (its padding): only differences count.
+    const iconLeft = () => (iconWidth() > 0 ? 20 : 0);
+    icon.getBoundingClientRect = vi.fn(() => {
+      reads.push(el.style.width);
+      return { left: iconLeft(), right: iconLeft() + iconWidth(), width: iconWidth() };
+    });
+    label.getBoundingClientRect = vi.fn(() => {
+      reads.push(el.style.width);
+      // A hidden label (display: none) has no box at all, wherever it would have been.
+      if (labelHidden || iconWidth() === 0) { return { left: 0, right: 0, width: 0 }; }
+      const width = labelWidths[label.textContent];
+      const left = iconLeft() + iconWidth() + gap;
+      return { left, right: left + width, width };
+    });
+  }
+}
+
+// Everything the view shows for the page, to compare one state with another. The inline
+// style is compared by value, not by the attribute's text, which orders its properties by
+// when each was first set.
+const withoutStyle = (el) => {
+  const copy = el.cloneNode(true);
+  copy.removeAttribute('style');
+  return copy.outerHTML;
+};
+const cachedAction = (dataCalls, id) => {
+  const call = dataCalls.filter((c) => c[0] === id).pop();
+  return call && call[2];
+};
+const looks = (p) => ({
+  html: [p.editor, p.output].map(withoutStyle),
+  inline: [p.editor, p.output].map(inline),
+  tip: tipText(p.tip),
+  actions: [cachedAction(p.dataCalls, 'tip1'), cachedAction(p.dataCalls, 'outputRun')],
+});
+const laidOut = (opts, ...args) => {
+  const p = page(opts);
+  layOut(p, ...args);
+  layOutContent(p);
+  return p;
+};
 
 describe('running', () => {
   it('turns every Run control into Stop', () => {
@@ -355,6 +417,379 @@ describe('width', () => {
       expect(outer).toBeCloseTo(76.4, 6);
     },
   );
+});
+
+// While a program runs and the editor holds something other than what runs, the control
+// offers to run the changes: ↻ Run. The page decides when (edited(true) and edited(false));
+// the view only draws it, and only for a program that is running.
+describe('edited', () => {
+  it('turns every control into ↻ Run: the Run wording, a repeat icon, and the action that runs again', () => {
+    const { view, editor, output, dataCalls } = page();
+    view.set('running');
+    view.edited(true);
+    for (const el of [editor, output]) {
+      expect(el.getAttribute('data-action')).toBe('code.run');
+      expect(el.getAttribute('aria-label')).toBe('Run your changes');
+      expect(iconClass(el)).toBe('fa fa-repeat');
+      expect(text(el, 'label')).toBe('Run');
+      expect(el.classList.contains('run-state-edited')).toBe(true);
+      expect(el.hasAttribute('aria-disabled')).toBe(false);
+    }
+    expect(output.getAttribute('title')).toBe('Run your changes (restarts the program).');
+    // embed.js dispatches on jQuery's cached action, so that one has to follow.
+    expect(lastAction(dataCalls, 'tip1')).toBe('code.run');
+    expect(lastAction(dataCalls, 'outputRun')).toBe('code.run');
+    expect(view.state()).toBe('running');
+  });
+
+  it('is still a running control, which is what the strip and its lap hang on', () => {
+    const { view, editor } = page();
+    view.set('running');
+    view.edited(true);
+    expect(editor.classList.contains('run-state-edited')).toBe(true);
+    expect(editor.classList.contains('run-state-running')).toBe(true);
+    view.edited(false);
+    view.edited(true);
+    expect(editor.querySelectorAll('svg.run-stop-trace')).toHaveLength(1);
+  });
+
+  it("rewrites a Foundation tooltip's text for ↻ Run and back, and leaves the title Foundation blanked", () => {
+    const { doc, view, editor, tip } = page();
+    view.set('running');
+    view.edited(true);
+    expect(tipText(tip)).toBe('Run your changes (restarts the program).');
+    expect(tip.querySelector('.nub')).not.toBeNull();
+    expect(editor.getAttribute('title')).toBe('');
+    expect(doc.getElementById('other').firstChild.textContent).toBe('Other');
+    view.edited(false);
+    expect(tipText(tip)).toBe('Stop the program.');
+    expect(editor.getAttribute('title')).toBe('');
+  });
+
+  it('goes back to exactly the Stop look when the edit is undone', () => {
+    const p = laidOut();
+    p.view.set('running');
+    const stop = looks(p);
+    p.view.edited(true);
+    expect(looks(p)).not.toEqual(stop);
+    p.view.edited(false);
+    expect(looks(p)).toEqual(stop);
+    // And again: the same ↻ Run, and the same Stop, however often it flips.
+    p.view.edited(true);
+    const edited = looks(p);
+    p.view.edited(false);
+    p.view.edited(true);
+    expect(looks(p)).toEqual(edited);
+    p.view.edited(false);
+    expect(looks(p)).toEqual(stop);
+  });
+
+  it.each(['running', 'stopping', 'idle'])('set(%s) clears it, leaving what a program that was never edited shows', (state) => {
+    const was = laidOut();
+    was.view.set('running');
+    was.view.edited(true);
+    was.view.set(state);
+
+    const never = laidOut();
+    never.view.set('running');
+    never.view.set(state);
+
+    expect(looks(was)).toEqual(looks(never));
+    expect(was.view.state()).toBe(state);
+    for (const el of [was.editor, was.output]) {
+      expect(el.classList.contains('run-state-edited')).toBe(false);
+    }
+
+    // Nothing is left pending: the next edit of a running program draws it again.
+    was.view.set('running');
+    was.view.edited(true);
+    expect(was.editor.classList.contains('run-state-edited')).toBe(true);
+    expect(text(was.editor, 'label')).toBe('Run');
+  });
+
+  it.each(['idle', 'stopping'])('does nothing while %s, and leaves nothing pending for the next run', (state) => {
+    const p = laidOut();
+    if (state === 'stopping') {
+      p.view.set('running');
+      p.view.set('stopping');
+    }
+    const before = looks(p);
+    p.view.edited(true);
+    expect(looks(p)).toEqual(before);
+    p.view.edited(false);
+    expect(looks(p)).toEqual(before);
+    expect(p.view.state()).toBe(state);
+
+    // The next run starts as Stop.
+    p.view.set('running');
+    const plain = laidOut();
+    plain.view.set('running');
+    expect(looks(p)).toEqual(looks(plain));
+    expect(p.editor.classList.contains('run-state-edited')).toBe(false);
+  });
+
+  it('does nothing when the control already shows what it is asked for', () => {
+    const reads = [];
+    const p = page();
+    layOut(p);
+    layOutContent(p, BOTH, reads);
+    p.view.set('running');
+
+    const quiet = (when) => {
+      const before = { looks: looks(p), calls: p.dataCalls.length, measured: reads.length };
+      return () => {
+        expect(looks(p), when).toEqual(before.looks);
+        expect(p.dataCalls, when).toHaveLength(before.calls);
+        expect(reads, when).toHaveLength(before.measured);
+      };
+    };
+
+    let unchanged = quiet('Stop, asked for Stop');
+    p.view.edited(false);
+    unchanged();
+
+    p.view.edited(true);
+    unchanged = quiet('↻ Run, asked for ↻ Run');
+    p.view.edited(true);
+    unchanged();
+  });
+
+  it('keeps keyboard focus on the same control', () => {
+    const { doc, view, output } = page();
+    output.focus();
+    view.set('running');
+    view.edited(true);
+    expect(text(output, 'label')).toBe('Run');
+    expect(doc.activeElement).toBe(output);
+    view.edited(false);
+    expect(text(output, 'label')).toBe('Stop');
+    expect(doc.activeElement).toBe(output);
+  });
+
+  it('copes with no jQuery, and with a control that has no icon or label', () => {
+    const dom = new JSDOM('<a class="run-it" data-action="code.run">Run</a><a class="run-it" data-action="code.run" title="Run it"><i class="fa fa-play"></i><label>Run</label></a>');
+    const [bare, full] = dom.window.document.querySelectorAll('.run-it');
+    const view = create([bare, full]);
+    expect(() => {
+      view.set('running');
+      view.edited(true);
+      view.edited(false);
+      view.edited(true);
+      view.set('idle');
+    }).not.toThrow();
+    expect(bare.getAttribute('data-action')).toBe('code.run');
+    expect(full.getAttribute('title')).toBe('Run it');
+    view.set('running');
+    view.edited(true);
+    expect(full.getAttribute('data-action')).toBe('code.run');
+    expect(full.getAttribute('title')).toBe('Run your changes (restarts the program).');
+  });
+});
+
+// The control keeps the width it has as Run through ↻ Run as through Stop. ↻ Run's content
+// is not Stop's, so the side padding is fitted to the content that shows, and it stays
+// centered. The content's own width is measured, never the control's: the held width is
+// not released to measure.
+describe('width, edited', () => {
+  // A control's size in a browser's terms: the held width, with its content exactly filling
+  // what the padding leaves, and sitting in the middle of it.
+  function expectFit(p, { content }, when) {
+    for (const el of [p.editor, p.output]) {
+      expect(px(el.style.width), when).toBeCloseTo(76.4, 6);
+      const left = px(el.style.paddingLeft);
+      const right = px(el.style.paddingRight);
+      expect(left + content + right, when).toBeCloseTo(76.4, 6);
+      expect(left, when).toBeCloseTo(right, 6);
+      expect(el.style.whiteSpace, when).toBe('nowrap');
+      expect(el.style.minWidth, when).toBe('');
+    }
+  }
+
+  it('keeps the width it has as Run, with the content centered, through Stop, ↻ Run, Stop again and Run', () => {
+    const p = laidOut();
+    p.view.set('running');
+    expectFit(p, { content: 48.4 }, 'as Stop');
+    p.view.edited(true);
+    expectFit(p, { content: 45.5 }, 'as ↻ Run');
+    p.view.edited(false);
+    expectFit(p, { content: 48.4 }, 'as Stop again');
+    p.view.edited(true);
+    expectFit(p, { content: 45.5 }, 'as ↻ Run again');
+
+    // Stopping is Stop's look, so it is Stop's fit too.
+    p.view.set('stopping');
+    expectFit(p, { content: 48.4 }, 'as Stopping');
+    p.view.set('running');
+    p.view.edited(true);
+    p.view.set('running');
+    expectFit(p, { content: 48.4 }, 'as Stop, set while ↻ Run');
+
+    p.view.edited(true);
+    p.view.set('idle');
+    for (const el of [p.editor, p.output]) { expect(inline(el)).toEqual(NO_INLINE); }
+  });
+
+  it('measures the content while the width is held, never after releasing it', () => {
+    const reads = [];
+    const p = page();
+    layOut(p);
+    layOutContent(p, BOTH, reads);
+    p.view.set('running');
+    reads.length = 0;
+    const controlReads = p.editor.getBoundingClientRect.mock.calls.length;   // its own box: as Run, on leaving idle
+    p.view.edited(true);
+    p.view.edited(false);
+    p.view.edited(true);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(new Set(reads)).toEqual(new Set(['76.4px']));
+    expect(p.editor.getBoundingClientRect.mock.calls).toHaveLength(controlReads);
+  });
+
+  it('keeps the side padding the control had, uneven or not, as Stop does', () => {
+    const p = laidOut({ editorStyle: 'padding-left: 10px; padding-right: 14px' });
+    p.view.set('running');
+    expect(px(p.editor.style.paddingLeft)).toBeCloseTo(8, 6);
+    expect(px(p.editor.style.paddingRight)).toBeCloseTo(12, 6);
+    const stop = inline(p.editor);
+
+    p.view.edited(true);
+    // 1.45 px each side more than Stop: ↻ Run's content is 2.9 px narrower.
+    expect(px(p.editor.style.paddingLeft)).toBeCloseTo(9.45, 6);
+    expect(px(p.editor.style.paddingRight)).toBeCloseTo(13.45, 6);
+    expect(p.editor.style.width).toBe('76.4px');
+
+    p.view.edited(false);
+    expect(inline(p.editor)).toEqual(stop);
+    p.view.edited(true);
+    p.view.set('idle');
+    expect(inline(p.editor)).toEqual({ ...NO_INLINE, paddingLeft: '10px', paddingRight: '14px' });
+  });
+
+  it('leaves the padding alone where ↻ Run is as wide as Stop, as with only the icon showing', () => {
+    // Below the large breakpoint the label is hidden, and the repeat icon is as wide as the stop icon.
+    const iconOnly = { ...CONTENT, labelHidden: true };
+    const p = page();
+    layOut(p, { editor: { Run: 45.6, Stop: 46.8 }, output: { Run: 45.6, Stop: 46.8 } });
+    layOutContent(p, { editor: iconOnly, output: iconOnly });
+    p.view.set('running');
+    const stop = inline(p.editor);
+    expect(stop.width).toBe('45.6px');
+    p.view.edited(true);
+    expect(iconClass(p.editor)).toBe('fa fa-repeat');
+    expect(inline(p.editor)).toEqual(stop);
+    p.view.edited(false);
+    expect(iconClass(p.editor)).toBe('fa fa-stop');
+    expect(inline(p.editor)).toEqual(stop);
+  });
+
+  it('takes padding back, or takes more, as ↻ Run asks, never more than the control has', () => {
+    const wider = (repeat) => {
+      const content = { ...CONTENT, icon: { ...CONTENT.icon, 'fa fa-repeat': repeat } };
+      const p = page();
+      layOut(p);
+      layOutContent(p, { editor: content, output: content });
+      p.view.set('running');
+      p.view.edited(true);
+      return p;
+    };
+    // A repeat icon 6.3 px wider than the stop icon makes ↻ Run's content 51.8 px, 3.4 px more
+    // than Stop's 48.4: each side gives up 1.7 of Stop's 14 px.
+    const wide = wider(20);
+    expect(px(wide.editor.style.paddingLeft)).toBeCloseTo(12.3, 6);
+    expect(px(wide.editor.style.paddingRight)).toBeCloseTo(12.3, 6);
+    expect(wide.editor.style.width).toBe('76.4px');
+
+    const huge = wider(100);
+    expect(huge.editor.style.paddingLeft).toBe('0px');
+    expect(huge.editor.style.paddingRight).toBe('0px');
+    expect(huge.editor.style.width).toBe('76.4px');
+  });
+
+  it("sizes a content-box control by its content width, so ↻ Run's outer width is the one it had too", () => {
+    const p = page();
+    layOut(p, {}, { ...SHEET, boxSizing: 'content-box', borderLeftWidth: '1px', borderRightWidth: '1px' });
+    layOutContent(p);
+    const outer = (el) => px(el.style.width) + px(el.style.paddingLeft) + px(el.style.paddingRight) + 2;   // 2: the 1 px borders
+    p.view.set('running');
+    expect(outer(p.editor)).toBeCloseTo(76.4, 6);
+    p.view.edited(true);
+    expect(outer(p.editor)).toBeCloseTo(76.4, 6);
+    expect(px(p.editor.style.paddingLeft)).toBeCloseTo(15.45, 6);
+    p.view.edited(false);
+    expect(outer(p.editor)).toBeCloseTo(76.4, 6);
+    expect(px(p.editor.style.paddingLeft)).toBeCloseTo(14, 6);
+  });
+
+  it("puts Stop's width and padding back exactly as it first wrote them, not as the style reads them back", () => {
+    // Blink reads 76.453125px back as 76.4531px, which lays out a grid step narrower.
+    const p = page();
+    layOut(p, { editor: { Run: 76.453125, Stop: 80.265625 } });
+    layOutContent(p);
+    const stored = {};
+    for (const name of ['width', 'paddingLeft', 'paddingRight']) {
+      Object.defineProperty(p.editor.style, name, {
+        configurable: true,
+        get: () => (stored[name] ? Number(parseFloat(stored[name]).toPrecision(6)) + 'px' : ''),
+        set: (value) => { stored[name] = value; },
+      });
+    }
+
+    p.view.set('running');
+    const stop = { ...stored };
+    expect(stop.width).toBe('76.453125px');
+    p.view.edited(true);
+    expect(stored.paddingLeft).not.toBe(stop.paddingLeft);
+    p.view.edited(false);
+    expect(stored).toEqual(stop);
+    p.view.edited(true);
+    p.view.set('stopping');
+    expect(stored).toEqual(stop);
+  });
+
+  it('forgets what it held when the program ends, so a control hidden for the next run is left alone', () => {
+    const natural = { editor: { Run: 76.4, Stop: 80.4 } };
+    const p = page();
+    layOut(p, natural);
+    layOutContent(p);
+    p.view.set('running');
+    p.view.edited(true);
+    p.view.set('idle');
+
+    // The toolbar is hidden when the next program starts: its control measures 0 wide.
+    natural.editor.Run = 0;
+    natural.editor.Stop = 0;
+    p.view.set('running');
+    expect(inline(p.editor)).toEqual(NO_INLINE);
+    p.view.edited(true);
+    expect(inline(p.editor)).toEqual(NO_INLINE);
+    p.view.edited(false);
+    expect(inline(p.editor)).toEqual(NO_INLINE);
+    p.view.set('stopping');
+    expect(inline(p.editor)).toEqual(NO_INLINE);
+  });
+
+  it('leaves a control that is not rendered alone', () => {
+    const none = { icon: { 'fa fa-play': 0, 'fa fa-stop': 0, 'fa fa-repeat': 0 }, label: { Run: 0, Stop: 0 }, gap: 0 };
+    const hidden = page();
+    layOut(hidden, { editor: { Run: 0, Stop: 0 } });
+    layOutContent(hidden, { editor: none, output: CONTENT });
+    hidden.view.set('running');
+    hidden.view.edited(true);
+    expect(text(hidden.editor, 'label')).toBe('Run');
+    expect(iconClass(hidden.editor)).toBe('fa fa-repeat');
+    expect(inline(hidden.editor)).toEqual(NO_INLINE);
+    hidden.view.edited(false);
+    expect(text(hidden.editor, 'label')).toBe('Stop');
+    expect(inline(hidden.editor)).toEqual(NO_INLINE);
+
+    // So does jsdom with no layout at all: not even a style attribute appears.
+    const bare = page();
+    bare.view.set('running');
+    bare.view.edited(true);
+    expect(bare.editor.hasAttribute('style')).toBe(false);
+    expect(bare.output.hasAttribute('style')).toBe(false);
+    expect(text(bare.editor, 'label')).toBe('Run');
+  });
 });
 
 describe('robustness', () => {

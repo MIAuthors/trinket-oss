@@ -1,4 +1,5 @@
-// The Run control while a GlowScript program runs or is stopping.
+// The Run control while a GlowScript program runs or is stopping, and while it
+// runs but the editor holds something else (run-state-edited, the ↻ Run look).
 // run-stop-button.js adds the run-state-* classes and nothing else does, so the
 // Run controls of other runtimes are untouched. Values are the spec's:
 // docs/superpowers/specs/2026-10-09-glowscript-stop-button-design.md
@@ -10,6 +11,8 @@
 
 $run-stop-color: #C62828;      // 5.6:1 on white
 $run-stopping-color: #6B6B6B;  // 5.3:1 on white
+$run-edited-color: #525252;    // the Run control's own text, $icon-bar-font-color
+$run-edited-fill: #008AFF;     // its hover fill, $icon-bar-hover-color
 
 .run-it .run-stop-trace {
   display: none;
@@ -84,6 +87,52 @@ $run-stopping-color: #6B6B6B;  // 5.3:1 on white
   }
 }
 
+// ↻ Run: the program runs, but the editor no longer holds what it runs. The control
+// has both classes, run-state-running and run-state-edited, so everything above that
+// is not replaced here carries over to it: the strip and its lap, the white focus
+// ring, the plain look of a mouse-focused <button>, the reduced-motion outline.
+// What is red above becomes the normal Run look: the toolbar's own gray text and
+// blue hover fill, with the strip in the stopping gray.
+//
+// Each selector here has one class more than the running rule it replaces, so it
+// wins whatever the order. Hover and focus are restated for the same reason: the
+// white text that running's :hover sets ties on specificity with the gray set below
+// for the resting control, and the gray, coming later, would win it.
+.run-it.run-state-running.run-state-edited {
+  &,
+  > i,
+  > label {
+    color: $run-edited-color !important;
+  }
+
+  > .run-stop-trace {
+    color: $run-stopping-color !important;
+  }
+
+  // Separate rules, as above, for a browser without :focus-visible.
+  &:hover {
+    background: $run-edited-fill !important;
+
+    &,
+    > i,
+    > label,
+    > .run-stop-trace {
+      color: #fff !important;
+    }
+  }
+
+  &:focus-visible {
+    background: $run-edited-fill !important;
+
+    &,
+    > i,
+    > label,
+    > .run-stop-trace {
+      color: #fff !important;
+    }
+  }
+}
+
 .run-it.run-state-stopping {
   cursor: progress;
 
@@ -112,6 +161,7 @@ $run-stopping-color: #6B6B6B;  // 5.3:1 on white
   }
 }
 
+// The strip is drawn in its own color, so the ↻ Run control's static outline is gray.
 @media (prefers-reduced-motion: reduce) {
   .run-it.run-state-running .run-stop-trace rect,
   .run-it.run-state-stopping .run-stop-trace rect {
