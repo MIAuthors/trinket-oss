@@ -14,7 +14,9 @@ function fakeWindow(extra) {
     addEventListener: (type, fn) => { if (type === 'message') { listeners.push(fn); } },
   }, extra);
   win.posted = posted;
-  win.send = (data) => listeners.forEach((fn) => fn({ data }));
+  // A message event as the page sends it: from the runner's parent, unless the
+  // test names another source (null is no source at all).
+  win.send = (data, source = win.parent) => listeners.forEach((fn) => fn({ data, source }));
   return win;
 }
 
@@ -197,6 +199,36 @@ describe('callback-style waits (GlowScript 1.1 to 2.7)', () => {
     pendingCallback();
     expect(resumed).toBe(false);
   });
+
+  // A wait settles once. Were a repeated call to count again, pending would drop
+  // below the waits really in flight and the program would resume twice.
+  it('a continuation the runtime calls twice settles the wait once and resumes the program once', () => {
+    const continuations = [];
+    const win = fakeWindow({ rate: (n, cb) => { continuations.push(cb); } });
+    install(win);
+    let resumed = 0;
+    win.rate(30, () => { resumed += 1; });
+    expect(win.__trinketStop.pending).toBe(1);
+
+    continuations[0]();
+    continuations[0]();
+    expect(win.__trinketStop.pending).toBe(0);
+    expect(resumed).toBe(1);
+  });
+
+  it('a second call of one continuation does not hide another wait in flight from a stop', () => {
+    const continuations = [];
+    const win = fakeWindow({ rate: (n, cb) => { continuations.push(cb); } });
+    install(win);
+    win.rate(30, () => {});
+    win.rate(30, () => {});
+    continuations[0]();
+    continuations[0]();
+
+    // The program is parked in the second wait, so the stop confirms at once.
+    win.send('glowscript.stop');
+    expect(stoppedCount(win)).toBe(1);
+  });
 });
 
 // The page opens allowWaits() around a snapshot request: after Stop the
@@ -330,6 +362,24 @@ describe('messages', () => {
     win.send('glowscript.snapshot');
     win.send(JSON.stringify({ 'glowscript.stop': true }));
     expect(stoppedCount(win)).toBe(0);
+  });
+
+  // The page is the runner's parent in both sandbox modes. Any other window that
+  // can reach the runner (a sibling frame, a popup) must not be able to stop it.
+  it('ignores a stop that does not come from the runner\'s parent', () => {
+    const win = fakeWindow({ rate: () => deferred().promise });
+    install(win);
+    // A wait in flight: a stop that counted would confirm at once.
+    win.rate(30);
+    win.send('glowscript.stop', { postMessage: () => {} });
+    win.send('glowscript.stop', win);
+    win.send('glowscript.stop', null);
+    expect(win.__trinketStop.requested).toBe(false);
+    expect(win.posted).toEqual([{ 'glowscript.ready': true }]);
+
+    win.send('glowscript.stop');
+    expect(win.__trinketStop.requested).toBe(true);
+    expect(stoppedCount(win)).toBe(1);
   });
 });
 

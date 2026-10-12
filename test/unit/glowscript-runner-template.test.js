@@ -100,6 +100,13 @@ async function until(predicate, ms = 2000) {
 }
 const kinds = (messages) => messages.map((m) => Object.keys(m)[0]);
 
+// The page's stop request. The runner takes a stop only from its parent, and a
+// top-level jsdom window is its own parent. window.postMessage cannot stand in:
+// jsdom delivers it with no source.
+function sendStop(window) {
+  window.dispatchEvent(new window.MessageEvent('message', { data: 'glowscript.stop', source: window.parent }));
+}
+
 // GlowScript 2.9+: rate() returns a promise the program awaits.
 const promiseRate = { rate: () => new Promise((resolve) => setTimeout(resolve, 1)) };
 // GlowScript 1.1 to 2.7: rate(n, continuation).
@@ -169,7 +176,7 @@ describe('GlowScript 2.9 and later (promise style)', () => {
     const { window, messages } = loadRunner('3.2.3',
       'async function __main__() { while (true) { await rate(30); window.ticks += 1; } }', promiseRate);
     await until(() => window.ticks > 3);
-    window.postMessage('glowscript.stop', '*');
+    sendStop(window);
     await until(() => kinds(messages).includes('glowscript.stopped'));
     const parkedAt = window.ticks;
     await sleep(30);
@@ -197,7 +204,7 @@ describe('GlowScript 1.1 to 2.7 (callback style)', () => {
     const { window, messages } = loadRunner('2.7.5',
       '(function (done) { function loop() { window.ticks += 1; rate(30, loop); } loop(); })', callbackRate);
     await until(() => window.ticks > 3);
-    window.postMessage('glowscript.stop', '*');
+    sendStop(window);
     await until(() => kinds(messages).includes('glowscript.stopped'));
     const parkedAt = window.ticks;
     await sleep(30);
@@ -269,7 +276,7 @@ describe('a snapshot requested after Stop', () => {
       const { window, messages } = loadRunner(version, compiled, runtime);
       try {
         await until(() => window.ticks > 3);
-        window.postMessage('glowscript.stop', '*');
+        sendStop(window);
         await until(() => kinds(messages).includes('glowscript.stopped'));
         const parkedAt = window.ticks;
 

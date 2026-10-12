@@ -8,6 +8,8 @@ const { test, expect } = require('@playwright/test');
 const LOOP = 'Web VPython 3.2\nb = box()\nn = 0\nwhile True:\n    rate(30)\n    n = n + 1\n    b.rotate(angle=0.05, axis=vec(0, 1, 0))\n    print(n)\n';
 const FINITE = 'Web VPython 3.2\nsphere()\nfor i in range(3):\n    rate(10)\n';
 const BROKEN = 'Web VPython 3.2\nwhile True\n    rate(30)\n';
+// The same loop with rate() reached through a module name instead of the global.
+const NAMESPACED = 'Web VPython 3.2\nimport vpython as vp\nb = vp.box()\nn = 0\nwhile True:\n    vp.rate(30)\n    n = n + 1\n    print(n)\n';
 // A button whose handler raises, beside a main loop that keeps going.
 const HANDLER_ERROR = 'Web VPython 3.2\nb = box()\ndef boom(evt):\n    raise ValueError("boom")\nbutton(bind=boom, text="Boom")\nn = 0\nwhile True:\n    rate(30)\n    n = n + 1\n    print(n)\n';
 
@@ -105,6 +107,23 @@ test.describe('Web VPython Stop button', () => {
     await expect(page.locator('#glowscriptOutput')).toHaveCount(1);
     await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
 
+    const frozen = await printed(page);
+    await page.waitForTimeout(1_500);
+    expect(await printed(page)).toBe(frozen);
+  });
+
+  // `import vpython as vp` makes the loop call vp.rate(), not the global rate().
+  // Stop must park that call too, in place and not by tearing the runner down.
+  test('a namespaced vp.rate() loop stops in place', async ({ page }) => {
+    await run(page, NAMESPACED);
+    await expect.poll(() => printedLines(page), { timeout: 60_000 }).toBeGreaterThan(5);
+    await page.waitForTimeout(PAST_DOUBLE_CLICK_GUARD_MS);
+    await runControl(page).click();
+    await expect(runControl(page)).not.toHaveClass(/run-state-/, { timeout: 5_000 });
+    await expect(runControl(page).locator('label')).toHaveText('Run');
+
+    // Parked, not torn down: no stopped note, and the output no longer moves.
+    await expect(page.locator('.glowscript-stopped-note')).toHaveCount(0);
     const frozen = await printed(page);
     await page.waitForTimeout(1_500);
     expect(await printed(page)).toBe(frozen);

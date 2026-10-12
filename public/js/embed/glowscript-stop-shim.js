@@ -85,6 +85,8 @@
     // still be on its way to its next wait; a window opened then would still
     // be open after the confirmation and would let that wait through. So the
     // answer is a release() that does nothing: no window, no timer.
+    // A Save while a stop is unconfirmed gets no window, so that save keeps no
+    // new thumbnail (spec, Known limits).
     stop.allowWaits = function () {
       if (!stop.confirmed) { return function () {}; }
       var released = false;
@@ -124,8 +126,14 @@
         // GlowScript 1.1 to 2.7 pass the program's continuation last.
         if (last >= 0 && typeof args[last] === 'function') {
           var resume = args[last];
+          var called = false;
           stop.pending += 1;
           args[last] = function () {
+            // A wait settles once. Counting a repeated call again would take
+            // pending below the waits really in flight, and would resume the
+            // program a second time.
+            if (called) { return undefined; }
+            called = true;
             return settled() ? resume.apply(this, arguments) : undefined;
           };
           return original.apply(this, args);
@@ -155,6 +163,10 @@
     }
 
     win.addEventListener('message', function (event) {
+      // Only the page that embeds the runner may stop it, and in both sandbox
+      // modes that page is the runner's parent. Another window that can reach
+      // the runner, a sibling frame or a popup, is ignored.
+      if (event.source !== win.parent) { return; }
       if (event.data !== 'glowscript.stop' || stop.requested) { return; }
       stop.requested = true;
       if (stop.pending > 0) { confirmStopped(); }
