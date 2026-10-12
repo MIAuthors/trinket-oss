@@ -22,7 +22,7 @@ The plan below is kept as written. Where the committed code differs from a code 
 - **Task 5, Step 4** (`runProgram`): d3ea392, fix wave. The main-flow flag that background errors depend on.
 - **Task 5, Steps 8, 11.2 and 14** (page-side helpers, launch, message routing): 1f0b6ee and 3e70567. `ignoredRunner` also covers the outgoing runner from launch; load-failure reports count only from the current runner; a torn-down run clears `lastRunnerHtml`, so it is never rebuilt.
 - **Task 5, Step 12** (`initialize`): 27bdb73, fix wave. `onState` catches a throwing view, so drawing the control can never block Run or Stop.
-- **Task 5, Step 16.2** (What's New): fix wave. The wording no longer implies that Run comes back later.
+- **Task 5, Step 16.2** (What's New): removed during PR review (#336, 2026-10-12). What's New is being reworked under #332, so this PR leaves it alone; the CHANGELOG entry stays.
 - **Task 6, Step 1** (browser spec): 8a6e67b, 84b09fb, then fb71697 from the fix wave. A fifth, keyboard test; tests 3 to 5 made to fail when their behaviour is gone; fix wave: snapshot after Stop, an error in an event handler, and a 5 s timeout in `printed()`, which the polls read as no output yet rather than as a failure.
 
 Added with no plan block: the Enter keypress guard in `glowscript.js` (3e70567), and the `.fail` handler on the external-sandbox POST (1f0b6ee).

@@ -169,4 +169,4 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 
 ## Order of work
 
-Spike; shim; controller; button view and SCSS; wiring and template; Playwright spec; changelog and What's New entries. Planning and tracking use CCPM (PRD, epic and tasks under `.claude/`, which git ignores) and the Superpowers implementation plan named above.
+Spike; shim; controller; button view and SCSS; wiring and template; Playwright spec; a changelog entry. What's New is left alone: its rework is tracked in #332. Planning and tracking use CCPM (PRD, epic and tasks under `.claude/`, which git ignores) and the Superpowers implementation plan named above.
