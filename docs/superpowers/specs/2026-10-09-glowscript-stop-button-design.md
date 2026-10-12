@@ -143,7 +143,7 @@ States are `idle`, `running` and `stopping`. The generation number increases on 
 
 - Event handlers the program registered, such as `scene.bind` or widget `bind=` callbacks, still respond after Stop. The main program flow is halted; handlers are not.
 - After an edit the control restarts the program rather than stops it. To stop without restarting, undo the edit, or stop the new run.
-- An edit that makes the program's first line an unknown version, such as `Web VPython 9.9`, leaves ↻ Run with nothing to run: `runCode()` shows the "Invalid version of GlowScript." alert and returns before it launches anything. The old program keeps running and the control stays ↻ Run, so the program cannot be stopped from the control meanwhile, until the line is fixed or the edit is undone.
+- An edit that makes the program's first line an unknown version, such as `Web VPython 9.9`, leaves ↻ Run with nothing to run: `runCode()` shows the "Invalid version of GlowScript." alert and returns before it launches anything. The old program keeps running and the control stays ↻ Run, so the program cannot be stopped from the control meanwhile. It stays that way until the line is fixed and ↻ Run is clicked, which restarts with the fix, or the edit is undone.
 - Edited is a comparison of the whole serialized program, so adding or removing an inline comment counts as an edit too.
 - A program parked in an await the shim does not wrap, or computing for more than 2 s without calling a wrapped function, gets the teardown and the note instead of a freeze.
 - A loop with no `rate()` or `sleep()` can freeze the browser tab before Stop can be clicked, as with Python on the main thread. No button can fix that.
