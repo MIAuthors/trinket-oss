@@ -199,7 +199,7 @@ describe('A failed mail send is logged and never an unhandled rejection', () => 
   });
 
   // courseInvitation.js already caught and logged its own failures, but with a line that
-  // carried no marker, so the health check could not see instructor invitations fail.
+  // carried no marker, so log-based monitoring could not see instructor invitations fail.
   describe('course invitation (CourseInvitation.sendEmails)', () => {
     it('logs a failed send with the marker, and behaves exactly as before otherwise', async () => {
       const CourseInvitation = require('../../../lib/models/courseInvitation');
