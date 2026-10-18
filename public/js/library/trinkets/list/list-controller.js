@@ -4,6 +4,8 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   var allLoaded = false,
       loading   = false,
       cache     = TrinketIO.import('utils.cache'),
+      searchState = window.librarySearchState,
+      searchSaved = null,   // sort/scope to restore when a See-all search is cleared (#344)
       last, lastCount;
 
   if (libraryState.userParam && !$stateParams.user) {
@@ -20,6 +22,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   $scope.items    = libraryState.trinkets;
   $scope.folders  = libraryState.folders;
   $scope.sortBy   = cache.get("library-sort-by") || libraryState.listParams.sort;
+  if ($scope.sortBy === 'relevance') {
+    $scope.sortBy = searchState.persistableSort('relevance', null);
+  }
   last            = libraryState.listParams.from;
   lastCount       = libraryState.listParams.offset;
 
@@ -57,6 +62,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
       if ($scope.filters.name) {
         params.name = $scope.filters.name;
       }
+      if ($scope.filters.q) {
+        params.q = $scope.filters.q;
+      }
       if ($scope.filters.updatedWithin && $scope.filters.updatedWithin !== 'all') {
         params.updatedWithin = $scope.filters.updatedWithin;
       }
@@ -85,12 +93,39 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   // "no trinkets".
   $scope.isFiltering = function() {
     var f = $scope.filters || {};
-    return !!(f.name || (f.updatedWithin && f.updatedWithin !== 'all') ||
+    return !!(f.q || f.name || (f.updatedWithin && f.updatedWithin !== 'all') ||
               f.updatedAfter || f.updatedBefore || (f.scope && f.scope !== 'root'));
   };
 
   $scope.clearFilters = function() {
+    if ($scope.filters && $scope.filters.q) {
+      leaveSearch();
+    }
     $scope.filters = { name : '', updatedWithin : 'all', updatedAfter : '', updatedBefore : '', scope : 'root' };
+    $scope.reloadWithFilters();
+  };
+
+  // "See all" from the search box (#344): the paged list, filtered by the same
+  // match, in relevance order, across all folders.
+  var RELEVANCE_OPTION = { label : 'Best match', class : 'fa fa-search fa-fw' };
+
+  function leaveSearch() {
+    var st = searchState.leave({ filters : $scope.filters, sortBy : $scope.sortBy, saved : searchSaved });
+    searchSaved = null;
+    delete $scope.sortOptions.relevance;
+    $scope.sortBy = st.sortBy;
+  }
+
+  $scope.onSeeAll = function(term) {
+    var st = searchState.enter({ filters : $scope.filters, sortBy : $scope.sortBy, saved : searchSaved }, term);
+    searchSaved = st.saved;
+    $scope.sortOptions.relevance = RELEVANCE_OPTION;
+    $scope.sortBy = st.sortBy;
+    $scope.reloadWithFilters();
+  };
+
+  $scope.clearSearch = function() {
+    leaveSearch();
     $scope.reloadWithFilters();
   };
 
@@ -298,7 +333,7 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
 
   $scope.$on("$destroy", function() {
     libraryState.listParams = {
-      sort   : $scope.sortBy,
+      sort   : searchState.persistableSort($scope.sortBy, searchSaved),
       from   : last,
       offset : lastCount
     }
@@ -328,7 +363,7 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   });
 
   $scope.$watch('sortBy', function(newValue, oldValue) {
-    cache.set("library-sort-by", newValue);
+    cache.set("library-sort-by", searchState.persistableSort(newValue, searchSaved));
   });
 
   $scope.moreTrinkets = function() {
