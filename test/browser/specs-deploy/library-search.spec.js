@@ -88,6 +88,12 @@ test.describe('library search', () => {
     }
     await expect(notesCard).toBeVisible();
 
+    // --- open a result, come Back: still the same search ----------------------
+    await notesCard.click();
+    await page.waitForURL((u) => !/\/library\/?$/.test(u.pathname), { timeout: 15000 });
+    await page.goBack();
+    await expect(chip).toContainText(tag, { timeout: 15000 });
+
     // --- clearing the chip ---------------------------------------------------
     await chip.locator('a').click();
     await expect(chip).toHaveCount(0);
