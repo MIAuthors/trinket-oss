@@ -58,7 +58,14 @@ function TrinketService(Restangular, $http) {
   // response.data, which would drop `total`.
   this.search = function(q) {
     return $http.get('/api/trinkets/search', { params : { q : q } })
-      .then(function(res) { return res.data; });
+      .then(function(res) {
+        var body = res.data || {};
+        // Restangularized so the folder view's addToFolder exists on a result.
+        body.data = (body.data || []).map(function(t) {
+          return Restangular.restangularizeElement(null, t, 'trinkets');
+        });
+        return body;
+      });
   }
 
   this.updateSlug = function(id, slug) {

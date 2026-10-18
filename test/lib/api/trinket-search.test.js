@@ -26,7 +26,9 @@ describe('GET /api/trinkets/search', () => {
     expect(body.limit).toBe(20);
     expect(body.data).toHaveLength(20);
     expect(body.data[0].name).toBe(tag + ' prefix');
-    expect(Object.keys(body.data[0]).sort()).toEqual(['lang', 'name', 'shortCode', 'snapshot']);
+    // id: the folder view (addToFolder) and assignment editor (trinketId) need it.
+    expect(Object.keys(body.data[0]).sort()).toEqual(['id', 'lang', 'name', 'shortCode', 'snapshot']);
+    expect(body.data[0].id).toBeTruthy();
   });
 
   it('includes description-only matches after name matches', async () => {

@@ -63,3 +63,11 @@ describe('course editor toolbar search', () => {
     expect(dir).toContain('trinketsApi.search(');
   });
 });
+
+describe('selected results are usable by the folder and assignment views (review)', () => {
+  const read = (p) => fs.readFileSync(path.join(__dirname, '../..', p), 'utf8');
+  it('the API client restangularizes search results so addToFolder exists', () => {
+    expect(read('public/js/library/components/trinkets/trinket-service.js'))
+      .toMatch(/restangularizeElement\(null, t, 'trinkets'\)/);
+  });
+});

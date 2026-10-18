@@ -37,6 +37,13 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   var selectionModel = TrinketIO.import('library.selection');
   $scope.selection = selectionModel.create();
   $scope.filters   = { name : '', updatedWithin : 'all', updatedAfter : '', updatedBefore : '', scope : 'root' };
+  // Back from a trinket: restore the filters (and any See-all search) the kept
+  // items were loaded with, so the list and its paging stay consistent (#344).
+  if (libraryState.listFilters && !$stateParams.user) {
+    $scope.filters = libraryState.listFilters.filters;
+    searchSaved    = libraryState.listFilters.saved;
+  }
+  libraryState.listFilters = undefined;
   $scope.showFilters = false;   // progressive disclosure — hidden until opened
 
   // Surface the modification date (instead of last-viewed) when the user is
@@ -239,6 +246,11 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
         , class : 'fa fa-sort-alpha-asc fa-fw'
       }
   };
+  // Restored See-all search (Back from a trinket): show it in relevance order.
+  if ($scope.filters.q) {
+    $scope.sortOptions.relevance = RELEVANCE_OPTION;
+    $scope.sortBy = 'relevance';
+  }
   $scope.viewOptions = {
       'large' : {
           label : 'Grid'
@@ -332,6 +344,7 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   });
 
   $scope.$on("$destroy", function() {
+    libraryState.listFilters = searchState.carry($scope.filters, searchSaved);
     libraryState.listParams = {
       sort   : searchState.persistableSort($scope.sortBy, searchSaved),
       from   : last,
