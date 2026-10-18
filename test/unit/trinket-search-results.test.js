@@ -53,3 +53,13 @@ describe('trinket-search markup', () => {
     expect(svc).toContain("'/api/trinkets/search'");
   });
 });
+
+describe('course editor toolbar search', () => {
+  const read = (p) => fs.readFileSync(path.join(__dirname, '../..', p), 'utf8');
+  it('uses the shared directive (isolated scope, trinketsApi), not toolbarControl.searchTrinkets', () => {
+    expect(read('public/partials/material.html')).toMatch(/<trinket-search[^>]*toolbar="true"/);
+    const dir = read('public/partials/directives/trinket-search.js');
+    expect(dir).toMatch(/scope\s*:\s*\{/);          // isolated scope
+    expect(dir).toContain('trinketsApi.search(');
+  });
+});
