@@ -39,9 +39,11 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   $scope.filters   = { name : '', updatedWithin : 'all', updatedAfter : '', updatedBefore : '', scope : 'root' };
   // Back from a trinket: restore the filters (and any See-all search) the kept
   // items were loaded with, so the list and its paging stay consistent (#344).
+  var carriedSearch = null;
   if (libraryState.listFilters && !$stateParams.user) {
-    $scope.filters = libraryState.listFilters.filters;
-    searchSaved    = libraryState.listFilters.saved;
+    carriedSearch  = libraryState.listFilters;
+    $scope.filters = carriedSearch.filters;
+    searchSaved    = carriedSearch.saved;
   }
   libraryState.listFilters = undefined;
   $scope.showFilters = false;   // progressive disclosure — hidden until opened
@@ -246,10 +248,11 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
         , class : 'fa fa-sort-alpha-asc fa-fw'
       }
   };
-  // Restored See-all search (Back from a trinket): show it in relevance order.
+  // Restored See-all search (Back from a trinket): resume it in the sort its
+  // kept items were loaded with (relevance unless the user picked another).
   if ($scope.filters.q) {
     $scope.sortOptions.relevance = RELEVANCE_OPTION;
-    $scope.sortBy = 'relevance';
+    $scope.sortBy = searchState.resumeSort(carriedSearch);
   }
   $scope.viewOptions = {
       'large' : {
@@ -344,7 +347,7 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   });
 
   $scope.$on("$destroy", function() {
-    libraryState.listFilters = searchState.carry($scope.filters, searchSaved);
+    libraryState.listFilters = searchState.carry($scope.filters, searchSaved, $scope.sortBy);
     libraryState.listParams = {
       sort   : searchState.persistableSort($scope.sortBy, searchSaved),
       from   : last,

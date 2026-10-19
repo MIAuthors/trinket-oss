@@ -97,3 +97,59 @@ describe('search survives leaving the list (review #1)', () => {
     expect(js).toMatch(/libraryState\.listFilters\s*&&/);
   });
 });
+
+// Copilot review on #346.
+describe('a second See all after editing a filter', () => {
+  it('clears the narrowing filters again, but leave restores the pre-search ones', () => {
+    const st = s.enter({ filters: { name: 'orig', updatedWithin: 'all', updatedAfter: '', updatedBefore: '', scope: 'root' },
+                         sortBy: 'name', saved: null }, 'pend');
+    st.filters.name = 'narrow';
+    st.filters.updatedWithin = '7d';
+    s.enter(st, 'wave');
+    expect(st.filters.name).toBe('');
+    expect(st.filters.updatedWithin).toBe('all');
+    s.leave(st);
+    expect(st.filters.name).toBe('orig');
+    expect(st.filters.updatedWithin).toBe('all');
+  });
+});
+
+describe('carry keeps Date filters as Dates', () => {
+  // The date inputs are type="date"; Angular throws ngModel:datefmt on a string.
+  it('in the live filters and in the saved ones', () => {
+    const after = new Date(2026, 0, 1), before = new Date(2026, 1, 1);
+    const c = s.carry({ q: 'pend', updatedAfter: after, updatedBefore: '' },
+                      { sortBy: 'name', scope: 'root', filters: { updatedBefore: before, updatedAfter: '' } });
+    expect(c.filters.updatedAfter).toBeInstanceOf(Date);
+    expect(c.filters.updatedAfter.getTime()).toBe(after.getTime());
+    expect(c.filters.updatedAfter).not.toBe(after);           // still a copy
+    expect(c.saved.filters.updatedBefore).toBeInstanceOf(Date);
+    expect(c.saved.filters.updatedBefore.getTime()).toBe(before.getTime());
+  });
+});
+
+describe('Back keeps the sort chosen during a search', () => {
+  // The kept items and paging cursor were loaded in that sort; forcing
+  // relevance on them makes later pages repeat or skip results.
+  it('carry records the active sort and resumeSort returns it', () => {
+    const c = s.carry({ q: 'pend' }, { sortBy: '-lastUpdated' }, 'name');
+    expect(c.sortBy).toBe('name');
+    expect(s.resumeSort(c)).toBe('name');
+  });
+  it('falls back to relevance when no sort was carried', () => {
+    expect(s.resumeSort(s.carry({ q: 'pend' }, null))).toBe('relevance');
+    expect(s.resumeSort(null)).toBe('relevance');
+  });
+  it('the controller carries $scope.sortBy and resumes it', () => {
+    const js = fs.readFileSync(path.join(__dirname, '../../public/js/library/trinkets/list/list-controller.js'), 'utf8');
+    expect(js).toMatch(/searchState\.carry\(\$scope\.filters,\s*searchSaved,\s*\$scope\.sortBy\)/);
+    expect(js).toMatch(/\$scope\.sortBy\s*=\s*searchState\.resumeSort\(/);
+  });
+});
+
+describe('the chip clear action works from the keyboard', () => {
+  it('is a link with an href, so it can be tabbed to and activated', () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../public/js/library/trinkets/list/list.html'), 'utf8');
+    expect(html).toMatch(/<a href="" ng-click="clearSearch\(\)"/);
+  });
+});
