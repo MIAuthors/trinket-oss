@@ -3,6 +3,7 @@ TrinketIO.export('library.trinkets.list.controller', [
 function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinketConfig, trinketUtil, trinketsApi, libraryState, foldersApi) {
   var allLoaded = false,
       loading   = false,
+      listGen   = 0,        // bumped by each fresh load; older responses are dropped
       cache     = TrinketIO.import('utils.cache'),
       searchState = window.librarySearchState,
       searchSaved = null,   // sort/scope to restore when a See-all search is cleared (#344)
@@ -91,6 +92,8 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
     libraryState.resetList();
     $scope.items = undefined;
     allLoaded    = false;
+    loading      = false;
+    listGen++;
     last         = undefined;
     lastCount    = 0;
     $scope.moreTrinkets();
@@ -211,6 +214,8 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
     $scope.sortBy = sortBy;
     $scope.items  = undefined;
     allLoaded     = false;
+    loading       = false;
+    listGen++;
     last          = undefined;
     lastCount     = 0;
 
@@ -393,6 +398,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
     }
 
     loading = true;
+    // A sort or filter change while this request is in flight starts a fresh
+    // load; this one's response then belongs to the old list and is ignored.
+    var gen = listGen;
 
     if (last != null && last != undefined) {
       trinketParams.from = last.toString().length ? last : '~~~';
@@ -423,6 +431,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
     // to retrieve metrics
     trinketsApi.getList(trinketParams)
       .then(function(trinkets) {
+        if (gen !== listGen) {
+          return;
+        }
         if (!$scope.items) {
           $scope.items = [];
         }
@@ -452,7 +463,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
         }, 0, false);
       })
       .catch(function() {
-        loading = false;
+        if (gen === listGen) {
+          loading = false;
+        }
       });
   };
 
