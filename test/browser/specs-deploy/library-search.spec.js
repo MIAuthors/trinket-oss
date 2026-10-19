@@ -61,7 +61,7 @@ test.describe('library search', () => {
     expect(s.body.data).toHaveLength(20);
 
     // --- the dropdown --------------------------------------------------------
-    await page.goto('/library');
+    await page.goto('/library/trinkets');
     const label = page.locator('#search-label');
     await label.waitFor({ state: 'visible', timeout: 30000 });
     await label.click();
@@ -90,7 +90,7 @@ test.describe('library search', () => {
 
     // --- open a result, come Back: still the same search ----------------------
     await notesCard.click();
-    await page.waitForURL((u) => !/\/library\/?$/.test(u.pathname), { timeout: 15000 });
+    await page.waitForURL((u) => /\/library\/trinkets\/[^/]+/.test(u.pathname), { timeout: 15000 });
     await page.goBack();
     await expect(chip).toContainText(tag, { timeout: 15000 });
 
