@@ -204,6 +204,40 @@ test.describe('library search', () => {
     expect(errors.filter((e) => /datefmt|ngModel/i.test(e)), 'no Angular model errors').toEqual([]);
   });
 
+  // A sort picked while See all's relevance load is still in flight: that
+  // load's late response used to fill a list labelled Name, and the next page
+  // then repeated items and skipped others. The relevance response is held
+  // back so the race happens on every run, not only on a slow server.
+  test('a sort picked while See all is still loading wins over the late results', async ({ page }) => {
+    const tag = newTag('d');
+    await makeMatches(tag);
+    const byName = await api('GET', `/api/trinkets?q=${tag}&scope=all&sort=name&limit=20`);
+    const firstPage = unwrap(byName.body, 'data').map((t) => t.name);
+    expect(firstPage).toHaveLength(20);
+
+    await page.route('**/api/trinkets?*', async (route) => {
+      if (/sort=relevance/.test(route.request().url())) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      await route.continue().catch(() => {});
+    });
+
+    await page.goto('/library/trinkets');
+    await seeAll(page, tag);
+    await page.locator('button[data-dropdown="library-sort-options"]').click();
+    await page.locator('#library-sort-options a', { hasText: 'Name' }).click();
+
+    const cards = page.locator('h3.trinketLabel');
+    await expect(cards).toHaveCount(20, { timeout: 15000 });
+    await page.waitForTimeout(4000);             // let the held-back response land
+    const shown = (await cards.allTextContents()).map((s) => s.trim());
+    expect(shown, 'the first page in name order, not the late relevance page').toEqual(firstPage);
+
+    const names = await loadAll(page);
+    expect(names, 'every match, once each').toHaveLength(22);
+    expect(new Set(names).size).toBe(22);
+  });
+
   test('folder view: the count footer, no See all, and adding a result', async ({ page }) => {
     const tag = newTag('c');
     await makeMatches(tag);
