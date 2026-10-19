@@ -47,11 +47,21 @@ describe('rosterMessage.report: the deploy cannot send email', () => {
 describe('rosterMessage.report: the deploy sends invitation emails', () => {
   const report = (t) => rosterMessage.report(totals(t), { inviteEmail: true });
 
-  it('says the invitations were emailed', () => {
+  it('says the invitations are being emailed', () => {
     const { message } = report({ enrolled: 2, invited: 5 });
     expect(message).toMatch(/^2 enrolled, 5 invited\./);
-    expect(message).toMatch(/emailed/);
-    expect(message).not.toMatch(/doesn't email/);
+    expect(message).toMatch(/emailing each invited student/);
+    expect(message).not.toMatch(/doesn't email students/);
+  });
+
+  // Copilot review on #337: a failed send is logged and swallowed
+  // (courseInvitation.sendInvitationEmail), so the page can't know every email
+  // went out. It must not claim they did, and must give the fallback.
+  it('does not claim delivery, and says how to join if an email never arrives', () => {
+    const { message } = report({ invited: 5 });
+    expect(message).not.toMatch(/has been emailed|have been emailed/);
+    expect(message).toMatch(/doesn't arrive/);
+    expect(message).toMatch(/signing in with that (email )?address/);
   });
 });
 

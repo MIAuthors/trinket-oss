@@ -29,7 +29,7 @@
       className = 'success';
       if (totals.invited) {
         message += inviteEmail
-          ? " Each invited student has been emailed a link to join; they can also join by signing in with that email address."
+          ? " Trinket is emailing each invited student a link to join. If an email doesn't arrive, the student can still join by signing in with that email address."
           : " Trinket doesn't email students: give them this site's address. They join the course the first time they sign in with that email address.";
       }
     }
