@@ -80,7 +80,9 @@ test.describe('calculator mode controls', () => {
     expect(errors, 'glowscript calculator embed loads without script errors').toEqual([]);
 
     // --- Log In form (#291), signed out: a student in SEB ----------------------
-    const anon = await browser.newContext({ baseURL });
+    // An explicitly empty state: inside a test, browser.newContext() inherits
+    // test.use() options, so a SMOKE_STORAGE_STATE run would sign this in too.
+    const anon = await browser.newContext({ baseURL, storageState: { cookies: [], origins: [] } });
     const viewer = await anon.newPage();
     try {
       await open(viewer, `/embed/glowscript/${glow}`);
