@@ -65,6 +65,27 @@ describe.skipIf(!S3_MODE)('S3 backend against real garage', () => {
     expect(await res.text()).toBe('signed bytes');
   });
 
+  it('an S3_PUBLIC_HOST download URL is signed for that host, so it still works', async () => {
+    // The browser reaches the server under another name. SigV4 signs the host,
+    // so swapping it in after signing would break the signature.
+    const k = key('public-host.txt');
+    await upload(k, Buffer.from('via the public name'), 'text/plain');
+    const internal = new URL(config.aws.endpoint);
+    const savedHost = process.env.S3_PUBLIC_HOST, savedPublic = config.aws.publicEndpoint;
+    process.env.S3_PUBLIC_HOST = (internal.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + internal.port;
+    config.aws.publicEndpoint = undefined;
+    try {
+      const url = await s3.signDownloadUrl(bucket, k, 60);
+      expect(new URL(url).host).toBe(process.env.S3_PUBLIC_HOST);
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('via the public name');
+    } finally {
+      if (savedHost === undefined) delete process.env.S3_PUBLIC_HOST; else process.env.S3_PUBLIC_HOST = savedHost;
+      config.aws.publicEndpoint = savedPublic;
+    }
+  });
+
   it('a presigned upload URL accepts a PUT with that content type', async () => {
     const k = key('put.zip');
     const url = await s3.signUploadUrl(bucket, k, 'application/zip', 60);
