@@ -178,4 +178,21 @@ describe('users.assetUploadFromURL', () => {
     expect(logged).toContain('https://example.com/pics/cat.png');
     expect(logged).not.toContain('SECRET123');
   });
+
+  it('logs a URL with credentials without them (real fetch puts the URL in its error)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const res = await call('https://user:PASSWORD9@example.com/pics/cat.png?token=SECRET123');
+    expect(res.ok).toBe(false);
+    const logged = log.mock.calls.flat().join(' ');
+    expect(logged).not.toContain('PASSWORD9');
+    expect(logged).not.toContain('SECRET123');
+  });
+
+  it('does not log the text of a fetch error, which can quote a redirect target', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(
+      new TypeError('Request cannot be constructed from a URL that includes credentials: https://u:PASSWORD9@cdn.example.net/x')));
+    await call('https://example.com/pics/cat.png');
+    expect(log.mock.calls.flat().join(' ')).not.toContain('PASSWORD9');
+  });
 });
