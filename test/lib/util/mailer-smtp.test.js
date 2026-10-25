@@ -6,7 +6,16 @@ const net = require('net');
 const config = require('config');
 const mailer = require('../../../lib/util/mailer');
 
-function fakeSmtp() {
+// `reply` answers one command line; the default plays a cooperative server.
+function defaultReply(verb, sock) {
+  if (verb === 'EHLO') sock.write('250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
+  else if (verb === 'HELO') sock.write('250 fake\r\n');
+  else if (verb === 'AUTH') sock.write('235 Authentication successful\r\n');
+  else if (verb === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
+  else sock.write('250 OK\r\n');
+}
+
+function fakeSmtp(reply = defaultReply) {
   const seen = { commands: [], data: '' };
   const server = net.createServer((sock) => {
     let inData = false, buf = '';
@@ -23,12 +32,8 @@ function fakeSmtp() {
         }
         seen.commands.push(line);
         const verb = line.split(' ')[0].toUpperCase();
-        if (verb === 'EHLO') sock.write('250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
-        else if (verb === 'HELO') sock.write('250 fake\r\n');
-        else if (verb === 'AUTH') sock.write('235 Authentication successful\r\n');
-        else if (verb === 'DATA') { inData = true; sock.write('354 go ahead\r\n'); }
-        else if (verb === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
-        else sock.write('250 OK\r\n');
+        if (verb === 'DATA') { inData = true; sock.write('354 go ahead\r\n'); }
+        else reply(verb, sock);
       }
     });
   });
@@ -37,16 +42,18 @@ function fakeSmtp() {
 
 describe('mailer.send over SMTP', () => {
   let smtp, savedMail;
-  beforeEach(async () => {
-    smtp = await fakeSmtp();
+  const start = async (reply) => { smtp = await fakeSmtp(reply); return smtp; };
+  beforeEach(() => {
+    smtp = null;
     savedMail = config.app.mail;
   });
-  afterEach(() => {
+  afterEach(async () => {
     config.app.mail = savedMail;
-    smtp.server.close();
+    if (smtp) await new Promise((resolve) => smtp.server.close(resolve));
   });
 
   it('sends the message with the configured from, to, subject and body', async () => {
+    await start();
     config.app.mail = { host: '127.0.0.1', port: smtp.port, secure: false, from: 'Trinket <noreply@example.test>' };
     await mailer.send('student@example.test', 'Your export is ready', { text: 'Download it here.' });
 
@@ -59,24 +66,23 @@ describe('mailer.send over SMTP', () => {
   });
 
   it('authenticates when a user and password are configured', async () => {
+    await start();
     config.app.mail = { host: '127.0.0.1', port: smtp.port, secure: false, from: 'noreply@example.test', user: 'mailer', pass: 'pw' };
     await mailer.send('student@example.test', 'Hi', { text: 'x' });
     expect(smtp.seen.commands.join('\n')).toMatch(/^AUTH (PLAIN|LOGIN)/m);
   });
 
+  it('does not authenticate with a user but no password', async () => {
+    await start();
+    config.app.mail = { host: '127.0.0.1', port: smtp.port, secure: false, from: 'noreply@example.test', user: 'mailer' };
+    await mailer.send('student@example.test', 'Hi', { text: 'x' });
+    expect(smtp.seen.commands.join('\n')).not.toMatch(/^AUTH/m);
+  });
+
   it('rejects when the server refuses the recipient', async () => {
-    smtp.server.removeAllListeners('connection');
-    smtp.server.on('connection', (sock) => {
-      sock.write('220 fake\r\n');
-      sock.on('data', (c) => {
-        for (const line of c.toString().split('\r\n').filter(Boolean)) {
-          const v = line.split(' ')[0].toUpperCase();
-          if (v === 'EHLO' || v === 'HELO') sock.write('250 fake\r\n');
-          else if (v === 'RCPT') sock.write('550 no such user\r\n');
-          else if (v === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
-          else sock.write('250 OK\r\n');
-        }
-      });
+    await start((verb, sock) => {
+      if (verb === 'RCPT') sock.write('550 no such user\r\n');
+      else defaultReply(verb, sock);
     });
     config.app.mail = { host: '127.0.0.1', port: smtp.port, secure: false, from: 'noreply@example.test' };
     await expect(mailer.send('nobody@example.test', 'Hi', { text: 'x' })).rejects.toMatchObject({ responseCode: 550 });
