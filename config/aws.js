@@ -35,11 +35,17 @@ function clientOptions(overrides) {
   return Object.assign(options, overrides || {});
 }
 
+// Each S3Client owns a keep-alive connection pool, so one client is kept per
+// effective configuration rather than built per call. The options are still
+// read each time, so a change to config.aws gets a client of its own.
+var clients = new Map();
+
 module.exports = {
-  // A new client per call, like the `new aws.S3()` calls it replaces. Tests stub
-  // this to swap in a fake client.
+  // Tests stub this to swap in a fake client.
   s3Client : function(overrides) {
-    return new S3Client(clientOptions(overrides));
+    var options = clientOptions(overrides), key = JSON.stringify(options);
+    if (!clients.has(key)) clients.set(key, new S3Client(options));
+    return clients.get(key);
   },
   clientOptions : clientOptions
 };

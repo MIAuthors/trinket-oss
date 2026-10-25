@@ -42,14 +42,31 @@ describe('the S3 backend signs download URLs', () => {
     expect(url).toContain('exports/a/b.zip');
   });
 
-  it('honours S3_PUBLIC_HOST when there is no publicEndpoint', async () => {
-    config.aws.publicEndpoint = undefined;
-    process.env.S3_PUBLIC_HOST = 'files.example.org';
-    const url = await s3.signDownloadUrl('some-bucket', 'exports/a/b.zip', 3600);
-    // Signed for that host (SigV4 signs it), keeping the endpoint's scheme and
-    // addressing style (bucket in the path, or in front of the host).
-    expect(url, 'S3_PUBLIC_HOST must survive the move')
-      .toMatch(/^https?:\/\/(some-bucket\.)?files\.example\.org\//);
+  // The v2 code swapped the exact S3_PUBLIC_HOST into the finished URL, so the
+  // browser saw that host and the URL's path unchanged. v3 must sign for the
+  // same URL, in either addressing style.
+  describe('honours S3_PUBLIC_HOST when there is no publicEndpoint', () => {
+    let savedPathStyle;
+    beforeEach(() => {
+      savedPathStyle = config.aws.s3ForcePathStyle;
+      config.aws.publicEndpoint = undefined;
+      process.env.S3_PUBLIC_HOST = 'files.example.org';
+    });
+    afterEach(() => { config.aws.s3ForcePathStyle = savedPathStyle; });
+
+    it('virtual-hosted: the exact host, with the key as the path', async () => {
+      config.aws.s3ForcePathStyle = false;
+      const url = new URL(await s3.signDownloadUrl('some-bucket', 'exports/a/b.zip', 3600));
+      expect(url.host, 'S3_PUBLIC_HOST must survive the move, unprefixed').toBe('files.example.org');
+      expect(url.pathname).toBe('/exports/a/b.zip');
+    });
+
+    it('path-style: the exact host, with the bucket in the path', async () => {
+      config.aws.s3ForcePathStyle = true;
+      const url = new URL(await s3.signDownloadUrl('some-bucket', 'exports/a/b.zip', 3600));
+      expect(url.host).toBe('files.example.org');
+      expect(url.pathname).toBe('/some-bucket/exports/a/b.zip');
+    });
   });
 
   it('leaves the host alone when publicEndpoint is set (SigV4 signs the host)', async () => {
