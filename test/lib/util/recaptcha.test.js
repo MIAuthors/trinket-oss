@@ -52,4 +52,12 @@ describe('recaptcha.verify', () => {
     expect(await verify('tok')).toEqual({ success: true });
     expect(fetchStub).not.toHaveBeenCalled();
   });
+
+  it('a non-200 answer cancels the body it will not read', async () => {
+    const seen = { cancelled: false };
+    const body = new ReadableStream({ pull() {}, cancel() { seen.cancelled = true; } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 503 })));
+    expect(await verify('tok')).toEqual({ status: false });
+    expect(seen.cancelled).toBe(true);
+  });
 });

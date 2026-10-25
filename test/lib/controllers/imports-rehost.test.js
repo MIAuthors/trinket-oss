@@ -25,4 +25,12 @@ describe('rehostAsset', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
     expect(await rehostAsset('/files/abc/cat.png', {}, {})).toBe('https://trinket.io/files/abc/cat.png');
   });
+
+  it('a non-200 answer cancels the body it will not read', async () => {
+    const seen = { cancelled: false };
+    const body = new ReadableStream({ pull() {}, cancel() { seen.cancelled = true; } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 500 })));
+    expect(await rehostAsset('/files/abc/cat.png', {}, {})).toBe('https://trinket.io/files/abc/cat.png');
+    expect(seen.cancelled).toBe(true);
+  });
 });
