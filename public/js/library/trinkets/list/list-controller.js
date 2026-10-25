@@ -352,7 +352,9 @@ function($scope, $state, $stateParams, $window, $timeout, $filter, $http, trinke
   });
 
   $scope.$on("$destroy", function() {
-    libraryState.listFilters = searchState.carry($scope.filters, searchSaved, $scope.sortBy);
+    // Filters set while an admin views another user's library belong to that
+    // library; don't carry them back to the admin's own list.
+    libraryState.listFilters = $stateParams.user ? undefined : searchState.carry($scope.filters, searchSaved, $scope.sortBy);
     libraryState.listParams = {
       sort   : searchState.persistableSort($scope.sortBy, searchSaved),
       from   : last,

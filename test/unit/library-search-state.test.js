@@ -98,8 +98,12 @@ describe('search survives leaving the list (review #1)', () => {
   });
   it('the controller stores filters on $destroy and restores them on load', () => {
     const js = fs.readFileSync(path.join(__dirname, '../../public/js/library/trinkets/list/list-controller.js'), 'utf8');
-    expect(js).toMatch(/libraryState\.listFilters\s*=\s*searchState\.carry\(/);
+    expect(js).toMatch(/libraryState\.listFilters\s*=[^;]*searchState\.carry\(/);
     expect(js).toMatch(/libraryState\.listFilters\s*&&/);
+  });
+  it('an admin view of another user\'s library carries no filters back to My Trinkets', () => {
+    const js = fs.readFileSync(path.join(__dirname, '../../public/js/library/trinkets/list/list-controller.js'), 'utf8');
+    expect(js).toMatch(/libraryState\.listFilters\s*=\s*\$stateParams\.user\s*\?\s*undefined\s*:\s*searchState\.carry\(/);
   });
 });
 
