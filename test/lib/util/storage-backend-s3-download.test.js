@@ -46,8 +46,10 @@ describe('the S3 backend signs download URLs', () => {
     config.aws.publicEndpoint = undefined;
     process.env.S3_PUBLIC_HOST = 'files.example.org';
     const url = await s3.signDownloadUrl('some-bucket', 'exports/a/b.zip', 3600);
-    expect(url, 'the legacy SigV2 host swap must survive the move')
-      .toMatch(/^https?:\/\/files\.example\.org\//);
+    // Signed for that host (SigV4 signs it), keeping the endpoint's scheme and
+    // addressing style (bucket in the path, or in front of the host).
+    expect(url, 'S3_PUBLIC_HOST must survive the move')
+      .toMatch(/^https?:\/\/(some-bucket\.)?files\.example\.org\//);
   });
 
   it('leaves the host alone when publicEndpoint is set (SigV4 signs the host)', async () => {
