@@ -2,6 +2,9 @@ const { test, expect } = require('@playwright/test');
 const fixtures = require('../fixtures');
 const { signIn, apiFor, unwrap, assertOk } = require('../deploy-auth');
 
+// Trinket rows only: folder headings share the trinketLabel class.
+const TRINKET_CARD = 'h3.trinketLabel:not(.lang-folder)';
+
 // Library search (#344), against a real deployment: the dropdown's count
 // footer, "See all" reaching a description-only match that isn't in the first
 // 20, clearing the search chip, the search-state fixes from the PR review, and
@@ -93,7 +96,7 @@ test.describe('library search', () => {
 
   // Scroll until the list stops growing; returns the trinket names shown.
   async function loadAll(page) {
-    const cards = page.locator('h3.trinketLabel');
+    const cards = page.locator(TRINKET_CARD);
     let n = -1;
     for (let i = 0; i < 15; i++) {
       const now = await cards.count();
@@ -106,7 +109,7 @@ test.describe('library search', () => {
   }
 
   async function openFirstAndComeBack(page) {
-    await page.locator('h3.trinketLabel').first().click();
+    await page.locator(TRINKET_CARD).first().click();
     await page.waitForURL((u) => /\/library\/trinkets\/[^/]+/.test(u.pathname), { timeout: 15000 });
     await page.goBack();
     await expect(page.locator('.library-search-chip')).toBeVisible({ timeout: 15000 });
@@ -227,7 +230,7 @@ test.describe('library search', () => {
     await page.locator('button[data-dropdown="library-sort-options"]').click();
     await page.locator('#library-sort-options a', { hasText: 'Name' }).click();
 
-    const cards = page.locator('h3.trinketLabel');
+    const cards = page.locator(TRINKET_CARD);
     await expect(cards).toHaveCount(20, { timeout: 15000 });
     await page.waitForTimeout(4000);             // let the held-back response land
     const shown = (await cards.allTextContents()).map((s) => s.trim());
@@ -255,7 +258,7 @@ test.describe('library search', () => {
     const first = page.locator('a.trinket-list-with-lang', { hasText: tag }).first();
     const picked = (await first.textContent()).trim();
     await first.click();
-    const card = page.locator('h3.trinketLabel', { hasText: picked });
+    const card = page.locator(TRINKET_CARD, { hasText: picked });
     await expect(card, 'the picked trinket appears in the folder').toBeVisible({ timeout: 15000 });
     // ...and is really stored there: a fresh load of the folder still shows it.
     await page.reload();

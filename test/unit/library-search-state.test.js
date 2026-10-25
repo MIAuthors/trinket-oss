@@ -44,12 +44,17 @@ describe('library list wiring', () => {
     expect(html).toContain('(name or instructions)');
   });
   it('only the library list passes see-all', () => {
-    expect(read('public/js/library/trinkets/list/list.html')).toContain('see-all="onSeeAll"');
+    expect(read('public/js/library/trinkets/list/list.html')).toMatch(/see-all="[^"]*onSeeAll"/);
     for (const p of ['public/js/library/trinkets/list/folder.html',
                      'public/partials/assignment_editor.html',
                      'public/partials/material.html']) {
       expect(read(p)).not.toContain('see-all=');
     }
+  });
+  it('no See all on an admin view of another user\'s library', () => {
+    // The dropdown searches the signed-in user's trinkets, but that list shows
+    // the ?user= owner's, so See all would list a different owner's matches.
+    expect(read('public/js/library/trinkets/list/list.html')).toContain('see-all="userParam ? null : onSeeAll"');
   });
   it('the controller sends q and never caches relevance', () => {
     const js = read('public/js/library/trinkets/list/list-controller.js');

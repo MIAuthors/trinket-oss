@@ -5,7 +5,7 @@
       <a class="current">My Trinkets</a>
     </nav>
     <section id="listview-options">
-      <trinket-search on-select="gotoSelectedTrinket" see-all="onSeeAll" placeholder-text="search by name or instructions" search-input-open="searchInputOpen"></trinket-search>
+      <trinket-search on-select="gotoSelectedTrinket" see-all="userParam ? null : onSeeAll" placeholder-text="search by name or instructions" search-input-open="searchInputOpen"></trinket-search>
       <section id="listview-menus" ng-show="!searchInputOpen" class="fade-in-out">
         <label>Sort:</label>
         <button class="button small" data-dropdown="library-sort-options">
