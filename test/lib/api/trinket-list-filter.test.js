@@ -117,6 +117,23 @@ describe('GET /api/trinkets q + relevance', () => {
     expect(flow.lastResponse.body.data.length).toBeGreaterThan(0);
   });
 
+  it('a sort named like an Object property (toString, __proto__) falls back like any unknown sort', async () => {
+    await flow.switchUser('user');
+    const tag = 'lp' + Date.now().toString(36);
+    for (const n of ['c', 'a', 'b']) await makeD(tag + ' ' + n);
+
+    const ids = async (sort) => {
+      // With a `from` cursor an unresolved sort key filtered out every row.
+      await flow.get('/api/trinkets?scope=all&name=' + tag + '&sort=' + sort + '&from=2099-01-01');
+      expect(flow.lastResponse.statusCode).toBe(200);
+      return flow.lastResponse.body.data.map((t) => String(t.id));
+    };
+    const fallback = await ids('bogus');
+    expect(fallback).toHaveLength(3);
+    expect(await ids('toString')).toEqual(fallback);
+    expect(await ids('__proto__')).toEqual(fallback);
+  });
+
   it('a 1-character q is ignored (the list is not narrowed)', async () => {
     await flow.switchUser('user');
     const tag = 'l1' + Date.now().toString(36);
