@@ -51,9 +51,9 @@ RUN curl -L --silent -o public/components/src-min-noconflict/theme-github.js \
 # it. After an *intended* rsWVPRunner glow change: redeploy rsWVPRunner, then bump
 # GLOWSCRIPT_PACKAGE_BUILD and update the *_SHA256 values below. Recompute via:
 #   curl -fsSL "https://storage.googleapis.com/rswvprunner/package/<file>.3.2.min.js" | sha256sum
-ARG GLOWSCRIPT_PACKAGE_BUILD=2026-06-16b
+ARG GLOWSCRIPT_PACKAGE_BUILD=2026-10-31a
 ARG GLOW_SHA256=1587799056b9d5aa5a854ec653653e0c0b6c11ab708a9783e3bffc126104f5ca
-ARG RSCOMPILER_SHA256=ada7775620cdea6472de0e7bd4175e126a3f232c74bf6392dbf238350c14c588
+ARG RSCOMPILER_SHA256=6376aa0899c68a2a99137f579f2ced923a09c55bc0283e0ba3f1a589761040aa
 ARG RSRUN_SHA256=2735844b615f87b4147e9cb2b90bf8a7a15da208fc8876eae469fc98861e429d
 RUN set -eu; \
     RETRY="--retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors"; \
